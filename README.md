@@ -134,6 +134,7 @@ Response body:
 {
   "id": "stream-session-id",
   "serial": "local-123",
+  "host": "100.64.0.10",
   "local_port": 12345
 }
 ```

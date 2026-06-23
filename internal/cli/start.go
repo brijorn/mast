@@ -2,6 +2,7 @@ package cli
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -12,11 +13,7 @@ import (
 )
 
 type StartCmd struct {
-	BindAddr       string `help:"Websocket listen address" default:":8080"`
-	ProxyAddr      string `help:"Proxy listen address" default:":8888"`
-	APIAddr        string `help:"Control API listen address" default:":8081"`
-	AdvertiseHost  string `help:"Current node host" short:"h"`
-	AndroidEnabled bool   `help:"Enable Android device support"`
+	ConfigPath string `name:"config" short:"c" help:"Path to config file" type:"path"`
 }
 
 func (s *StartCmd) Run() error {
@@ -25,22 +22,39 @@ func (s *StartCmd) Run() error {
 	if err != nil {
 		return err
 	}
-	mastNode, err := node.NewNode(id, s.BindAddr, s.AdvertiseHost, s.AndroidEnabled)
+
+	cfg, err := LoadConfig(s.ConfigPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			path, pathErr := resolvePath(s.ConfigPath)
+			if pathErr != nil {
+				return pathErr
+			}
+			return fmt.Errorf("config not found at %s; run `mast config init`", path)
+		}
+		return err
+	}
+
+	mastNode, err := node.NewNode(id, cfg.BindAddr, cfg.AdvertiseHost, cfg.AndroidEnabled)
 	if err != nil {
 		return err
 	}
-	proxyServer := proxy.NewServer(s.ProxyAddr)
+
+	if cfg.ProxyEnabled {
+		proxyServer := proxy.NewServer(cfg.ProxyAddr)
+		go func() {
+			if err := proxyServer.Listen(); err != nil {
+				log.Println("proxy server listen err:", err)
+			}
+		}()
+	}
 	apiServer := api.NewServer(mastNode)
+
 	go func() {
-		if err := mastNode.Listen(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Println("node listener:", err)
-		}
-	}()
-	go func() {
-		if err := apiServer.Listen(s.APIAddr); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := apiServer.Listen(cfg.APIAddr); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Println("api listener:", err)
 		}
 	}()
 
-	return proxyServer.Listen()
+	return mastNode.Listen()
 }

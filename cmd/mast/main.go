@@ -10,6 +10,7 @@ import (
 var cli struct {
 	Start   mastcli.StartCmd   `cmd:""`
 	Service mastcli.ServiceCmd `cmd:""`
+	Config  mastcli.ConfigCmd  `cmd:""`
 }
 
 func main() {

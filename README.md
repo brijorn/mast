@@ -6,138 +6,29 @@ across multiple computers.
 ##### Current Capabilities:
 - Discover Android devices through ADB (Peer devices are also shown)
 - Connect to peer nodes over the local network
-- Expose a local control API for operations such as device listing and scrcpy stream startup.
+- Expose a local control API for device listing, scrcpy stream startup, taps, and swipes.
 - Expose a proxy server on a port
 
 The project runs as a lightweight program on each machine that owns devices, while a main node or dashboard can coordinate each node from one place. Intended for use in a private network or with Tailscale
 
-## Peer Websocket Protocol
+## Documentation
 
-Mast nodes listen for peer connections at:
-
-```http
-GET /ws
-```
-
-The websocket currently defines one JSON message type:
-
-- `connection_request`
-
-Heartbeat traffic is handled with websocket ping/pong frames, not JSON protocol
-messages.
-
-Every JSON protocol message shares these fields:
-
-```typescript
-type: string // Message type, currently "connection_request"
-id: string // Unique message UUID
-from: string // Sender node ID
-to: string // Destination node ID; currently unused for connection_request
-timestamp: string // JSON-encoded timestamp
-payload: object // Message-specific payload
-```
-
-### connection_request
-
-Sent when a node introduces itself to a peer.
-
-```json
-{
-  "type": "connection_request",
-  "id": "message-id",
-  "from": "node-a",
-  "to": "",
-  "timestamp": "2026-06-22T17:00:00Z",
-  "payload": {
-    "android_enabled": true
-  }
-}
-```
-
-`android_enabled` tells the peer whether this node should be queried for Android
-devices.
-
-## Adding Peers
-
-Adding a peer is currently implemented in the node layer with:
-
-```text
-node.Connect("ws://host:8080/ws")
-```
-
-There is not yet a CLI command or HTTP endpoint for adding peers.
-
-The connection flow is:
-
-1. The receiving node runs its websocket listener on `/ws`.
-2. The initiating node dials the receiver's websocket URL.
-3. The initiating node immediately sends `connection_request`.
-4. The receiver stores the peer under the sender's `from` node ID.
-5. The receiver replies with its own `connection_request`.
-6. The initiator stores the receiver under the receiver's `from` node ID.
-7. Both sides keep the connection alive with websocket ping/pong frames.
-
-If an initiated connection drops, the initiator attempts to reconnect with
-exponential backoff up to 60 seconds.
+- [Control API](docs/api.md)
+- [Peer websocket protocol](docs/protocol.md)
 
 ## Control API
 
-The local control API exposes HTTP endpoints for node operations.
+The local control API exposes endpoints for devices, streams, and Android input
+commands.
 
-### List Devices
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/devices` | List visible Android devices |
+| `POST` | `/api/streams` | Start a scrcpy stream |
+| `POST` | `/api/control/tap` | Tap stream coordinates |
+| `POST` | `/api/control/swipe` | Swipe stream coordinates |
 
-```http
-GET /api/devices
-```
-
-Returns Android devices visible to the local node and Android-enabled peers.
-
-```json
-[
-  {
-    "serial": "local-123",
-    "state": "device",
-    "node_id": "node-a"
-  }
-]
-```
-
-### Start Stream
-
-```http
-POST /api/streams
-```
-
-Starts a scrcpy stream for a device serial. Only one stream start is allowed per
-serial at a time; concurrent requests for the same serial wait for the same
-startup result.
-
-Request body:
-
-```json
-{
-  "serial": "local-123",
-  "options": {
-    "no_audio": true,
-    "no_control": false,
-    "turn_screen_off": false,
-    "stay_awake": true,
-    "max_size": 1080,
-    "video_bitrate": 8000000
-  }
-}
-```
-
-Response body:
-
-```json
-{
-  "id": "stream-session-id",
-  "serial": "local-123",
-  "host": "100.64.0.10",
-  "local_port": 12345
-}
-```
+See [docs/api.md](docs/api.md) for request and response bodies.
 
 ## Startup Commands
 

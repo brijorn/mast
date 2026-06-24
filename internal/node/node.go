@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net"
 	"net/http"
@@ -71,6 +72,40 @@ func (n *Node) GetPeer(peerID string) (*PeerConn, bool) {
 	defer n.mu.RUnlock()
 	peer, ok := n.Peers[peerID]
 	return peer, ok
+}
+
+type peerRequest struct {
+	transport.RawMessage
+	Payload any `json:"payload"`
+}
+
+func (n *Node) sendPeerRequest(peerID string, messageType string, payload any) error {
+	peer, ok := n.GetPeer(peerID)
+	if !ok {
+		return errors.New("peer not found")
+	}
+
+	msg := &peerRequest{
+		RawMessage: transport.RawMessage{
+			Type:      messageType,
+			ID:        uuid.NewString(),
+			From:      n.ID,
+			To:        peerID,
+			Timestamp: time.Now(),
+		},
+		Payload: payload,
+	}
+
+	encoded, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+
+	if err := peer.WriteMessage(websocket.TextMessage, encoded); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // Listen to incoming connections from other masts
@@ -142,6 +177,7 @@ func (n *Node) Close() error {
 	}
 	return err
 }
+
 func (n *Node) handleConnection(peer *PeerConn, addr string) {
 	defer func() { _ = peer.conn.Close() }()
 	registered := false
@@ -306,6 +342,28 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 
 			if err := n.StopStream(req.Payload.Serial); err != nil {
 				log.Println("stop stream:", err)
+				break
+			}
+		case transport.TypeTapRequest:
+			var req transport.TapRequest
+			if err := json.Unmarshal(message, &req); err != nil {
+				log.Println("decode tap request:", err)
+				break
+			}
+
+			if err := n.tapLocal(req.Payload.Serial, req.Payload.X, req.Payload.Y); err != nil {
+				log.Println("tap:", err)
+				break
+			}
+		case transport.TypeSwipeRequest:
+			var req transport.SwipeRequest
+			if err := json.Unmarshal(message, &req); err != nil {
+				log.Println("decode swipe request:", err)
+				break
+			}
+
+			if err := n.swipeLocal(req.Payload.Serial, req.Payload.StartX, req.Payload.StartY, req.Payload.EndX, req.Payload.EndY); err != nil {
+				log.Println("swipe:", err)
 				break
 			}
 		}

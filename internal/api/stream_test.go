@@ -47,6 +47,14 @@ func (f *fakeBackend) EnsureStream(serial string, opts streamcfg.Options) (*node
 	return f.session, f.err
 }
 
+func (f *fakeBackend) Tap(_ string, _, _ int) error {
+	return nil
+}
+
+func (f *fakeBackend) Swipe(_ string, _, _, _, _ int) error {
+	return nil
+}
+
 func (f *fakeBackend) callCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

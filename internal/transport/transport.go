@@ -10,6 +10,8 @@ const (
 	TypeConnectionRequest  = "connection_request"
 	TypeStartStreamRequest = "start_stream_request"
 	TypeStopStreamRequest  = "stop_stream_request"
+	TypeTapRequest         = "tap_request"
+	TypeSwipeRequest       = "swipe_request"
 )
 
 type Message interface {
@@ -62,4 +64,28 @@ type StopStreamRequestPayload struct {
 type StopStreamRequest struct {
 	RawMessage
 	Payload StopStreamRequestPayload `json:"payload"`
+}
+
+type TapRequest struct {
+	RawMessage
+	Payload TapRequestPayload `json:"payload"`
+}
+
+type TapRequestPayload struct {
+	Serial string `json:"serial"`
+	X      int    `json:"x"`
+	Y      int    `json:"y"`
+}
+
+type SwipeRequest struct {
+	RawMessage
+	Payload SwipeRequestPayload `json:"payload"`
+}
+
+type SwipeRequestPayload struct {
+	Serial string `json:"serial"`
+	StartX int    `json:"start_x"`
+	StartY int    `json:"start_y"`
+	EndX   int    `json:"end_x"`
+	EndY   int    `json:"end_y"`
 }

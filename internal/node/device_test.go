@@ -1,8 +1,11 @@
 package node
 
 import (
+	"encoding/binary"
 	"errors"
+	"net"
 	"os/exec"
+	"strconv"
 	"testing"
 
 	"github.com/brijorn/mast/internal/scrcpy"
@@ -67,7 +70,31 @@ func (a *fakeADB) StartShell(host string, arg ...string) (*exec.Cmd, error) {
 		Host: host,
 		Args: append([]string(nil), arg...),
 	})
+	if len(a.reverseCalls) > 0 {
+		port := a.reverseCalls[len(a.reverseCalls)-1].LocalPort
+		go writeFakeScrcpyVideoMetadata(port)
+	}
 	return nil, nil
+}
+
+func writeFakeScrcpyVideoMetadata(port int) {
+	conn, err := net.Dial("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err != nil {
+		return
+	}
+	defer func() { _ = conn.Close() }()
+
+	deviceName := make([]byte, 64)
+	copy(deviceName, "fake-device")
+
+	streamMeta := make([]byte, 16)
+	copy(streamMeta[:4], "h264")
+	binary.BigEndian.PutUint32(streamMeta[4:8], 0x80000000)
+	binary.BigEndian.PutUint32(streamMeta[8:12], 944)
+	binary.BigEndian.PutUint32(streamMeta[12:16], 1080)
+
+	_, _ = conn.Write(deviceName)
+	_, _ = conn.Write(streamMeta)
 }
 
 func TestParseDevicesOutput(t *testing.T) {

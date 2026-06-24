@@ -1,7 +1,9 @@
 package node
 
 import (
+	"errors"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -87,6 +89,21 @@ func (n *Node) ListDevices() ([]DeviceInfo, error) {
 	return devices, nil
 }
 
+func (n *Node) DeviceBySerial(serial string) (*DeviceInfo, error) {
+	devices, err := n.ListDevices()
+	if err != nil {
+		return nil, err
+	}
+
+	index := slices.IndexFunc(devices, func(d DeviceInfo) bool {
+		return d.Serial == serial
+	})
+	if index == -1 {
+		return nil, errors.New("device not found:" + serial)
+	}
+
+	return &devices[index], nil
+}
 func parseDevicesOutput(output string, nodeID string, devices []DeviceInfo) []DeviceInfo {
 
 	lines := strings.Split(output, "\n")

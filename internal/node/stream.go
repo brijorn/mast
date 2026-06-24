@@ -1,11 +1,15 @@
 package node
 
 import (
+	"bytes"
+	"encoding/binary"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"os/exec"
 	"slices"
+	"time"
 
 	"github.com/brijorn/mast/internal/scrcpy"
 	streamcfg "github.com/brijorn/mast/internal/stream"
@@ -24,15 +28,33 @@ type StreamSession struct {
 	DeviceSerial string
 	Host         string
 	LocalPort    int
-	listener     net.Listener
-	cmd          *exec.Cmd
+
+	streamListener net.Listener
+	videoConn      net.Conn
+	controlConn    net.Conn
+
+	Width  int
+	Height int
+	cmd    *exec.Cmd
 }
 
 func (s *StreamSession) Stop() error {
 	var err error
 
-	if s.listener != nil {
-		if closeErr := s.listener.Close(); closeErr != nil {
+	if s.streamListener != nil {
+		if closeErr := s.streamListener.Close(); closeErr != nil {
+			err = closeErr
+		}
+	}
+
+	if s.videoConn != nil {
+		if closeErr := s.videoConn.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}
+
+	if s.controlConn != nil {
+		if closeErr := s.controlConn.Close(); closeErr != nil && err == nil {
 			err = closeErr
 		}
 	}
@@ -49,36 +71,165 @@ func (s *StreamSession) Stop() error {
 	return err
 }
 
-func (n *Node) StartStream(serial string, opts streamcfg.Options) (*StreamSession, error) {
+func (s *StreamSession) acceptScrcpyConnection(opts streamcfg.Options) error {
+	videoConn, err := acceptScrcpySocket(s.streamListener)
+	if err != nil {
+		return err
+	}
+
+	deviceName, width, height, err := readScrcpyVideoMetadata(videoConn)
+	if err != nil {
+		_ = videoConn.Close()
+		return err
+	}
+
+	s.Width = width
+	s.Height = height
+	s.videoConn = videoConn
+	_ = deviceName
+
+	if !opts.NoAudio {
+		audioConn, err := acceptScrcpySocket(s.streamListener)
+		if err != nil {
+			_ = videoConn.Close()
+			return err
+		}
+		_ = audioConn.Close()
+	}
+
+	if !opts.NoControl {
+		controlConn, err := acceptScrcpySocket(s.streamListener)
+		if err != nil {
+			_ = videoConn.Close()
+			return err
+		}
+		s.controlConn = controlConn
+	}
+
+	return nil
+}
+
+func acceptScrcpySocket(ln net.Listener) (net.Conn, error) {
+	if deadlineSetter, ok := ln.(interface{ SetDeadline(time.Time) error }); ok {
+		if err := deadlineSetter.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			return nil, err
+		}
+		defer func() {
+			_ = deadlineSetter.SetDeadline(time.Time{})
+		}()
+	}
+
+	return ln.Accept()
+}
+
+func readScrcpyVideoMetadata(conn net.Conn) (string, int, int, error) {
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		return "", 0, 0, err
+	}
+	defer func() {
+		_ = conn.SetReadDeadline(time.Time{})
+	}()
+
+	deviceName := make([]byte, 64)
+	if _, err := io.ReadFull(conn, deviceName); err != nil {
+		return "", 0, 0, err
+	}
+
+	streamMeta := make([]byte, 16)
+	if _, err := io.ReadFull(conn, streamMeta); err != nil {
+		return "", 0, 0, err
+	}
+
+	name := string(bytes.TrimRight(deviceName, "\x00"))
+	width := int(binary.BigEndian.Uint32(streamMeta[8:12]))
+	height := int(binary.BigEndian.Uint32(streamMeta[12:16]))
+
+	return name, width, height, nil
+}
+
+func writeScrcpyServerTempFile() (string, func(), error) {
 	tempFile, err := os.CreateTemp("", scrcpy.Filename)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
-	defer func(name string) {
-		_ = os.Remove(name)
-	}(tempFile.Name())
-
-	defer func() { _ = tempFile.Close() }()
 
 	if _, err := tempFile.Write(scrcpy.Server); err != nil {
-		return nil, err
+		_ = tempFile.Close()
+		_ = os.Remove(tempFile.Name())
+		return "", nil, err
 	}
 	if err := tempFile.Close(); err != nil {
-		return nil, err
+		_ = os.Remove(tempFile.Name())
+		return "", nil, err
 	}
 
+	cleanup := func() {
+		_ = os.Remove(tempFile.Name())
+	}
+	return tempFile.Name(), cleanup, nil
+}
+
+func (n *Node) deviceBySerial(serial string) (DeviceInfo, error) {
 	devices, err := n.ListDevices()
 	if err != nil {
-		return nil, err
+		return DeviceInfo{}, err
 	}
 
 	index := slices.IndexFunc(devices, func(d DeviceInfo) bool {
 		return d.Serial == serial
 	})
 	if index == -1 {
-		return nil, errors.New("device not found: " + serial)
+		return DeviceInfo{}, errors.New("device not found: " + serial)
 	}
-	device := devices[index]
+
+	return devices[index], nil
+}
+
+func (n *Node) pushScrcpyServer(host string) error {
+	localPath, cleanup, err := writeScrcpyServerTempFile()
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	return n.adb.Push(host, localPath, scrcpy.RemotePath)
+}
+
+func newScrcpyListener() (net.Listener, int, error) {
+	ln, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		return nil, 0, err
+	}
+
+	port := ln.Addr().(*net.TCPAddr).Port
+	return ln, port, nil
+}
+
+func (n *Node) createScrcpyReverse(host string, port int) error {
+	return n.adb.Reverse(host, scrcpy.DeviceSocket, port)
+}
+
+func (n *Node) startScrcpyProcess(host string, opts streamcfg.Options) (*exec.Cmd, error) {
+	shellArgs := scrcpyServerArgs(opts)
+	return n.adb.StartShell(host, shellArgs...)
+}
+
+func scrcpyServerArgs(opts streamcfg.Options) []string {
+	shellArgs := []string{
+		"CLASSPATH=" + scrcpy.RemotePath,
+		"app_process",
+		"/",
+		"com.genymobile.scrcpy.Server",
+		scrcpy.ServerVersion,
+	}
+	return append(shellArgs, opts.Format()...)
+}
+
+func (n *Node) StartStream(serial string, opts streamcfg.Options) (*StreamSession, error) {
+	device, err := n.deviceBySerial(serial)
+	if err != nil {
+		return nil, err
+	}
 
 	streamHost, err := n.streamHostForNode(device.NodeID)
 	if err != nil {
@@ -90,45 +241,41 @@ func (n *Node) StartStream(serial string, opts streamcfg.Options) (*StreamSessio
 		return nil, err
 	}
 
-	if err := n.adb.Push(host, tempFile.Name(), scrcpy.RemotePath); err != nil {
+	if err := n.pushScrcpyServer(host); err != nil {
 		return nil, err
 	}
 
-	ln, err := net.Listen("tcp", "0.0.0.0:0")
+	ln, port, err := newScrcpyListener()
 	if err != nil {
 		return nil, err
 	}
 
-	port := ln.Addr().(*net.TCPAddr).Port
-
-	if err := n.adb.Reverse(host, scrcpy.DeviceSocket, port); err != nil {
+	if err := n.createScrcpyReverse(host, port); err != nil {
 		_ = ln.Close()
 		return nil, err
 	}
 
-	shellArgs := []string{
-		"CLASSPATH=" + scrcpy.RemotePath,
-		"app_process",
-		"/",
-		"com.genymobile.scrcpy.Server",
-		scrcpy.ServerVersion,
-	}
-	shellArgs = append(shellArgs, opts.Format()...)
-
-	cmd, err := n.adb.StartShell(host, shellArgs...)
+	cmd, err := n.startScrcpyProcess(host, opts)
 	if err != nil {
 		_ = ln.Close()
 		return nil, err
 	}
 
-	return &StreamSession{
-		ID:           uuid.NewString(),
-		DeviceSerial: serial,
-		Host:         streamHost,
-		LocalPort:    port,
-		listener:     ln,
-		cmd:          cmd,
-	}, nil
+	session := &StreamSession{
+		ID:             uuid.NewString(),
+		DeviceSerial:   serial,
+		Host:           streamHost,
+		LocalPort:      port,
+		streamListener: ln,
+		cmd:            cmd,
+	}
+
+	if err := session.acceptScrcpyConnection(opts); err != nil {
+		_ = session.Stop()
+		return nil, err
+	}
+
+	return session, nil
 }
 
 func (n *Node) EnsureStream(serial string, opts streamcfg.Options) (*StreamSession, error) {
@@ -141,6 +288,11 @@ func (n *Node) EnsureStream(serial string, opts streamcfg.Options) (*StreamSessi
 		if entry.Error != nil {
 			return nil, entry.Error
 		}
+
+		if entry.Session == nil {
+			return nil, errors.New("internal error: stream session is nil")
+		}
+
 		return entry.Session, nil
 	}
 
@@ -156,13 +308,38 @@ func (n *Node) EnsureStream(serial string, opts streamcfg.Options) (*StreamSessi
 	if err != nil {
 		entry.Error = err
 		delete(n.streams, serial)
+	} else if streamSession == nil {
+		err = errors.New("internal error: StartStream returned nil session")
+		entry.Error = err
+		delete(n.streams, serial)
 	} else {
 		entry.Session = streamSession
 	}
 	n.streamsMu.Unlock()
 	close(entry.Done)
 
-	return streamSession, err
+	if err != nil {
+		return nil, err
+	}
+	return streamSession, nil
+}
+
+func (n *Node) GetStream(serial string) (*StreamSession, error) {
+	n.streamsMu.RLock()
+	entry, ok := n.streams[serial]
+	n.streamsMu.RUnlock()
+	if !ok {
+		return nil, errors.New("stream not found: " + serial)
+	}
+	<-entry.Done
+	if entry.Error != nil {
+		return nil, entry.Error
+	}
+	if entry.Session == nil {
+		return nil, errors.New("stream session not found: " + serial)
+	}
+
+	return entry.Session, nil
 }
 
 func (n *Node) StopStream(serial string) error {

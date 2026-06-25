@@ -21,11 +21,6 @@ type startStreamResponse struct {
 }
 
 func (s *Server) StartStream(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	var req startStreamRequest
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -48,11 +43,6 @@ func (s *Server) StartStream(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) StopStream(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 }
 func writeStartStreamResponse(w http.ResponseWriter, serial string, stream *node.StreamSession) {
 	w.Header().Set("Content-Type", "application/json")

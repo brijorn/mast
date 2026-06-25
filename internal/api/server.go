@@ -29,12 +29,12 @@ func NewServer(n nodeBackend) *Server {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/api/devices", s.ListDevices)
-	mux.HandleFunc("/api/streams", s.StartStream)
-	mux.HandleFunc("/api/streams/video", s.StreamVideo)
-	mux.HandleFunc("/api/control/touch", s.Touch)
-	mux.HandleFunc("/api/control/tap", s.Tap)
-	mux.HandleFunc("/api/control/swipe", s.Swipe)
+	mux.HandleFunc("GET /api/devices", s.ListDevices)
+	mux.HandleFunc("POST /api/streams", s.StartStream)
+	mux.HandleFunc("GET /api/streams/video", s.StreamVideo)
+	mux.HandleFunc("POST /api/control/touch", s.Touch)
+	mux.HandleFunc("POST /api/control/tap", s.Tap)
+	mux.HandleFunc("POST /api/control/swipe", s.Swipe)
 	return mux
 }
 

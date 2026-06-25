@@ -27,11 +27,6 @@ type swipeRequest struct {
 }
 
 func (s *Server) Touch(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	var req touchRequest
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -63,11 +58,6 @@ func (s *Server) Touch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) Tap(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	var req tapRequest
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -94,11 +84,6 @@ func (s *Server) Tap(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) Swipe(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	var req swipeRequest
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

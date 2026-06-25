@@ -36,6 +36,10 @@ func (f *fakeBackend) ListNodes() []node.NodeInfo {
 	return nil
 }
 
+func (f *fakeBackend) Connect(_ string) error {
+	return nil
+}
+
 func (f *fakeBackend) CheckNodeUpdate(_ context.Context, _ string) (*update.CheckResult, error) {
 	return nil, nil
 }

@@ -12,6 +12,7 @@ import (
 type nodeBackend interface {
 	ListNodes() []node.NodeInfo
 	ListDevices() ([]node.DeviceInfo, error)
+	Connect(addr string) error
 	CheckNodeUpdate(ctx context.Context, nodeID string) (*update.CheckResult, error)
 	ApplyNodeUpdate(ctx context.Context, nodeID string, opts update.ApplyOptions) (*update.ApplyResult, error)
 	GetStream(serial string) (*node.StreamSession, error)
@@ -38,6 +39,7 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /api/devices", s.ListDevices)
 	mux.HandleFunc("GET /api/nodes", s.ListNodes)
+	mux.HandleFunc("POST /api/peers", s.AddPeer)
 	mux.HandleFunc("GET /api/nodes/{id}/update", s.CheckNodeUpdate)
 	mux.HandleFunc("POST /api/nodes/{id}/update", s.ApplyNodeUpdate)
 

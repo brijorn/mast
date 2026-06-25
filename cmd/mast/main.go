@@ -12,6 +12,7 @@ var cli struct {
 	Service mastcli.ServiceCmd `cmd:""`
 	Config  mastcli.ConfigCmd  `cmd:""`
 	Version mastcli.VersionCmd `cmd:""`
+	Peer    mastcli.PeerCmd    `cmd:""`
 }
 
 func main() {

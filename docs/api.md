@@ -52,6 +52,33 @@ Returns the local Mast node and all connected peer nodes known to it.
 ]
 ```
 
+## Add Peer
+
+```http
+POST /api/peers
+```
+
+Connects the running Mast node to another Mast peer.
+
+Request body:
+
+```json
+{
+  "target": "100.64.0.20:6270"
+}
+```
+
+`target` may be a host, `host:port`, or full websocket URL. If the port is
+omitted, Mast uses `6270`; if the path is omitted, Mast uses `/ws`.
+
+Response body:
+
+```json
+{
+  "url": "ws://100.64.0.20:6270/ws"
+}
+```
+
 ## Check Node Update
 
 ```http

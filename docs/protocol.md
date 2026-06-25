@@ -236,13 +236,17 @@ If the update fails, `payload.error` contains the error string.
 
 ## Adding Peers
 
-Adding a peer is currently implemented in the node layer with:
+Adding a peer can be done from the CLI:
 
-```text
-node.Connect("ws://host:6270/ws")
+```sh
+mast peer add 100.64.0.20
 ```
 
-There is not yet a CLI command or HTTP endpoint for adding peers.
+or from the HTTP API:
+
+```http
+POST /api/peers
+```
 
 The connection flow is:
 

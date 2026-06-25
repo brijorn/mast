@@ -42,7 +42,7 @@ func (s *Server) StartStream(w http.ResponseWriter, r *http.Request) {
 	writeStartStreamResponse(w, req.Serial, stream)
 }
 
-func (s *Server) StopStream(w http.ResponseWriter, r *http.Request) {
+func (s *Server) StopStream() {
 }
 func writeStartStreamResponse(w http.ResponseWriter, serial string, stream *node.StreamSession) {
 	w.Header().Set("Content-Type", "application/json")

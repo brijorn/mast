@@ -22,6 +22,86 @@ Returns Android devices visible to the local node and Android-enabled peers.
 ]
 ```
 
+## List Nodes
+
+```http
+GET /api/nodes
+```
+
+Returns the local Mast node and all connected peer nodes known to it.
+
+```json
+[
+  {
+    "id": "node-a",
+    "local": true,
+    "android_enabled": true,
+    "version": "0.1.0",
+    "commit": "abc123",
+    "build_date": "2026-06-25T17:00:00Z"
+  },
+  {
+    "id": "node-b",
+    "addr": "100.64.0.2",
+    "local": false,
+    "android_enabled": false,
+    "version": "0.1.0",
+    "commit": "def456",
+    "build_date": "2026-06-25T17:00:00Z"
+  }
+]
+```
+
+## Check Node Update
+
+```http
+GET /api/nodes/{id}/update
+```
+
+Checks whether the selected local or peer Mast node has an update available.
+
+```json
+{
+  "current_version": "0.1.0",
+  "latest_version": "0.2.0",
+  "update_available": true,
+  "os": "darwin",
+  "arch": "arm64",
+  "asset_name": "mast_0.2.0_darwin_arm64.tar.gz",
+  "asset_url": "https://github.com/brijorn/mast/releases/download/v0.2.0/mast_0.2.0_darwin_arm64.tar.gz",
+  "checksum_url": "https://github.com/brijorn/mast/releases/download/v0.2.0/checksums.txt"
+}
+```
+
+## Apply Node Update
+
+```http
+POST /api/nodes/{id}/update
+```
+
+Asks the selected local or peer Mast node to update itself. The peer downloads,
+verifies, extracts, and replaces its own binary.
+
+Request body:
+
+```json
+{
+  "force": false
+}
+```
+
+Response body:
+
+```json
+{
+  "current_version": "0.1.0",
+  "latest_version": "0.2.0",
+  "updated": true,
+  "restart_required": true,
+  "message": "updated to 0.2.0; restart required"
+}
+```
+
 ## Start Stream
 
 ```http

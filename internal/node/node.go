@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/brijorn/mast/internal/transport"
+	"github.com/brijorn/mast/internal/update"
+	"github.com/brijorn/mast/internal/version"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
@@ -21,6 +23,9 @@ type PeerConn struct {
 	mu             sync.Mutex
 	AndroidEnabled bool
 	Addr           string
+	Version        string
+	Commit         string
+	BuildDate      string
 }
 
 func (p *PeerConn) WriteMessage(messageType int, data []byte) error {
@@ -42,8 +47,17 @@ type Node struct {
 	PingInterval   time.Duration
 	AndroidEnabled bool
 	adb            adbRunner
+	updateChecker  update.UpdateChecker
+	updateApplier  update.UpdateApplier
+	pendingMu      sync.Mutex
+	pending        map[string]chan peerRPCResponse
 	streams        map[string]*streamEntry
 	streamsMu      sync.RWMutex
+}
+
+type peerRPCResponse struct {
+	messageType string
+	data        []byte
 }
 
 func NewNode(id string, addr string, advertiseHost string, androidEnabled bool) (*Node, error) {
@@ -53,6 +67,7 @@ func NewNode(id string, addr string, advertiseHost string, androidEnabled bool) 
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	updateChecker := &update.Checker{}
 	return &Node{
 		ID:             id,
 		Listener:       ln,
@@ -64,6 +79,9 @@ func NewNode(id string, addr string, advertiseHost string, androidEnabled bool) 
 		PingInterval:   30 * time.Second,
 		AndroidEnabled: androidEnabled,
 		adb:            realADB{},
+		updateChecker:  updateChecker,
+		updateApplier:  &update.Applier{Checker: updateChecker},
+		pending:        make(map[string]chan peerRPCResponse),
 	}, nil
 }
 
@@ -106,6 +124,75 @@ func (n *Node) sendPeerRequest(peerID string, messageType string, payload any) e
 	}
 
 	return nil
+}
+
+func (n *Node) sendPeerRPC(ctx context.Context, peerID string, messageType string, payload any) (peerRPCResponse, error) {
+	peer, ok := n.GetPeer(peerID)
+	if !ok {
+		return peerRPCResponse{}, errors.New("peer not found")
+	}
+
+	msgID := uuid.NewString()
+	msg := &peerRequest{
+		RawMessage: transport.RawMessage{
+			Type:      messageType,
+			ID:        msgID,
+			From:      n.ID,
+			To:        peerID,
+			Timestamp: time.Now(),
+		},
+		Payload: payload,
+	}
+
+	encoded, err := json.Marshal(msg)
+	if err != nil {
+		return peerRPCResponse{}, err
+	}
+
+	responses := make(chan peerRPCResponse, 1)
+	n.pendingMu.Lock()
+	if n.pending == nil {
+		n.pending = make(map[string]chan peerRPCResponse)
+	}
+	n.pending[msgID] = responses
+	n.pendingMu.Unlock()
+	defer func() {
+		n.pendingMu.Lock()
+		delete(n.pending, msgID)
+		n.pendingMu.Unlock()
+	}()
+
+	if err := peer.WriteMessage(websocket.TextMessage, encoded); err != nil {
+		return peerRPCResponse{}, err
+	}
+
+	select {
+	case response := <-responses:
+		return response, nil
+	case <-ctx.Done():
+		return peerRPCResponse{}, ctx.Err()
+	}
+}
+
+func (n *Node) deliverPeerRPCResponse(raw transport.RawMessage, message []byte) bool {
+	switch raw.MessageType() {
+	case transport.TypeUpdateCheckResponse, transport.TypeUpdateApplyResponse:
+	default:
+		return false
+	}
+
+	n.pendingMu.Lock()
+	responses := n.pending[raw.ID]
+	n.pendingMu.Unlock()
+	if responses == nil {
+		return true
+	}
+
+	select {
+	case responses <- peerRPCResponse{messageType: raw.MessageType(), data: message}:
+	default:
+	}
+	return true
 }
 
 // Listen to incoming connections from other masts
@@ -193,6 +280,9 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 			},
 			Payload: transport.ConnectionRequestPayload{
 				AndroidEnabled: n.AndroidEnabled,
+				Version:        version.Version,
+				Commit:         version.Commit,
+				BuildDate:      version.Date,
 			},
 		}
 
@@ -244,6 +334,10 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 			continue
 		}
 
+		if n.deliverPeerRPCResponse(raw, message) {
+			continue
+		}
+
 		if !registered && raw.MessageType() != transport.TypeConnectionRequest {
 			log.Println("first message must be registration")
 			break
@@ -265,6 +359,9 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				}
 			}
 			peer.AndroidEnabled = req.Payload.AndroidEnabled
+			peer.Version = req.Payload.Version
+			peer.Commit = req.Payload.Commit
+			peer.BuildDate = req.Payload.BuildDate
 			n.Peers[raw.From] = peer
 			n.mu.Unlock()
 
@@ -281,6 +378,9 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 						},
 						Payload: transport.ConnectionRequestPayload{
 							AndroidEnabled: n.AndroidEnabled,
+							Version:        version.Version,
+							Commit:         version.Commit,
+							BuildDate:      version.Date,
 						},
 					}
 
@@ -377,6 +477,20 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				log.Println("swipe:", err)
 				break
 			}
+		case transport.TypeUpdateCheckRequest:
+			var req transport.UpdateCheckRequest
+			if err := json.Unmarshal(message, &req); err != nil {
+				log.Println("decode update check request:", err)
+				break
+			}
+			n.handleUpdateCheckRequest(peer, req)
+		case transport.TypeUpdateApplyRequest:
+			var req transport.UpdateApplyRequest
+			if err := json.Unmarshal(message, &req); err != nil {
+				log.Println("decode update apply request:", err)
+				break
+			}
+			n.handleUpdateApplyRequest(peer, req)
 		}
 	}
 }

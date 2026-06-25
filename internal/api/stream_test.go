@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/brijorn/mast/internal/node"
 	streamcfg "github.com/brijorn/mast/internal/stream"
+	"github.com/brijorn/mast/internal/update"
 )
 
 type fakeBackend struct {
@@ -27,6 +29,18 @@ type fakeBackend struct {
 }
 
 func (f *fakeBackend) ListDevices() ([]node.DeviceInfo, error) {
+	return nil, nil
+}
+
+func (f *fakeBackend) ListNodes() []node.NodeInfo {
+	return nil
+}
+
+func (f *fakeBackend) CheckNodeUpdate(_ context.Context, _ string) (*update.CheckResult, error) {
+	return nil, nil
+}
+
+func (f *fakeBackend) ApplyNodeUpdate(_ context.Context, _ string, _ update.ApplyOptions) (*update.ApplyResult, error) {
 	return nil, nil
 }
 

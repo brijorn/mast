@@ -36,13 +36,16 @@ Sent when a node introduces itself to a peer.
   "to": "",
   "timestamp": "2026-06-22T17:00:00Z",
   "payload": {
-    "android_enabled": true
+    "android_enabled": true,
+    "version": "0.1.0",
+    "commit": "abc123",
+    "build_date": "2026-06-25T17:00:00Z"
   }
 }
 ```
 
 `android_enabled` tells the peer whether this node should be queried for Android
-devices.
+devices. The version fields describe the Mast binary running on that node.
 
 ## start_stream_request
 
@@ -151,6 +154,85 @@ socket.
   }
 }
 ```
+
+## update_check_request
+
+Requests that the destination node check its own latest available GitHub
+release.
+
+```json
+{
+  "type": "update_check_request",
+  "id": "message-id",
+  "from": "node-a",
+  "to": "node-b",
+  "timestamp": "2026-06-25T17:00:00Z",
+  "payload": null
+}
+```
+
+The response uses the same message ID:
+
+```json
+{
+  "type": "update_check_response",
+  "id": "message-id",
+  "from": "node-b",
+  "to": "node-a",
+  "timestamp": "2026-06-25T17:00:01Z",
+  "payload": {
+    "result": {
+      "current_version": "0.1.0",
+      "latest_version": "0.2.0",
+      "update_available": true,
+      "os": "darwin",
+      "arch": "arm64"
+    }
+  }
+}
+```
+
+If the check fails, `payload.error` contains the error string.
+
+## update_apply_request
+
+Requests that the destination node apply an update to itself.
+
+```json
+{
+  "type": "update_apply_request",
+  "id": "message-id",
+  "from": "node-a",
+  "to": "node-b",
+  "timestamp": "2026-06-25T17:00:00Z",
+  "payload": {
+    "force": false
+  }
+}
+```
+
+The response uses the same message ID:
+
+```json
+{
+  "type": "update_apply_response",
+  "id": "message-id",
+  "from": "node-b",
+  "to": "node-a",
+  "timestamp": "2026-06-25T17:00:02Z",
+  "payload": {
+    "result": {
+      "current_version": "0.1.0",
+      "latest_version": "0.2.0",
+      "updated": true,
+      "restart_required": true,
+      "message": "updated to 0.2.0; restart required"
+    }
+  }
+}
+```
+
+If the update fails, `payload.error` contains the error string.
 
 ## Adding Peers
 

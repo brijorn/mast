@@ -65,6 +65,26 @@ func TestNodeConnect(t *testing.T) {
 	connectNodePair(t, nodeA, nodeB)
 }
 
+func TestNodeConnectionStoresPeerVersionMetadata(t *testing.T) {
+	nodeA, nodeB := createNodePair(t)
+
+	connectNodePair(t, nodeA, nodeB)
+
+	nodeA.mu.RLock()
+	peer := nodeA.Peers["b"]
+	nodeA.mu.RUnlock()
+
+	if peer.Version != "dev" {
+		t.Fatalf("peer version = %q, want dev", peer.Version)
+	}
+	if peer.Commit != "unknown" {
+		t.Fatalf("peer commit = %q, want unknown", peer.Commit)
+	}
+	if peer.BuildDate != "unknown" {
+		t.Fatalf("peer build date = %q, want unknown", peer.BuildDate)
+	}
+}
+
 func TestNodeReconect(t *testing.T) {
 	nodeA, nodeB := createNodePair(t)
 

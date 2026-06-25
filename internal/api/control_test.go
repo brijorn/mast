@@ -26,6 +26,24 @@ func TestTapCallsBackend(t *testing.T) {
 	}
 }
 
+func TestTouchCallsBackend(t *testing.T) {
+	backend := &controlBackend{}
+	server := NewServer(backend)
+
+	body := []byte(`{"serial":"local-123","action":"move","x":12,"y":34}`)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/control/touch", bytes.NewReader(body))
+
+	server.Touch(res, req)
+
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusNoContent, res.Body.String())
+	}
+	if backend.touchSerial != "local-123" || backend.touchAction != "move" || backend.touchX != 12 || backend.touchY != 34 {
+		t.Fatalf("touch call = serial %q action %q x %d y %d", backend.touchSerial, backend.touchAction, backend.touchX, backend.touchY)
+	}
+}
+
 func TestSwipeCallsBackend(t *testing.T) {
 	backend := &controlBackend{}
 	server := NewServer(backend)
@@ -78,6 +96,11 @@ type controlBackend struct {
 	tapX      int
 	tapY      int
 
+	touchSerial string
+	touchAction string
+	touchX      int
+	touchY      int
+
 	swipeSerial string
 	startX      int
 	startY      int
@@ -91,6 +114,14 @@ func (b *controlBackend) Tap(serial string, x int, y int) error {
 	b.tapSerial = serial
 	b.tapX = x
 	b.tapY = y
+	return b.err
+}
+
+func (b *controlBackend) Touch(serial string, action string, x int, y int) error {
+	b.touchSerial = serial
+	b.touchAction = action
+	b.touchX = x
+	b.touchY = y
 	return b.err
 }
 

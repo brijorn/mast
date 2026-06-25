@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"testing"
+	"time"
 )
 
 func TestWriteTapWritesDownAndUpTouchEvents(t *testing.T) {
@@ -28,21 +29,23 @@ func TestWriteTapWritesDownAndUpTouchEvents(t *testing.T) {
 func TestWriteSwipeWritesDownMoveAndUpTouchEvents(t *testing.T) {
 	var buf bytes.Buffer
 
-	if err := WriteSwipe(&buf, 12, 34, 56, 78, 944, 1080); err != nil {
+	if err := writeSwipe(&buf, 12, 34, 56, 78, 944, 1080, 2, func(time.Duration) {}); err != nil {
 		t.Fatalf("WriteSwipe returned error: %v", err)
 	}
 
 	got := buf.Bytes()
-	if len(got) != 96 {
-		t.Fatalf("message length = %d, want %d", len(got), 96)
+	if len(got) != 128 {
+		t.Fatalf("message length = %d, want %d", len(got), 128)
 	}
 
 	down := got[:32]
 	move := got[32:64]
-	up := got[64:]
+	move2 := got[64:96]
+	up := got[96:]
 
 	assertTouchEvent(t, down, ActionDown, 12, 34, 944, 1080, DefaultPressure)
-	assertTouchEvent(t, move, ActionMove, 56, 78, 944, 1080, DefaultPressure)
+	assertTouchEvent(t, move, ActionMove, 34, 56, 944, 1080, DefaultPressure)
+	assertTouchEvent(t, move2, ActionMove, 56, 78, 944, 1080, DefaultPressure)
 	assertTouchEvent(t, up, ActionUp, 56, 78, 944, 1080, 0)
 }
 

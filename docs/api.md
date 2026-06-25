@@ -84,6 +84,34 @@ Successful response:
 204 No Content
 ```
 
+## Touch
+
+```http
+POST /api/control/touch
+```
+
+Sends one live touch event to a device. Use this for drag gestures where the
+client sends `down`, one or more `move` events, then `up`.
+
+Request body:
+
+```json
+{
+  "serial": "local-123",
+  "action": "move",
+  "x": 320,
+  "y": 640
+}
+```
+
+`action` must be `down`, `move`, or `up`.
+
+Successful response:
+
+```http
+204 No Content
+```
+
 ## Swipe
 
 ```http
@@ -113,9 +141,9 @@ Successful response:
 
 ## Coordinate Space
 
-Tap and swipe coordinates are scrcpy stream coordinates. Mast reads the stream
-width and height from scrcpy metadata when the stream starts, then uses those
-dimensions when writing control messages.
+Tap, touch, and swipe coordinates are scrcpy stream coordinates. Mast reads the
+stream width and height from scrcpy metadata when the stream starts, then uses
+those dimensions when writing control messages.
 
 If a command targets a device owned by another node, the receiving API node
 routes the command over the peer websocket to the device owner.

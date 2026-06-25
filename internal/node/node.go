@@ -355,6 +355,17 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				log.Println("tap:", err)
 				break
 			}
+		case transport.TypeTouchRequest:
+			var req transport.TouchRequest
+			if err := json.Unmarshal(message, &req); err != nil {
+				log.Println("decode touch request:", err)
+				break
+			}
+
+			if err := n.touchLocal(req.Payload.Serial, req.Payload.Action, req.Payload.X, req.Payload.Y); err != nil {
+				log.Println("touch:", err)
+				break
+			}
 		case transport.TypeSwipeRequest:
 			var req transport.SwipeRequest
 			if err := json.Unmarshal(message, &req); err != nil {

@@ -30,8 +30,11 @@ type StreamSession struct {
 	LocalPort    int
 
 	streamListener net.Listener
-	videoConn      net.Conn
-	controlConn    net.Conn
+
+	videoConn        net.Conn
+	videoBroadcaster *videoBroadcaster
+
+	controlConn net.Conn
 
 	Width  int
 	Height int
@@ -274,6 +277,9 @@ func (n *Node) StartStream(serial string, opts streamcfg.Options) (*StreamSessio
 		_ = session.Stop()
 		return nil, err
 	}
+
+	session.videoBroadcaster = newVideoBroadcaster()
+	go session.broadcastVideo()
 
 	return session, nil
 }

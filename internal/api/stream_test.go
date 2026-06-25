@@ -47,6 +47,14 @@ func (f *fakeBackend) EnsureStream(serial string, opts streamcfg.Options) (*node
 	return f.session, f.err
 }
 
+func (f *fakeBackend) GetStream(_ string) (*node.StreamSession, error) {
+	return f.session, f.err
+}
+
+func (f *fakeBackend) Touch(_ string, _ string, _, _ int) error {
+	return nil
+}
+
 func (f *fakeBackend) Tap(_ string, _, _ int) error {
 	return nil
 }

@@ -10,6 +10,7 @@ const (
 	TypeConnectionRequest  = "connection_request"
 	TypeStartStreamRequest = "start_stream_request"
 	TypeStopStreamRequest  = "stop_stream_request"
+	TypeTouchRequest       = "touch_request"
 	TypeTapRequest         = "tap_request"
 	TypeSwipeRequest       = "swipe_request"
 )
@@ -73,6 +74,18 @@ type TapRequest struct {
 
 type TapRequestPayload struct {
 	Serial string `json:"serial"`
+	X      int    `json:"x"`
+	Y      int    `json:"y"`
+}
+
+type TouchRequest struct {
+	RawMessage
+	Payload TouchRequestPayload `json:"payload"`
+}
+
+type TouchRequestPayload struct {
+	Serial string `json:"serial"`
+	Action string `json:"action"`
 	X      int    `json:"x"`
 	Y      int    `json:"y"`
 }

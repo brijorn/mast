@@ -106,6 +106,30 @@ socket.
 }
 ```
 
+## touch_request
+
+Requests that the device owner send one live touch event through the active
+scrcpy control socket. A drag gesture should send `down`, one or more `move`
+messages, then `up`.
+
+```json
+{
+  "type": "touch_request",
+  "id": "message-id",
+  "from": "node-a",
+  "to": "node-b",
+  "timestamp": "2026-06-22T17:00:00Z",
+  "payload": {
+    "serial": "remote-123",
+    "action": "move",
+    "x": 320,
+    "y": 640
+  }
+}
+```
+
+`action` must be `down`, `move`, or `up`.
+
 ## swipe_request
 
 Requests that the device owner send a swipe through the active scrcpy control

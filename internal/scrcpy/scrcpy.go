@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"encoding/binary"
 	"io"
+	"time"
 )
 
 const (
@@ -12,6 +13,11 @@ const (
 	ActionMove       = 2
 	InjectTouchEvent = 2
 	DefaultPressure  = 0xffff
+)
+
+const (
+	DefaultSwipeDuration = 250 * time.Millisecond
+	DefaultSwipeSteps    = 8
 )
 
 //go:embed scrcpy-server-v4.0.jar
@@ -41,15 +47,46 @@ func WriteTap(w io.Writer, x, y, width, height int) error {
 	return writeTouch(w, ActionUp, x, y, width, height, 0)
 }
 
+func WriteTouch(w io.Writer, action byte, x, y, width, height int) error {
+	pressure := uint16(DefaultPressure)
+	if action == ActionUp {
+		pressure = 0
+	}
+
+	return writeTouch(w, action, x, y, width, height, pressure)
+}
+
 func WriteSwipe(w io.Writer, startX, startY, endX, endY, width, height int) error {
+	return writeSwipe(w, startX, startY, endX, endY, width, height, DefaultSwipeSteps, time.Sleep)
+}
+
+func writeSwipe(w io.Writer, startX, startY, endX, endY, width, height, steps int, sleep func(time.Duration)) error {
+	if steps < 1 {
+		steps = 1
+	}
+
 	if err := writeTouch(w, ActionDown, startX, startY, width, height, DefaultPressure); err != nil {
 		return err
 	}
-	if err := writeTouch(w, ActionMove, endX, endY, width, height, DefaultPressure); err != nil {
-		return err
+
+	delay := DefaultSwipeDuration / time.Duration(steps)
+	for i := 1; i <= steps; i++ {
+		if sleep != nil {
+			sleep(delay)
+		}
+
+		x := interpolate(startX, endX, i, steps)
+		y := interpolate(startY, endY, i, steps)
+		if err := writeTouch(w, ActionMove, x, y, width, height, DefaultPressure); err != nil {
+			return err
+		}
 	}
 
 	return writeTouch(w, ActionUp, endX, endY, width, height, 0)
+}
+
+func interpolate(start, end, step, steps int) int {
+	return start + ((end - start) * step / steps)
 }
 
 func writeTouch(w io.Writer, action byte, x, y, width, height int, pressure uint16) error {

@@ -169,8 +169,8 @@ func TestSwipeLocalWritesControlMessage(t *testing.T) {
 		t.Fatalf("Swipe returned error: %v", err)
 	}
 
-	if len(controlConn.data) != 96 {
-		t.Fatalf("swipe wrote %d bytes, want 96", len(controlConn.data))
+	if len(controlConn.data) != 320 {
+		t.Fatalf("swipe wrote %d bytes, want 320", len(controlConn.data))
 	}
 	if controlConn.data[1] != scrcpy.ActionDown {
 		t.Fatalf("down action = %d, want %d", controlConn.data[1], scrcpy.ActionDown)
@@ -178,8 +178,8 @@ func TestSwipeLocalWritesControlMessage(t *testing.T) {
 	if controlConn.data[33] != scrcpy.ActionMove {
 		t.Fatalf("move action = %d, want %d", controlConn.data[33], scrcpy.ActionMove)
 	}
-	if controlConn.data[65] != scrcpy.ActionUp {
-		t.Fatalf("up action = %d, want %d", controlConn.data[65], scrcpy.ActionUp)
+	if controlConn.data[len(controlConn.data)-31] != scrcpy.ActionUp {
+		t.Fatalf("up action = %d, want %d", controlConn.data[len(controlConn.data)-31], scrcpy.ActionUp)
 	}
 }
 

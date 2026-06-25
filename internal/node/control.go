@@ -21,6 +21,44 @@ type SwipeCommand struct {
 	EndY   int
 }
 
+func (n *Node) touchLocal(serial string, action string, x int, y int) error {
+	session, err := n.GetStream(serial)
+	if err != nil {
+		return err
+	}
+
+	if session.controlConn == nil {
+		return errors.New("stream control connection not available")
+	}
+
+	touchAction, err := touchActionByte(action)
+	if err != nil {
+		return err
+	}
+
+	return scrcpy.WriteTouch(session.controlConn, touchAction, x, y, session.Width, session.Height)
+}
+
+func (n *Node) Touch(serial string, action string, x int, y int) error {
+	device, err := n.DeviceBySerial(serial)
+	if err != nil {
+		return err
+	}
+
+	if device.NodeID == n.ID {
+		return n.touchLocal(serial, action, x, y)
+	}
+
+	payload := transport.TouchRequestPayload{
+		Serial: serial,
+		Action: action,
+		X:      x,
+		Y:      y,
+	}
+
+	return n.sendPeerRequest(device.NodeID, transport.TypeTouchRequest, payload)
+}
+
 func (n *Node) tapLocal(serial string, x int, y int) error {
 	session, err := n.GetStream(serial)
 	if err != nil {
@@ -89,4 +127,17 @@ func (n *Node) Swipe(serial string, startX, startY, endX, endY int) error {
 	}
 
 	return n.sendPeerRequest(device.NodeID, transport.TypeSwipeRequest, payload)
+}
+
+func touchActionByte(action string) (byte, error) {
+	switch action {
+	case "down":
+		return scrcpy.ActionDown, nil
+	case "move":
+		return scrcpy.ActionMove, nil
+	case "up":
+		return scrcpy.ActionUp, nil
+	default:
+		return 0, errors.New("invalid touch action")
+	}
 }

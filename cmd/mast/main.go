@@ -11,6 +11,7 @@ var cli struct {
 	Start   mastcli.StartCmd   `cmd:""`
 	Service mastcli.ServiceCmd `cmd:""`
 	Config  mastcli.ConfigCmd  `cmd:""`
+	Version mastcli.VersionCmd `cmd:""`
 }
 
 func main() {

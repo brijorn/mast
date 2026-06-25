@@ -5,6 +5,11 @@ project_name: mast
 builds:
   - main: ./cmd/mast
     binary: mast
+    ldflags:
+      - -s -w
+      - -X github.com/brijorn/mast/internal/version.Version={{.Version}}
+      - -X github.com/brijorn/mast/internal/version.Commit={{.Commit}}
+      - -X github.com/brijorn/mast/internal/version.Date={{.Date}}
     goos:
       - darwin
       - linux

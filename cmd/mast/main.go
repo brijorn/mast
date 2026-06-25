@@ -13,6 +13,7 @@ var cli struct {
 	Config  mastcli.ConfigCmd  `cmd:""`
 	Version mastcli.VersionCmd `cmd:""`
 	Peer    mastcli.PeerCmd    `cmd:""`
+	Update  mastcli.UpdateCmd  `cmd:""`
 }
 
 func main() {

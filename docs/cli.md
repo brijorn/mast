@@ -128,6 +128,48 @@ mast version
 mast version --verbose
 ```
 
+## update check
+
+Checks whether the local Mast node has an available GitHub Release update.
+
+```sh
+mast update check
+```
+
+To check a connected peer through the local Mast node:
+
+```sh
+mast update check node-b
+```
+
+Use `--api` if the local Mast API is not listening at the configured
+`api_addr`:
+
+```sh
+mast update check --api http://127.0.0.1:6271
+```
+
+## update apply
+
+Applies an available GitHub Release update to the local Mast node.
+
+```sh
+mast update apply
+```
+
+To ask a connected peer to update itself through the local Mast node:
+
+```sh
+mast update apply node-b
+```
+
+Use `--force` to apply the latest release even when the current version matches
+the latest version:
+
+```sh
+mast update apply --force
+```
+
 ## service install
 
 Installs Mast as an OS user service that runs `mast start`.

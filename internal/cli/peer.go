@@ -29,7 +29,7 @@ func (p *PeerAddCmd) Run() error {
 		return err
 	}
 
-	apiBase, err := p.apiBaseURL()
+	apiBase, err := apiBaseURL(p.ConfigPath, p.APIAddr)
 	if err != nil {
 		return err
 	}
@@ -56,12 +56,12 @@ func (p *PeerAddCmd) Run() error {
 	return err
 }
 
-func (p *PeerAddCmd) apiBaseURL() (string, error) {
-	if p.APIAddr != "" {
-		return normalizeHTTPBase(p.APIAddr)
+func apiBaseURL(configPath string, apiAddr string) (string, error) {
+	if apiAddr != "" {
+		return normalizeHTTPBase(apiAddr)
 	}
 
-	cfg, err := LoadConfig(p.ConfigPath)
+	cfg, err := LoadConfig(configPath)
 	if err != nil {
 		return "", err
 	}

@@ -5,7 +5,7 @@ import (
 	"net/http"
 )
 
-func (s *Server) ListDevices(w http.ResponseWriter) {
+func (s *Server) ListDevices(w http.ResponseWriter, _ *http.Request) {
 	devices, err := s.node.ListDevices()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

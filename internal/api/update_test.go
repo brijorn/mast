@@ -110,7 +110,7 @@ func TestCheckNodeUpdateReturnsPeerUpdateResult(t *testing.T) {
 	}
 }
 
-func TestApplyNodeUpdateForwardsForce(t *testing.T) {
+func TestApplyNodeUpdateForwardsOptions(t *testing.T) {
 	backend := &updateNodeBackend{
 		applyResult: &update.ApplyResult{
 			CurrentVersion:  "0.1.0",
@@ -122,7 +122,7 @@ func TestApplyNodeUpdateForwardsForce(t *testing.T) {
 	}
 	server := NewServer(backend)
 
-	body := []byte(`{"force":true}`)
+	body := []byte(`{"force":true,"restart":true}`)
 	res := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/nodes/remote-node/update", bytes.NewReader(body))
 
@@ -136,6 +136,9 @@ func TestApplyNodeUpdateForwardsForce(t *testing.T) {
 	}
 	if !backend.force {
 		t.Fatal("Force was not forwarded")
+	}
+	if !backend.restart {
+		t.Fatal("Restart was not forwarded")
 	}
 }
 
@@ -152,6 +155,7 @@ type updateNodeBackend struct {
 	fakeBackend
 	nodeID      string
 	force       bool
+	restart     bool
 	checkResult *update.CheckResult
 	checkErr    error
 	applyResult *update.ApplyResult
@@ -166,5 +170,6 @@ func (b *updateNodeBackend) CheckNodeUpdate(_ context.Context, nodeID string) (*
 func (b *updateNodeBackend) ApplyNodeUpdate(_ context.Context, nodeID string, opts update.ApplyOptions) (*update.ApplyResult, error) {
 	b.nodeID = nodeID
 	b.force = opts.Force
+	b.restart = opts.Restart
 	return b.applyResult, b.applyErr
 }

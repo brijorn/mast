@@ -24,7 +24,8 @@ type Applier struct {
 }
 
 type ApplyOptions struct {
-	Force bool
+	Force   bool `json:"force"`
+	Restart bool `json:"restart"`
 }
 type ApplyResult struct {
 	CurrentVersion  string `json:"current_version"`

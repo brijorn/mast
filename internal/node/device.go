@@ -130,7 +130,7 @@ func (n *Node) listPeerDevices(ctx context.Context, peerID string) ([]DeviceInfo
 
 	response, err := n.sendPeerRPC(ctx, peerID, transport.TypeListDevicesRequest, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list devices from peer %s: %w", peerID, err)
 	}
 	if response.messageType != transport.TypeListDevicesResponse {
 		return nil, fmt.Errorf("unexpected response type: %s", response.messageType)
@@ -141,7 +141,7 @@ func (n *Node) listPeerDevices(ctx context.Context, peerID string) ([]DeviceInfo
 		return nil, err
 	}
 	if res.Payload.Error != "" {
-		return nil, errors.New(res.Payload.Error)
+		return nil, fmt.Errorf("list devices from peer %s: %s", peerID, res.Payload.Error)
 	}
 
 	return deviceInfosFromPayload(res.Payload.Result), nil
@@ -161,6 +161,22 @@ func (n *Node) handleListDevicesRequest(peer *PeerConn, req transport.ListDevice
 
 func (n *Node) DeviceBySerial(serial string) (*DeviceInfo, error) {
 	devices, err := n.ListDevices()
+	if err != nil {
+		return nil, err
+	}
+
+	index := slices.IndexFunc(devices, func(d DeviceInfo) bool {
+		return d.Serial == serial
+	})
+	if index == -1 {
+		return nil, errors.New("device not found:" + serial)
+	}
+
+	return &devices[index], nil
+}
+
+func (n *Node) localDeviceBySerial(serial string) (*DeviceInfo, error) {
+	devices, err := n.listLocalDevices()
 	if err != nil {
 		return nil, err
 	}

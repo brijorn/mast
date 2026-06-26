@@ -113,7 +113,8 @@ Request body:
 
 ```json
 {
-  "force": false
+  "force": false,
+  "restart": false
 }
 ```
 

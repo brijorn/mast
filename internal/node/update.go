@@ -50,7 +50,7 @@ func (n *Node) ApplyNodeUpdate(ctx context.Context, nodeID string, opts update.A
 		return n.applyLocalUpdate(ctx, opts)
 	}
 
-	payload := transport.UpdateApplyOptionsPayload{Force: opts.Force}
+	payload := transport.UpdateApplyOptionsPayload{Force: opts.Force, Restart: opts.Restart}
 	response, err := n.sendPeerRPC(ctx, nodeID, transport.TypeUpdateApplyRequest, payload)
 	if err != nil {
 		return nil, err
@@ -86,7 +86,16 @@ func (n *Node) applyLocalUpdate(ctx context.Context, opts update.ApplyOptions) (
 	if applier == nil {
 		applier = &update.Applier{Checker: n.updateChecker}
 	}
-	return applier.Apply(ctx, opts)
+	result, err := applier.Apply(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	if opts.Restart && result.Updated {
+		if err := n.ScheduleRestart(restartDelay); err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
 }
 
 func (n *Node) handleUpdateCheckRequest(peer *PeerConn, req transport.UpdateCheckRequest) {
@@ -102,7 +111,7 @@ func (n *Node) handleUpdateCheckRequest(peer *PeerConn, req transport.UpdateChec
 }
 
 func (n *Node) handleUpdateApplyRequest(peer *PeerConn, req transport.UpdateApplyRequest) {
-	opts := update.ApplyOptions{Force: req.Payload.Force}
+	opts := update.ApplyOptions{Force: req.Payload.Force, Restart: req.Payload.Restart}
 	result, err := n.applyLocalUpdate(n.ctx, opts)
 	payload := transport.UpdateApplyResponsePayload{}
 	if err != nil {

@@ -170,6 +170,12 @@ the latest version:
 mast update apply --force
 ```
 
+Use `--restart` to relaunch Mast after a successful update:
+
+```sh
+mast update apply --force --restart node-b
+```
+
 ## service install
 
 Installs Mast as an OS user service that runs `mast start`.

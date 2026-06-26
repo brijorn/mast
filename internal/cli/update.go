@@ -28,6 +28,7 @@ type UpdateApplyCmd struct {
 	ConfigPath string `name:"config" short:"c" type:"path" help:"Path to config file"`
 	APIAddr    string `name:"api" help:"Local Mast API base URL"`
 	Force      bool   `help:"Apply even when the latest version matches the current version"`
+	Restart    bool   `help:"Restart Mast after applying the update"`
 	NodeID     string `arg:"" optional:"" help:"Node ID to update; omit for the local node"`
 }
 
@@ -54,7 +55,7 @@ func (u *UpdateApplyCmd) Run() error {
 		return err
 	}
 
-	body, err := json.Marshal(update.ApplyOptions{Force: u.Force})
+	body, err := json.Marshal(update.ApplyOptions{Force: u.Force, Restart: u.Restart})
 	if err != nil {
 		return err
 	}

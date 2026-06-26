@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	streamcfg "github.com/brijorn/mast/internal/stream"
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestReadScrcpyVideoMetadata(t *testing.T) {
@@ -48,6 +49,7 @@ func TestStartStreamRoutesRemoteDeviceToPeer(t *testing.T) {
 	defer func() { _ = nodeA.Close() }()
 	defer func() { _ = nodeB.Close() }()
 
+	nodeA.AndroidEnabled = true
 	nodeB.AndroidEnabled = true
 	nodeB.AdvertiseHost = "10.0.0.2"
 
@@ -86,6 +88,9 @@ func TestStartStreamRoutesRemoteDeviceToPeer(t *testing.T) {
 	}
 	if len(nodeAADB.reverseCalls) != 0 {
 		t.Fatalf("node A reverse calls = %d, want 0", len(nodeAADB.reverseCalls))
+	}
+	if diff := cmp.Diff([]string{""}, nodeAADB.calls); diff != "" {
+		t.Fatalf("node A adb calls mismatch (-want +got):\n%s", diff)
 	}
 	if len(nodeBADB.reverseCalls) != 1 {
 		t.Fatalf("node B reverse calls = %d, want 1", len(nodeBADB.reverseCalls))

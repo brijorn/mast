@@ -40,6 +40,15 @@ func TestApplyNodeUpdateRoutesToPeer(t *testing.T) {
 	nodeA, nodeB := createNodePair(t)
 	defer func() { _ = nodeA.Close() }()
 	defer func() { _ = nodeB.Close() }()
+	originalScheduleRestart := scheduleProcessRestart
+	restartScheduled := false
+	scheduleProcessRestart = func(time.Duration) error {
+		restartScheduled = true
+		return nil
+	}
+	defer func() {
+		scheduleProcessRestart = originalScheduleRestart
+	}()
 
 	nodeB.updateApplier = &fakeUpdateApplier{
 		result: &update.ApplyResult{
@@ -54,7 +63,7 @@ func TestApplyNodeUpdateRoutesToPeer(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	got, err := nodeA.ApplyNodeUpdate(ctx, "b", update.ApplyOptions{Force: true})
+	got, err := nodeA.ApplyNodeUpdate(ctx, "b", update.ApplyOptions{Force: true, Restart: true})
 	if err != nil {
 		t.Fatalf("ApplyNodeUpdate returned error: %v", err)
 	}
@@ -64,6 +73,12 @@ func TestApplyNodeUpdateRoutesToPeer(t *testing.T) {
 	}
 	if !nodeB.updateApplier.(*fakeUpdateApplier).force {
 		t.Fatal("Force was not forwarded to peer applier")
+	}
+	if !nodeB.updateApplier.(*fakeUpdateApplier).restart {
+		t.Fatal("Restart was not forwarded to peer applier")
+	}
+	if !restartScheduled {
+		t.Fatal("restart was not scheduled")
 	}
 }
 
@@ -77,12 +92,14 @@ func (f *fakeUpdateChecker) Check(_ context.Context) (*update.CheckResult, error
 }
 
 type fakeUpdateApplier struct {
-	result *update.ApplyResult
-	err    error
-	force  bool
+	result  *update.ApplyResult
+	err     error
+	force   bool
+	restart bool
 }
 
 func (f *fakeUpdateApplier) Apply(_ context.Context, opts update.ApplyOptions) (*update.ApplyResult, error) {
 	f.force = opts.Force
+	f.restart = opts.Restart
 	return f.result, f.err
 }

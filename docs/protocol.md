@@ -206,7 +206,8 @@ Requests that the destination node apply an update to itself.
   "to": "node-b",
   "timestamp": "2026-06-25T17:00:00Z",
   "payload": {
-    "force": false
+    "force": false,
+    "restart": false
   }
 }
 ```

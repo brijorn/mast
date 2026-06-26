@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/brijorn/mast/internal/node"
 	streamcfg "github.com/brijorn/mast/internal/stream"
@@ -20,6 +21,10 @@ type nodeBackend interface {
 	Touch(serial string, action string, x, y int) error
 	Tap(serial string, x, y int) error
 	Swipe(serial string, startX, startY, endX, endY int) error
+}
+
+type restartBackend interface {
+	ScheduleRestart(delay time.Duration) error
 }
 
 type Server struct {

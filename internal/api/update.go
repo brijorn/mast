@@ -41,6 +41,17 @@ func (s *Server) ApplyUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if opts.Restart && res.Updated {
+		restarter, ok := s.node.(restartBackend)
+		if !ok {
+			http.Error(w, "restart not supported", http.StatusInternalServerError)
+			return
+		}
+		if err := restarter.ScheduleRestart(0); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(res); err != nil {

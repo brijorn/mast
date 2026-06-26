@@ -246,12 +246,20 @@ func (n *Node) StartStream(serial string, opts streamcfg.Options) (*StreamSessio
 		return n.startPeerStream(n.ctx, device.NodeID, serial, opts)
 	}
 
-	streamHost, err := n.streamHostForNode(device.NodeID)
+	return n.startLocalStream(serial, opts)
+}
+
+func (n *Node) startLocalStream(serial string, opts streamcfg.Options) (*StreamSession, error) {
+	if _, err := n.localDeviceBySerial(serial); err != nil {
+		return nil, err
+	}
+
+	streamHost, err := n.streamHostForNode(n.ID)
 	if err != nil {
 		return nil, err
 	}
 
-	host, err := n.adbHostForNode(device.NodeID)
+	host, err := n.adbHostForNode(n.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -327,7 +335,7 @@ func (n *Node) startPeerStream(ctx context.Context, nodeID string, serial string
 }
 
 func (n *Node) handleStartStreamRequest(peer *PeerConn, req transport.StartStreamRequest) {
-	session, err := n.EnsureStream(req.Payload.Serial, req.Payload.Options)
+	session, err := n.ensureLocalStream(req.Payload.Serial, req.Payload.Options)
 	payload := transport.StartStreamResponsePayload{}
 	if err != nil {
 		payload.Error = err.Error()
@@ -363,6 +371,14 @@ func streamSessionFromPayload(payload *transport.StartStreamResultPayload) *Stre
 }
 
 func (n *Node) EnsureStream(serial string, opts streamcfg.Options) (*StreamSession, error) {
+	return n.ensureStream(serial, opts, n.StartStream)
+}
+
+func (n *Node) ensureLocalStream(serial string, opts streamcfg.Options) (*StreamSession, error) {
+	return n.ensureStream(serial, opts, n.startLocalStream)
+}
+
+func (n *Node) ensureStream(serial string, opts streamcfg.Options, start func(string, streamcfg.Options) (*StreamSession, error)) (*StreamSession, error) {
 	n.streamsMu.Lock()
 	entry, ok := n.streams[serial]
 	if ok {
@@ -386,14 +402,14 @@ func (n *Node) EnsureStream(serial string, opts streamcfg.Options) (*StreamSessi
 	n.streams[serial] = entry
 	n.streamsMu.Unlock()
 
-	streamSession, err := n.StartStream(serial, opts)
+	streamSession, err := start(serial, opts)
 
 	n.streamsMu.Lock()
 	if err != nil {
 		entry.Error = err
 		delete(n.streams, serial)
 	} else if streamSession == nil {
-		err = errors.New("internal error: StartStream returned nil session")
+		err = errors.New("internal error: stream starter returned nil session")
 		entry.Error = err
 		delete(n.streams, serial)
 	} else {

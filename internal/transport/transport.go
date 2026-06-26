@@ -166,7 +166,8 @@ type UpdateCheckResultPayload struct {
 }
 
 type UpdateApplyOptionsPayload struct {
-	Force bool `json:"force"`
+	Force   bool `json:"force"`
+	Restart bool `json:"restart"`
 }
 
 type UpdateApplyResultPayload struct {

@@ -9,6 +9,7 @@ import (
 const (
 	TypeConnectionRequest   = "connection_request"
 	TypeStartStreamRequest  = "start_stream_request"
+	TypeStartStreamResponse = "start_stream_response"
 	TypeStopStreamRequest   = "stop_stream_request"
 	TypeTouchRequest        = "touch_request"
 	TypeTapRequest          = "tap_request"
@@ -63,6 +64,23 @@ type StartStreamRequestPayload struct {
 type StartStreamRequest struct {
 	RawMessage
 	Payload StartStreamRequestPayload `json:"payload"`
+}
+
+type StartStreamResultPayload struct {
+	ID        string `json:"id"`
+	Serial    string `json:"serial"`
+	Host      string `json:"host"`
+	LocalPort int    `json:"local_port"`
+}
+
+type StartStreamResponsePayload struct {
+	Result *StartStreamResultPayload `json:"result,omitempty"`
+	Error  string                    `json:"error,omitempty"`
+}
+
+type StartStreamResponse struct {
+	RawMessage
+	Payload StartStreamResponsePayload `json:"payload"`
 }
 
 type StopStreamRequestPayload struct {

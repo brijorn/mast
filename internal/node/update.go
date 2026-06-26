@@ -98,7 +98,7 @@ func (n *Node) handleUpdateCheckRequest(peer *PeerConn, req transport.UpdateChec
 		payload.Result = checkResultPayload(result)
 	}
 
-	n.writeUpdateResponse(peer, transport.TypeUpdateCheckResponse, req.RawMessage, payload)
+	n.writePeerResponse(peer, transport.TypeUpdateCheckResponse, req.RawMessage, payload)
 }
 
 func (n *Node) handleUpdateApplyRequest(peer *PeerConn, req transport.UpdateApplyRequest) {
@@ -111,10 +111,10 @@ func (n *Node) handleUpdateApplyRequest(peer *PeerConn, req transport.UpdateAppl
 		payload.Result = applyResultPayload(result)
 	}
 
-	n.writeUpdateResponse(peer, transport.TypeUpdateApplyResponse, req.RawMessage, payload)
+	n.writePeerResponse(peer, transport.TypeUpdateApplyResponse, req.RawMessage, payload)
 }
 
-func (n *Node) writeUpdateResponse(peer *PeerConn, messageType string, req transport.RawMessage, payload any) {
+func (n *Node) writePeerResponse(peer *PeerConn, messageType string, req transport.RawMessage, payload any) {
 	msg := peerRequest{
 		RawMessage: transport.RawMessage{
 			Type:      messageType,

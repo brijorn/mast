@@ -176,7 +176,7 @@ func (n *Node) sendPeerRPC(ctx context.Context, peerID string, messageType strin
 
 func (n *Node) deliverPeerRPCResponse(raw transport.RawMessage, message []byte) bool {
 	switch raw.MessageType() {
-	case transport.TypeUpdateCheckResponse, transport.TypeUpdateApplyResponse:
+	case transport.TypeStartStreamResponse, transport.TypeUpdateCheckResponse, transport.TypeUpdateApplyResponse:
 	default:
 		return false
 	}
@@ -430,9 +430,7 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				log.Println("decode start stream request:", err)
 				break
 			}
-			if _, err := n.EnsureStream(req.Payload.Serial, req.Payload.Options); err != nil {
-				log.Println("start stream:", err)
-			}
+			n.handleStartStreamRequest(peer, req)
 		case transport.TypeStopStreamRequest:
 			var req transport.StopStreamRequest
 			if err := json.Unmarshal(message, &req); err != nil {

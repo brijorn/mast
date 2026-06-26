@@ -2,8 +2,11 @@ package node
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -13,6 +16,7 @@ import (
 
 	"github.com/brijorn/mast/internal/scrcpy"
 	streamcfg "github.com/brijorn/mast/internal/stream"
+	"github.com/brijorn/mast/internal/transport"
 	"github.com/google/uuid"
 )
 
@@ -40,6 +44,10 @@ type StreamSession struct {
 	Height int
 	cmd    *exec.Cmd
 }
+
+const (
+	peerStreamRPCTimeout = 30 * time.Second
+)
 
 func (s *StreamSession) Stop() error {
 	var err error
@@ -234,6 +242,10 @@ func (n *Node) StartStream(serial string, opts streamcfg.Options) (*StreamSessio
 		return nil, err
 	}
 
+	if device.NodeID != n.ID {
+		return n.startPeerStream(n.ctx, device.NodeID, serial, opts)
+	}
+
 	streamHost, err := n.streamHostForNode(device.NodeID)
 	if err != nil {
 		return nil, err
@@ -282,6 +294,72 @@ func (n *Node) StartStream(serial string, opts streamcfg.Options) (*StreamSessio
 	go session.broadcastVideo()
 
 	return session, nil
+}
+
+func (n *Node) startPeerStream(ctx context.Context, nodeID string, serial string, opts streamcfg.Options) (*StreamSession, error) {
+	ctx, cancel := context.WithTimeout(ctx, peerStreamRPCTimeout)
+	defer cancel()
+
+	payload := transport.StartStreamRequestPayload{
+		Serial:  serial,
+		Options: opts,
+	}
+	response, err := n.sendPeerRPC(ctx, nodeID, transport.TypeStartStreamRequest, payload)
+	if err != nil {
+		return nil, err
+	}
+	if response.messageType != transport.TypeStartStreamResponse {
+		return nil, fmt.Errorf("unexpected response type: %s", response.messageType)
+	}
+
+	var res transport.StartStreamResponse
+	if err := json.Unmarshal(response.data, &res); err != nil {
+		return nil, err
+	}
+	if res.Payload.Error != "" {
+		return nil, errors.New(res.Payload.Error)
+	}
+	if res.Payload.Result == nil {
+		return nil, errors.New("start stream response missing result")
+	}
+
+	return streamSessionFromPayload(res.Payload.Result), nil
+}
+
+func (n *Node) handleStartStreamRequest(peer *PeerConn, req transport.StartStreamRequest) {
+	session, err := n.EnsureStream(req.Payload.Serial, req.Payload.Options)
+	payload := transport.StartStreamResponsePayload{}
+	if err != nil {
+		payload.Error = err.Error()
+	} else {
+		payload.Result = streamSessionPayload(session)
+	}
+
+	n.writePeerResponse(peer, transport.TypeStartStreamResponse, req.RawMessage, payload)
+}
+
+func streamSessionPayload(session *StreamSession) *transport.StartStreamResultPayload {
+	if session == nil {
+		return nil
+	}
+	return &transport.StartStreamResultPayload{
+		ID:        session.ID,
+		Serial:    session.DeviceSerial,
+		Host:      session.Host,
+		LocalPort: session.LocalPort,
+	}
+}
+
+func streamSessionFromPayload(payload *transport.StartStreamResultPayload) *StreamSession {
+	if payload == nil {
+		return nil
+	}
+	return &StreamSession{
+		ID:           payload.ID,
+		DeviceSerial: payload.Serial,
+		Host:         payload.Host,
+		LocalPort:    payload.LocalPort,
+	}
 }
 
 func (n *Node) EnsureStream(serial string, opts streamcfg.Options) (*StreamSession, error) {

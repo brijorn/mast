@@ -176,7 +176,7 @@ func (n *Node) sendPeerRPC(ctx context.Context, peerID string, messageType strin
 
 func (n *Node) deliverPeerRPCResponse(raw transport.RawMessage, message []byte) bool {
 	switch raw.MessageType() {
-	case transport.TypeStartStreamResponse, transport.TypeUpdateCheckResponse, transport.TypeUpdateApplyResponse:
+	case transport.TypeListDevicesResponse, transport.TypeStartStreamResponse, transport.TypeUpdateCheckResponse, transport.TypeUpdateApplyResponse:
 	default:
 		return false
 	}
@@ -424,6 +424,13 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 
 			}
 
+		case transport.TypeListDevicesRequest:
+			var req transport.ListDevicesRequest
+			if err := json.Unmarshal(message, &req); err != nil {
+				log.Println("decode list devices request:", err)
+				break
+			}
+			n.handleListDevicesRequest(peer, req)
 		case transport.TypeStartStreamRequest:
 			var req transport.StartStreamRequest
 			if err := json.Unmarshal(message, &req); err != nil {

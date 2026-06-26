@@ -1,17 +1,12 @@
 package node
 
 import (
-	"encoding/json"
 	"net"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/brijorn/mast/internal/scrcpy"
-	"github.com/brijorn/mast/internal/transport"
-	"github.com/gorilla/websocket"
 )
 
 type recordingConn struct {
@@ -87,71 +82,43 @@ func TestTapLocalRequiresControlConnection(t *testing.T) {
 }
 
 func TestTapRemoteSendsPeerRequest(t *testing.T) {
-	messageCh := make(chan []byte, 1)
-	upgrader := websocket.Upgrader{}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			t.Errorf("upgrade: %v", err)
-			return
-		}
-		defer func() { _ = conn.Close() }()
+	nodeA, nodeB := createNodePair(t)
+	defer func() { _ = nodeA.Close() }()
+	defer func() { _ = nodeB.Close() }()
 
-		_, message, err := conn.ReadMessage()
-		if err != nil {
-			t.Errorf("read message: %v", err)
-			return
-		}
-		messageCh <- message
-	}))
-	defer server.Close()
-
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = conn.Close() }()
-
-	node := newControlTestNode("local-node", "")
-	node.adb = &fakeADB{
+	nodeA.adb = &fakeADB{
 		outputs: map[string][]byte{
-			"":         []byte("List of devices attached\n"),
-			"10.0.0.2": []byte("List of devices attached\nremote-123\tdevice\n"),
+			"": []byte("List of devices attached\n"),
 		},
 	}
-	node.Peers["remote-node"] = &PeerConn{
-		conn:           conn,
-		AndroidEnabled: true,
-		Addr:           "10.0.0.2",
+	nodeB.adb = &fakeADB{
+		outputs: map[string][]byte{
+			"": []byte("List of devices attached\nremote-123\tdevice\n"),
+		},
 	}
+	nodeB.AndroidEnabled = true
+	controlConn := &recordingConn{}
+	nodeB.streams["remote-123"] = readyStreamEntry(&StreamSession{
+		DeviceSerial: "remote-123",
+		Width:        944,
+		Height:       1080,
+		controlConn:  controlConn,
+	})
 
-	if err := node.Tap("remote-123", 12, 34); err != nil {
+	connectNodePair(t, nodeA, nodeB)
+
+	if err := nodeA.Tap("remote-123", 12, 34); err != nil {
 		t.Fatalf("Tap returned error: %v", err)
 	}
 
-	var raw transport.RawMessage
-	message := receiveControlMessage(t, messageCh)
-	if err := json.Unmarshal(message, &raw); err != nil {
-		t.Fatalf("decode raw message: %v", err)
+	waitFor(t, time.Second, func() bool {
+		return len(controlConn.data) == 64
+	})
+	if len(controlConn.data) != 64 {
+		t.Fatalf("tap wrote %d bytes, want 64", len(controlConn.data))
 	}
-	if raw.Type != transport.TypeTapRequest {
-		t.Fatalf("message type = %q, want %q", raw.Type, transport.TypeTapRequest)
-	}
-	if raw.From != "local-node" {
-		t.Fatalf("from = %q, want local-node", raw.From)
-	}
-	if raw.To != "remote-node" {
-		t.Fatalf("to = %q, want remote-node", raw.To)
-	}
-
-	var req transport.TapRequest
-	if err := json.Unmarshal(message, &req); err != nil {
-		t.Fatalf("decode tap request: %v", err)
-	}
-	expected := transport.TapRequestPayload{Serial: "remote-123", X: 12, Y: 34}
-	if req.Payload != expected {
-		t.Fatalf("payload = %+v, want %+v", req.Payload, expected)
+	if controlConn.data[0] != scrcpy.InjectTouchEvent {
+		t.Fatalf("down message type = %d, want %d", controlConn.data[0], scrcpy.InjectTouchEvent)
 	}
 }
 
@@ -184,65 +151,43 @@ func TestSwipeLocalWritesControlMessage(t *testing.T) {
 }
 
 func TestSwipeRemoteSendsPeerRequest(t *testing.T) {
-	messageCh := make(chan []byte, 1)
-	upgrader := websocket.Upgrader{}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			t.Errorf("upgrade: %v", err)
-			return
-		}
-		defer func() { _ = conn.Close() }()
+	nodeA, nodeB := createNodePair(t)
+	defer func() { _ = nodeA.Close() }()
+	defer func() { _ = nodeB.Close() }()
 
-		_, message, err := conn.ReadMessage()
-		if err != nil {
-			t.Errorf("read message: %v", err)
-			return
-		}
-		messageCh <- message
-	}))
-	defer server.Close()
-
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = conn.Close() }()
-
-	node := newControlTestNode("local-node", "")
-	node.adb = &fakeADB{
+	nodeA.adb = &fakeADB{
 		outputs: map[string][]byte{
-			"":         []byte("List of devices attached\n"),
-			"10.0.0.2": []byte("List of devices attached\nremote-123\tdevice\n"),
+			"": []byte("List of devices attached\n"),
 		},
 	}
-	node.Peers["remote-node"] = &PeerConn{
-		conn:           conn,
-		AndroidEnabled: true,
-		Addr:           "10.0.0.2",
+	nodeB.adb = &fakeADB{
+		outputs: map[string][]byte{
+			"": []byte("List of devices attached\nremote-123\tdevice\n"),
+		},
 	}
+	nodeB.AndroidEnabled = true
+	controlConn := &recordingConn{}
+	nodeB.streams["remote-123"] = readyStreamEntry(&StreamSession{
+		DeviceSerial: "remote-123",
+		Width:        944,
+		Height:       1080,
+		controlConn:  controlConn,
+	})
 
-	if err := node.Swipe("remote-123", 12, 34, 56, 78); err != nil {
+	connectNodePair(t, nodeA, nodeB)
+
+	if err := nodeA.Swipe("remote-123", 12, 34, 56, 78); err != nil {
 		t.Fatalf("Swipe returned error: %v", err)
 	}
 
-	message := receiveControlMessage(t, messageCh)
-	var raw transport.RawMessage
-	if err := json.Unmarshal(message, &raw); err != nil {
-		t.Fatalf("decode raw message: %v", err)
+	waitFor(t, time.Second, func() bool {
+		return len(controlConn.data) == 320
+	})
+	if len(controlConn.data) != 320 {
+		t.Fatalf("swipe wrote %d bytes, want 320", len(controlConn.data))
 	}
-	if raw.Type != transport.TypeSwipeRequest {
-		t.Fatalf("message type = %q, want %q", raw.Type, transport.TypeSwipeRequest)
-	}
-
-	var req transport.SwipeRequest
-	if err := json.Unmarshal(message, &req); err != nil {
-		t.Fatalf("decode swipe request: %v", err)
-	}
-	expected := transport.SwipeRequestPayload{Serial: "remote-123", StartX: 12, StartY: 34, EndX: 56, EndY: 78}
-	if req.Payload != expected {
-		t.Fatalf("payload = %+v, want %+v", req.Payload, expected)
+	if controlConn.data[1] != scrcpy.ActionDown {
+		t.Fatalf("down action = %d, want %d", controlConn.data[1], scrcpy.ActionDown)
 	}
 }
 

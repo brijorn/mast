@@ -8,6 +8,8 @@ import (
 
 const (
 	TypeConnectionRequest   = "connection_request"
+	TypeListDevicesRequest  = "list_devices_request"
+	TypeListDevicesResponse = "list_devices_response"
 	TypeStartStreamRequest  = "start_stream_request"
 	TypeStartStreamResponse = "start_stream_response"
 	TypeStopStreamRequest   = "stop_stream_request"
@@ -55,6 +57,26 @@ type ConnectionRequestPayload struct {
 type ConnectionRequest struct {
 	RawMessage
 	Payload ConnectionRequestPayload `json:"payload"`
+}
+
+type ListDevicesRequest struct {
+	RawMessage
+}
+
+type DeviceInfoPayload struct {
+	Serial string `json:"serial"`
+	State  string `json:"state"`
+	NodeID string `json:"node_id"`
+}
+
+type ListDevicesResponsePayload struct {
+	Result []DeviceInfoPayload `json:"result,omitempty"`
+	Error  string              `json:"error,omitempty"`
+}
+
+type ListDevicesResponse struct {
+	RawMessage
+	Payload ListDevicesResponsePayload `json:"payload"`
 }
 
 type StartStreamRequestPayload struct {

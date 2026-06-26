@@ -164,41 +164,46 @@ func TestListDevicesIncludesLocalDevices(t *testing.T) {
 }
 
 func TestListDevicesIncludesAndroidEnabledPeerDevices(t *testing.T) {
+	nodeA, nodeB := createNodePair(t)
+	defer func() { _ = nodeA.Close() }()
+	defer func() { _ = nodeB.Close() }()
+
 	localADBOutput := []byte("List of devices attached\nlocal-123\tdevice\n")
 	remoteADBOutput := []byte("List of devices attached\nremote-456\tdevice\n")
-	fake := &fakeADB{
+	nodeAADB := &fakeADB{
 		outputs: map[string][]byte{
-			"":         localADBOutput,
-			"10.0.0.2": remoteADBOutput,
+			"": localADBOutput,
 		},
 	}
-	node := &Node{
-		ID: "local-node",
-		Peers: map[string]*PeerConn{
-			"remote-node": {
-				AndroidEnabled: true,
-				Addr:           "10.0.0.2",
-			},
+	nodeBADB := &fakeADB{
+		outputs: map[string][]byte{
+			"": remoteADBOutput,
 		},
-		adb: fake,
 	}
+	nodeA.adb = nodeAADB
+	nodeB.adb = nodeBADB
+	nodeB.AndroidEnabled = true
 
-	got, err := node.ListDevices()
+	connectNodePair(t, nodeA, nodeB)
+
+	got, err := nodeA.ListDevices()
 	if err != nil {
 		t.Fatalf("ListDevices returned error: %v", err)
 	}
 
 	expected := []DeviceInfo{
-		{Serial: "local-123", State: "device", NodeID: "local-node"},
-		{Serial: "remote-456", State: "device", NodeID: "remote-node"},
+		{Serial: "local-123", State: "device", NodeID: "a"},
+		{Serial: "remote-456", State: "device", NodeID: "b"},
 	}
 	if diff := cmp.Diff(expected, got); diff != "" {
 		t.Fatalf("devices mismatch (-want +got):\n%s", diff)
 	}
 
-	expectedCalls := []string{"", "10.0.0.2"}
-	if diff := cmp.Diff(expectedCalls, fake.calls); diff != "" {
-		t.Fatalf("adb calls mismatch (-want +got):\n%s", diff)
+	if diff := cmp.Diff([]string{""}, nodeAADB.calls); diff != "" {
+		t.Fatalf("node A adb calls mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff([]string{""}, nodeBADB.calls); diff != "" {
+		t.Fatalf("node B adb calls mismatch (-want +got):\n%s", diff)
 	}
 }
 

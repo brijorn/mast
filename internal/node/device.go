@@ -1,12 +1,17 @@
 package node
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os/exec"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/brijorn/mast/internal/transport"
 )
 
 type DeviceInfo struct {
@@ -14,6 +19,8 @@ type DeviceInfo struct {
 	State  string `json:"state"`
 	NodeID string `json:"node_id"`
 }
+
+const peerDeviceRPCTimeout = 10 * time.Second
 
 type adbRunner interface {
 	Devices(host string) ([]byte, error)
@@ -76,30 +83,80 @@ func commandError(name string, args []string, output []byte, err error) error {
 }
 
 func (n *Node) ListDevices() ([]DeviceInfo, error) {
-	var devices []DeviceInfo
+	devices, err := n.listLocalDevices()
+	if err != nil {
+		return nil, err
+	}
 
+	for _, peerID := range n.androidPeerIDs() {
+		peerDevices, err := n.listPeerDevices(n.ctx, peerID)
+		if err != nil {
+			return nil, err
+		}
+		devices = append(devices, peerDevices...)
+	}
+
+	return devices, nil
+}
+
+func (n *Node) listLocalDevices() ([]DeviceInfo, error) {
 	rawOutput, err := n.adb.Devices("")
 	if err != nil {
 		return nil, err
 	}
 
-	devices = parseDevicesOutput(string(rawOutput), n.ID, devices)
+	return parseDevicesOutput(string(rawOutput), n.ID, nil), nil
+}
 
+func (n *Node) androidPeerIDs() []string {
+	var peerIDs []string
+	n.mu.RLock()
+	defer n.mu.RUnlock()
 	for id, peer := range n.Peers {
 		if !peer.AndroidEnabled {
 			continue
 		}
+		peerIDs = append(peerIDs, id)
+	}
+	return peerIDs
+}
 
-		rawOutput, err := n.adb.Devices(peer.Addr)
-		if err != nil {
-			return nil, err
-		}
+func (n *Node) listPeerDevices(ctx context.Context, peerID string) ([]DeviceInfo, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, peerDeviceRPCTimeout)
+	defer cancel()
 
-		devices = parseDevicesOutput(string(rawOutput), id, devices)
-
+	response, err := n.sendPeerRPC(ctx, peerID, transport.TypeListDevicesRequest, nil)
+	if err != nil {
+		return nil, err
+	}
+	if response.messageType != transport.TypeListDevicesResponse {
+		return nil, fmt.Errorf("unexpected response type: %s", response.messageType)
 	}
 
-	return devices, nil
+	var res transport.ListDevicesResponse
+	if err := json.Unmarshal(response.data, &res); err != nil {
+		return nil, err
+	}
+	if res.Payload.Error != "" {
+		return nil, errors.New(res.Payload.Error)
+	}
+
+	return deviceInfosFromPayload(res.Payload.Result), nil
+}
+
+func (n *Node) handleListDevicesRequest(peer *PeerConn, req transport.ListDevicesRequest) {
+	devices, err := n.listLocalDevices()
+	payload := transport.ListDevicesResponsePayload{}
+	if err != nil {
+		payload.Error = err.Error()
+	} else {
+		payload.Result = deviceInfoPayloads(devices)
+	}
+
+	n.writePeerResponse(peer, transport.TypeListDevicesResponse, req.RawMessage, payload)
 }
 
 func (n *Node) DeviceBySerial(serial string) (*DeviceInfo, error) {
@@ -117,6 +174,31 @@ func (n *Node) DeviceBySerial(serial string) (*DeviceInfo, error) {
 
 	return &devices[index], nil
 }
+
+func deviceInfoPayloads(devices []DeviceInfo) []transport.DeviceInfoPayload {
+	payloads := make([]transport.DeviceInfoPayload, 0, len(devices))
+	for _, device := range devices {
+		payloads = append(payloads, transport.DeviceInfoPayload{
+			Serial: device.Serial,
+			State:  device.State,
+			NodeID: device.NodeID,
+		})
+	}
+	return payloads
+}
+
+func deviceInfosFromPayload(payloads []transport.DeviceInfoPayload) []DeviceInfo {
+	devices := make([]DeviceInfo, 0, len(payloads))
+	for _, payload := range payloads {
+		devices = append(devices, DeviceInfo{
+			Serial: payload.Serial,
+			State:  payload.State,
+			NodeID: payload.NodeID,
+		})
+	}
+	return devices
+}
+
 func parseDevicesOutput(output string, nodeID string, devices []DeviceInfo) []DeviceInfo {
 
 	lines := strings.Split(output, "\n")

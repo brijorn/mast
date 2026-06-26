@@ -11,6 +11,7 @@ import (
 const (
 	ConfigFileName   = "config.json"
 	ConfigFileDir    = ".mast"
+	ProgramsFileDir  = "programs"
 	defaultBindAddr  = ":6270"
 	defaultAPIAddr   = ":6271"
 	defaultProxyAddr = ":6272"
@@ -103,6 +104,9 @@ type Config struct {
 	ProxyAddr      string `json:"proxy_addr"`
 	APIAddr        string `json:"api_addr"`
 	AdvertiseHost  string `json:"advertise_host"`
+	ADBHost        string `json:"adb_host"`
+	ADBPort        int    `json:"adb_port"`
+	ProgramsDir    string `json:"programs_dir"`
 	AndroidEnabled bool   `json:"android_enabled"`
 	ProxyEnabled   bool   `json:"proxy_enabled"`
 }
@@ -117,6 +121,16 @@ func (c *Config) Set(key string, value string) error {
 		c.APIAddr = value
 	case "advertise_host":
 		c.AdvertiseHost = value
+	case "adb_host":
+		c.ADBHost = value
+	case "adb_port":
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return err
+		}
+		c.ADBPort = parsed
+	case "programs_dir":
+		c.ProgramsDir = value
 	case "android_enabled":
 		parsed, err := strconv.ParseBool(value)
 		if err != nil {
@@ -208,14 +222,29 @@ func DefaultConfigPath() (string, error) {
 }
 
 func DefaultConfig() Config {
+	programsDir, err := DefaultProgramsPath()
+	if err != nil {
+		programsDir = filepath.Join(ConfigFileDir, ProgramsFileDir)
+	}
 	return Config{
 		BindAddr:       defaultBindAddr,
 		ProxyAddr:      defaultProxyAddr,
 		APIAddr:        defaultAPIAddr,
 		AdvertiseHost:  "127.0.0.1",
+		ADBHost:        "127.0.0.1",
+		ADBPort:        5037,
+		ProgramsDir:    programsDir,
 		AndroidEnabled: false,
 		ProxyEnabled:   false,
 	}
+}
+
+func DefaultProgramsPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ConfigFileDir, ProgramsFileDir), nil
 }
 
 func CreateDefaultConfig(path string) (*Config, error) {

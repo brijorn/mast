@@ -99,6 +99,8 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 			},
 			Payload: transport.ConnectionRequestPayload{
 				AndroidEnabled: n.AndroidEnabled,
+				ADBHost:        n.ADBHost,
+				ADBPort:        n.ADBPort,
 				Version:        version.Version,
 				Commit:         version.Commit,
 				BuildDate:      version.Date,
@@ -178,6 +180,8 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				}
 			}
 			peer.AndroidEnabled = req.Payload.AndroidEnabled
+			peer.ADBHost = req.Payload.ADBHost
+			peer.ADBPort = req.Payload.ADBPort
 			peer.Version = req.Payload.Version
 			peer.Commit = req.Payload.Commit
 			peer.BuildDate = req.Payload.BuildDate
@@ -197,6 +201,8 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 						},
 						Payload: transport.ConnectionRequestPayload{
 							AndroidEnabled: n.AndroidEnabled,
+							ADBHost:        n.ADBHost,
+							ADBPort:        n.ADBPort,
 							Version:        version.Version,
 							Commit:         version.Commit,
 							BuildDate:      version.Date,

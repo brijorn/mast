@@ -64,9 +64,10 @@ type ListDevicesRequest struct {
 }
 
 type DeviceInfoPayload struct {
-	Serial string `json:"serial"`
-	State  string `json:"state"`
-	NodeID string `json:"node_id"`
+	Serial         string `json:"serial"`
+	State          string `json:"state"`
+	NodeID         string `json:"node_id"`
+	BatteryPercent *int   `json:"battery_percent,omitempty"`
 }
 
 type ListDevicesResponsePayload struct {

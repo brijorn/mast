@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os/exec"
 	"slices"
 	"strconv"
@@ -15,9 +16,10 @@ import (
 )
 
 type DeviceInfo struct {
-	Serial string `json:"serial"`
-	State  string `json:"state"`
-	NodeID string `json:"node_id"`
+	Serial         string `json:"serial"`
+	State          string `json:"state"`
+	BatteryPercent *int   `json:"battery_percent,omitempty"`
+	NodeID         string `json:"node_id"`
 }
 
 const peerDeviceRPCTimeout = 10 * time.Second
@@ -27,6 +29,7 @@ type adbRunner interface {
 	Push(host string, localPath string, remotePath string) error
 	Reverse(host string, deviceSocket string, localPort int) error
 	StartShell(host string, arg ...string) (*exec.Cmd, error)
+	Shell(host string, serial string, arg ...string) ([]byte, error)
 }
 
 type realADB struct{}
@@ -65,6 +68,16 @@ func (a realADB) StartShell(host string, arg ...string) (*exec.Cmd, error) {
 	return cmd, nil
 }
 
+func (a realADB) Shell(host string, serial string, arg ...string) ([]byte, error) {
+	var args []string
+	if serial != "" {
+		args = append(args, "-s", serial)
+	}
+	args = append(args, "shell")
+	args = append(args, arg...)
+	return a.run(host, args...)
+}
+
 func adbArgs(host string, arg ...string) []string {
 	var args []string
 	if host != "" {
@@ -99,13 +112,65 @@ func (n *Node) ListDevices() ([]DeviceInfo, error) {
 	return devices, nil
 }
 
-func (n *Node) listLocalDevices() ([]DeviceInfo, error) {
+func parseBatteryLevel(output string) (*int, error) {
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		line := strings.TrimSpace(line)
+		if strings.HasPrefix(line, "level:") {
+			parts := strings.SplitN(line, " ", 2)
+			if len(parts) != 2 {
+				return nil, nil
+			}
+
+			level, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+			if err != nil {
+				return nil, nil
+			}
+			return &level, nil
+
+		}
+	}
+
+	return nil, nil
+}
+
+func (n *Node) deviceBattery(serial string) (*int, error) {
+	output, err := n.adb.Shell("", serial, "dumpsys", "battery")
+	if err != nil {
+		return nil, err
+	}
+
+	return parseBatteryLevel(string(output))
+}
+
+func (n *Node) listLocalDeviceStates() ([]DeviceInfo, error) {
 	rawOutput, err := n.adb.Devices("")
 	if err != nil {
 		return nil, err
 	}
 
 	return parseDevicesOutput(string(rawOutput), n.ID, nil), nil
+}
+
+func (n *Node) listLocalDevices() ([]DeviceInfo, error) {
+	devices, err := n.listLocalDeviceStates()
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range devices {
+		if devices[i].State != "device" {
+			continue
+		}
+
+		battery, err := n.deviceBattery(devices[i].Serial)
+		if err != nil {
+			log.Printf("get battery for %s: %v", devices[i].Serial, err)
+			continue
+		}
+		devices[i].BatteryPercent = battery
+	}
+
+	return devices, nil
 }
 
 func (n *Node) androidPeerIDs() []string {
@@ -176,7 +241,7 @@ func (n *Node) DeviceBySerial(serial string) (*DeviceInfo, error) {
 }
 
 func (n *Node) localDeviceBySerial(serial string) (*DeviceInfo, error) {
-	devices, err := n.listLocalDevices()
+	devices, err := n.listLocalDeviceStates()
 	if err != nil {
 		return nil, err
 	}
@@ -195,9 +260,10 @@ func deviceInfoPayloads(devices []DeviceInfo) []transport.DeviceInfoPayload {
 	payloads := make([]transport.DeviceInfoPayload, 0, len(devices))
 	for _, device := range devices {
 		payloads = append(payloads, transport.DeviceInfoPayload{
-			Serial: device.Serial,
-			State:  device.State,
-			NodeID: device.NodeID,
+			Serial:         device.Serial,
+			State:          device.State,
+			NodeID:         device.NodeID,
+			BatteryPercent: device.BatteryPercent,
 		})
 	}
 	return payloads
@@ -207,9 +273,10 @@ func deviceInfosFromPayload(payloads []transport.DeviceInfoPayload) []DeviceInfo
 	devices := make([]DeviceInfo, 0, len(payloads))
 	for _, payload := range payloads {
 		devices = append(devices, DeviceInfo{
-			Serial: payload.Serial,
-			State:  payload.State,
-			NodeID: payload.NodeID,
+			Serial:         payload.Serial,
+			State:          payload.State,
+			NodeID:         payload.NodeID,
+			BatteryPercent: payload.BatteryPercent,
 		})
 	}
 	return devices
@@ -227,8 +294,8 @@ func parseDevicesOutput(output string, nodeID string, devices []DeviceInfo) []De
 			continue
 		}
 		devices = append(devices, DeviceInfo{
-			Serial: parts[0],
-			State:  parts[1],
+			Serial: strings.TrimSpace(parts[0]),
+			State:  strings.TrimSpace(parts[1]),
 			NodeID: nodeID,
 		})
 	}

@@ -27,17 +27,21 @@ type reverseCall struct {
 }
 
 type shellCall struct {
-	Host string
-	Args []string
+	Host   string
+	Serial string
+	Args   []string
 }
 
 type fakeADB struct {
-	outputs      map[string][]byte
-	errors       map[string]error
-	calls        []string
-	pushCalls    []pushCall
-	reverseCalls []reverseCall
-	shellCalls   []shellCall
+	outputs          map[string][]byte
+	errors           map[string]error
+	shellOutputs     map[string][]byte
+	shellErrors      map[string]error
+	calls            []string
+	pushCalls        []pushCall
+	reverseCalls     []reverseCall
+	shellCalls       []shellCall
+	shellOutputCalls []shellCall
 }
 
 func (a *fakeADB) Devices(host string) ([]byte, error) {
@@ -76,6 +80,18 @@ func (a *fakeADB) StartShell(host string, arg ...string) (*exec.Cmd, error) {
 		go writeFakeScrcpyVideoMetadata(port)
 	}
 	return nil, nil
+}
+
+func (a *fakeADB) Shell(host string, serial string, arg ...string) ([]byte, error) {
+	a.shellOutputCalls = append(a.shellOutputCalls, shellCall{
+		Host:   host,
+		Serial: serial,
+		Args:   append([]string(nil), arg...),
+	})
+	if err := a.shellErrors[serial]; err != nil {
+		return nil, err
+	}
+	return a.shellOutputs[serial], nil
 }
 
 func writeFakeScrcpyVideoMetadata(port int) {
@@ -132,6 +148,32 @@ func TestParseDevicesOutput(t *testing.T) {
 	}
 }
 
+func TestParseBatteryLevel(t *testing.T) {
+	got, err := parseBatteryLevel("AC powered: false\n  level: 87\nscale: 100\n")
+	if err != nil {
+		t.Fatalf("parseBatteryLevel returned error: %v", err)
+	}
+	if got == nil || *got != 87 {
+		t.Fatalf("battery level = %v, want 87", got)
+	}
+}
+
+func TestParseBatteryLevelReturnsNilForUnknownOutput(t *testing.T) {
+	for _, output := range []string{
+		"AC powered: false\nscale: 100\n",
+		"level: unknown\n",
+		"level:\n",
+	} {
+		got, err := parseBatteryLevel(output)
+		if err != nil {
+			t.Fatalf("parseBatteryLevel(%q) returned error: %v", output, err)
+		}
+		if got != nil {
+			t.Fatalf("parseBatteryLevel(%q) = %d, want nil", output, *got)
+		}
+	}
+}
+
 func TestListDevicesIncludesLocalDevices(t *testing.T) {
 	localADBOutput := []byte("List of devices attached\nlocal-123\tdevice\n")
 	fake := &fakeADB{
@@ -163,6 +205,73 @@ func TestListDevicesIncludesLocalDevices(t *testing.T) {
 	}
 }
 
+func TestListDevicesIncludesLocalBattery(t *testing.T) {
+	localADBOutput := []byte("List of devices attached\nlocal-123\tdevice\n")
+	battery := 64
+	fake := &fakeADB{
+		outputs: map[string][]byte{
+			"": localADBOutput,
+		},
+		shellOutputs: map[string][]byte{
+			"local-123": []byte("Current Battery Service state:\n  level: 64\n"),
+		},
+	}
+	node := &Node{
+		ID:    "local-node",
+		Peers: map[string]*PeerConn{},
+		adb:   fake,
+	}
+
+	got, err := node.ListDevices()
+	if err != nil {
+		t.Fatalf("ListDevices returned error: %v", err)
+	}
+
+	expected := []DeviceInfo{
+		{Serial: "local-123", State: "device", BatteryPercent: &battery, NodeID: "local-node"},
+	}
+	if diff := cmp.Diff(expected, got); diff != "" {
+		t.Fatalf("devices mismatch (-want +got):\n%s", diff)
+	}
+
+	expectedShellCalls := []shellCall{
+		{Host: "", Serial: "local-123", Args: []string{"dumpsys", "battery"}},
+	}
+	if diff := cmp.Diff(expectedShellCalls, fake.shellOutputCalls); diff != "" {
+		t.Fatalf("shell calls mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestListDevicesKeepsDeviceWhenBatteryFails(t *testing.T) {
+	expectedErr := errors.New("battery failed")
+	localADBOutput := []byte("List of devices attached\nlocal-123\tdevice\n")
+	fake := &fakeADB{
+		outputs: map[string][]byte{
+			"": localADBOutput,
+		},
+		shellErrors: map[string]error{
+			"local-123": expectedErr,
+		},
+	}
+	node := &Node{
+		ID:    "local-node",
+		Peers: map[string]*PeerConn{},
+		adb:   fake,
+	}
+
+	got, err := node.ListDevices()
+	if err != nil {
+		t.Fatalf("ListDevices returned error: %v", err)
+	}
+
+	expected := []DeviceInfo{
+		{Serial: "local-123", State: "device", NodeID: "local-node"},
+	}
+	if diff := cmp.Diff(expected, got); diff != "" {
+		t.Fatalf("devices mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestListDevicesIncludesAndroidEnabledPeerDevices(t *testing.T) {
 	nodeA, nodeB := createNodePair(t)
 	defer func() { _ = nodeA.Close() }()
@@ -170,6 +279,7 @@ func TestListDevicesIncludesAndroidEnabledPeerDevices(t *testing.T) {
 
 	localADBOutput := []byte("List of devices attached\nlocal-123\tdevice\n")
 	remoteADBOutput := []byte("List of devices attached\nremote-456\tdevice\n")
+	remoteBattery := 42
 	nodeAADB := &fakeADB{
 		outputs: map[string][]byte{
 			"": localADBOutput,
@@ -178,6 +288,9 @@ func TestListDevicesIncludesAndroidEnabledPeerDevices(t *testing.T) {
 	nodeBADB := &fakeADB{
 		outputs: map[string][]byte{
 			"": remoteADBOutput,
+		},
+		shellOutputs: map[string][]byte{
+			"remote-456": []byte("level: 42\n"),
 		},
 	}
 	nodeA.adb = nodeAADB
@@ -193,7 +306,7 @@ func TestListDevicesIncludesAndroidEnabledPeerDevices(t *testing.T) {
 
 	expected := []DeviceInfo{
 		{Serial: "local-123", State: "device", NodeID: "a"},
-		{Serial: "remote-456", State: "device", NodeID: "b"},
+		{Serial: "remote-456", State: "device", BatteryPercent: &remoteBattery, NodeID: "b"},
 	}
 	if diff := cmp.Diff(expected, got); diff != "" {
 		t.Fatalf("devices mismatch (-want +got):\n%s", diff)

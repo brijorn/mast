@@ -6,6 +6,7 @@ import (
 	"net"
 	"os/exec"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/brijorn/mast/internal/scrcpy"
@@ -95,6 +96,26 @@ func writeFakeScrcpyVideoMetadata(port int) {
 
 	_, _ = conn.Write(deviceName)
 	_, _ = conn.Write(streamMeta)
+}
+
+func TestCommandErrorIncludesCommandAndOutput(t *testing.T) {
+	err := commandError(
+		"adb",
+		[]string{"reverse", "localabstract:scrcpy", "tcp:55605"},
+		[]byte("more than one device/emulator\n"),
+		errors.New("exit status 1"),
+	)
+
+	got := err.Error()
+	for _, want := range []string{
+		"adb reverse localabstract:scrcpy tcp:55605",
+		"exit status 1",
+		"more than one device/emulator",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("error = %q, want it to contain %q", got, want)
+		}
+	}
 }
 
 func TestParseDevicesOutput(t *testing.T) {

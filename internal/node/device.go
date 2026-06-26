@@ -2,6 +2,7 @@ package node
 
 import (
 	"errors"
+	"fmt"
 	"os/exec"
 	"slices"
 	"strconv"
@@ -24,13 +25,12 @@ type adbRunner interface {
 type realADB struct{}
 
 func (a realADB) run(host string, arg ...string) ([]byte, error) {
-	var args []string
-
-	if host != "" {
-		args = append(args, "-H", host, "-P", "5037")
+	args := adbArgs(host, arg...)
+	output, err := exec.Command("adb", args...).CombinedOutput()
+	if err != nil {
+		return output, commandError("adb", args, output, err)
 	}
-	args = append(args, arg...)
-	return exec.Command("adb", args...).Output()
+	return output, nil
 }
 
 func (a realADB) Devices(host string) ([]byte, error) {
@@ -48,12 +48,7 @@ func (a realADB) Reverse(host string, deviceSocket string, localPort int) error 
 }
 
 func (a realADB) StartShell(host string, arg ...string) (*exec.Cmd, error) {
-	var args []string
-
-	if host != "" {
-		args = append(args, "-H", host, "-P", "5037")
-	}
-
+	args := adbArgs(host)
 	args = append(args, "shell")
 	args = append(args, arg...)
 	cmd := exec.Command("adb", args...)
@@ -62,6 +57,24 @@ func (a realADB) StartShell(host string, arg ...string) (*exec.Cmd, error) {
 	}
 	return cmd, nil
 }
+
+func adbArgs(host string, arg ...string) []string {
+	var args []string
+	if host != "" {
+		args = append(args, "-H", host, "-P", "5037")
+	}
+	return append(args, arg...)
+}
+
+func commandError(name string, args []string, output []byte, err error) error {
+	command := strings.TrimSpace(name + " " + strings.Join(args, " "))
+	detail := strings.TrimSpace(string(output))
+	if detail == "" {
+		return fmt.Errorf("%s: %w", command, err)
+	}
+	return fmt.Errorf("%s: %w: %s", command, err, detail)
+}
+
 func (n *Node) ListDevices() ([]DeviceInfo, error) {
 	var devices []DeviceInfo
 

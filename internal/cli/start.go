@@ -9,6 +9,7 @@ import (
 
 	"github.com/brijorn/mast/internal/api"
 	"github.com/brijorn/mast/internal/node"
+	"github.com/brijorn/mast/internal/program"
 	"github.com/brijorn/mast/internal/proxy"
 )
 
@@ -39,6 +40,12 @@ func (s *StartCmd) Run() error {
 	if err != nil {
 		return err
 	}
+	if cfg.ADBHost != "" {
+		mastNode.ADBHost = cfg.ADBHost
+	}
+	if cfg.ADBPort > 0 {
+		mastNode.ADBPort = cfg.ADBPort
+	}
 
 	if cfg.ProxyEnabled {
 		proxyServer := proxy.NewServer(cfg.ProxyAddr)
@@ -48,7 +55,18 @@ func (s *StartCmd) Run() error {
 			}
 		}()
 	}
-	apiServer := api.NewServer(mastNode)
+	programsDir := cfg.ProgramsDir
+	if programsDir == "" {
+		programsDir, err = DefaultProgramsPath()
+		if err != nil {
+			return err
+		}
+	}
+	programStore, err := program.NewStore(programsDir, mastNode)
+	if err != nil {
+		return err
+	}
+	apiServer := api.NewServer(mastNode, programStore)
 
 	go func() {
 		if err := apiServer.Listen(cfg.APIAddr); err != nil && !errors.Is(err, http.ErrServerClosed) {

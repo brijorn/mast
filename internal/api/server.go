@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/brijorn/mast/internal/node"
+	"github.com/brijorn/mast/internal/program"
 	streamcfg "github.com/brijorn/mast/internal/stream"
 	"github.com/brijorn/mast/internal/update"
 )
@@ -30,12 +31,27 @@ type restartBackend interface {
 
 type Server struct {
 	node          nodeBackend
+	programs      programBackend
 	updateChecker update.UpdateChecker
 }
 
-func NewServer(n nodeBackend) *Server {
+type programBackend interface {
+	Register(opts program.RegisterOptions) (*program.Program, error)
+	ListPrograms() []program.Program
+	Start(opts program.StartOptions) ([]program.Run, error)
+	ListRuns() []program.Run
+	Stop(id string) (*program.Run, error)
+	Logs(id string) (string, string, error)
+}
+
+func NewServer(n nodeBackend, programs ...programBackend) *Server {
+	var programStore programBackend
+	if len(programs) > 0 {
+		programStore = programs[0]
+	}
 	return &Server{
 		node:          n,
+		programs:      programStore,
 		updateChecker: &update.Checker{},
 	}
 }
@@ -55,10 +71,17 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/streams", s.StartStream)
 	mux.HandleFunc("GET /api/streams/video", s.StreamVideo)
 
+	mux.HandleFunc("GET /api/programs", s.ListPrograms)
+	mux.HandleFunc("POST /api/programs", s.RegisterProgram)
+	mux.HandleFunc("GET /api/runs", s.ListRuns)
+	mux.HandleFunc("POST /api/runs", s.StartRuns)
+	mux.HandleFunc("POST /api/runs/{id}/stop", s.StopRun)
+	mux.HandleFunc("GET /api/runs/{id}/logs", s.RunLogs)
+
 	mux.HandleFunc("POST /api/control/touch", s.Touch)
 	mux.HandleFunc("POST /api/control/tap", s.Tap)
 	mux.HandleFunc("POST /api/control/swipe", s.Swipe)
-	mux.HandleFunc("/api/control/keypress", s.PressKey)
+	mux.HandleFunc("POST /api/control/keypress", s.PressKey)
 	return mux
 }
 

@@ -101,7 +101,8 @@ When started, the node ID is the host name returned by the operating system.
 
 ## peer add
 
-Asks the running local Mast node to connect to another Mast peer.
+Saves a peer in the peer store and asks the running local Mast node to connect
+to it.
 
 ```sh
 mast peer add 100.64.0.20
@@ -117,6 +118,17 @@ Use `--api` if the local Mast API is not listening at the configured
 
 ```sh
 mast peer add 100.64.0.20 --api http://127.0.0.1:6271
+```
+
+Saved peers are written to `peers.json` beside `config.json` and reconnected
+when `mast start` runs.
+
+## peer ls
+
+Lists peers saved in `peers.json`.
+
+```sh
+mast peer ls
 ```
 
 ## version

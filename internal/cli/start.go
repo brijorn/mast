@@ -56,5 +56,16 @@ func (s *StartCmd) Run() error {
 		}
 	}()
 
+	peerStore, err := LoadPeerStore(s.ConfigPath)
+	if err != nil {
+		log.Println("load saved peers:", err)
+	} else {
+		for _, peerURL := range peerStore.Peers {
+			if err := mastNode.Connect(peerURL); err != nil {
+				log.Println("connect saved peer:", err)
+			}
+		}
+	}
+
 	return mastNode.Listen()
 }

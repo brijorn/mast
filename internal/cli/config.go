@@ -129,7 +129,6 @@ func (c *Config) Set(key string, value string) error {
 			return err
 		}
 		c.ProxyEnabled = parsed
-
 	default:
 		return fmt.Errorf("invalid config key: %s", key)
 	}

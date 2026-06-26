@@ -15,6 +15,7 @@ import (
 
 type PeerCmd struct {
 	Add PeerAddCmd `cmd:"" help:"Connect the running Mast node to a peer"`
+	Ls  PeerLsCmd  `cmd:"" help:"List saved peers"`
 }
 
 type PeerAddCmd struct {
@@ -23,9 +24,22 @@ type PeerAddCmd struct {
 	Target     string `arg:"" help:"Peer host, host:port, or websocket URL"`
 }
 
+type PeerLsCmd struct {
+	ConfigPath string `name:"config" short:"c" type:"path" help:"Path to config file"`
+}
+
 func (p *PeerAddCmd) Run() error {
 	target, err := peer.NormalizeTarget(p.Target)
 	if err != nil {
+		return err
+	}
+
+	store, err := LoadPeerStore(p.ConfigPath)
+	if err != nil {
+		return err
+	}
+	added := addSavedPeer(store, target)
+	if err := SavePeerStore(p.ConfigPath, store); err != nil {
 		return err
 	}
 
@@ -52,8 +66,26 @@ func (p *PeerAddCmd) Run() error {
 		return fmt.Errorf("add peer: %s: %s", res.Status, strings.TrimSpace(string(msg)))
 	}
 
+	if !added {
+		_, err = fmt.Fprintf(os.Stdout, "peer already saved %s\n", target)
+		return err
+	}
 	_, err = fmt.Fprintf(os.Stdout, "connected peer %s\n", target)
 	return err
+}
+
+func (p *PeerLsCmd) Run() error {
+	store, err := LoadPeerStore(p.ConfigPath)
+	if err != nil {
+		return err
+	}
+
+	for _, savedPeer := range store.Peers {
+		if _, err := fmt.Fprintln(os.Stdout, savedPeer); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func apiBaseURL(configPath string, apiAddr string) (string, error) {

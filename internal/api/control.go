@@ -3,6 +3,8 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+
+	"github.com/brijorn/mast/internal/scrcpy"
 )
 
 type tapRequest struct {
@@ -24,6 +26,11 @@ type swipeRequest struct {
 	StartY int    `json:"start_y"`
 	EndX   int    `json:"end_x"`
 	EndY   int    `json:"end_y"`
+}
+
+type PressKeyRequest struct {
+	Serial  string `json:"serial"`
+	Keycode uint32 `json:"keycode"`
 }
 
 func (s *Server) Touch(w http.ResponseWriter, r *http.Request) {
@@ -102,6 +109,36 @@ func (s *Server) Swipe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.node.Swipe(req.Serial, req.StartX, req.StartY, req.EndX, req.EndY); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) PressKey(w http.ResponseWriter, r *http.Request) {
+	var req PressKeyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.Serial == "" {
+		http.Error(w, "serial required", http.StatusBadRequest)
+		return
+	}
+
+	if req.Keycode == 0 {
+		http.Error(w, "keycode required", http.StatusBadRequest)
+		return
+	}
+
+	if scrcpy.ValidKeycodes[int(req.Keycode)] {
+		http.Error(w, "invalid keycode", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.node.PressKey(req.Serial, req.Keycode); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

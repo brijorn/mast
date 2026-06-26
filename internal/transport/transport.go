@@ -16,6 +16,7 @@ const (
 	TypeTouchRequest        = "touch_request"
 	TypeTapRequest          = "tap_request"
 	TypeSwipeRequest        = "swipe_request"
+	TypePressKeyRequest     = "press_key_request"
 	TypeUpdateCheckRequest  = "update_check_request"
 	TypeUpdateCheckResponse = "update_check_response"
 	TypeUpdateApplyRequest  = "update_apply_request"
@@ -149,6 +150,16 @@ type SwipeRequestPayload struct {
 	StartY int    `json:"start_y"`
 	EndX   int    `json:"end_x"`
 	EndY   int    `json:"end_y"`
+}
+
+type PressKeyRequest struct {
+	RawMessage
+	Payload PressKeyRequestPayload `json:"payload"`
+}
+
+type PressKeyRequestPayload struct {
+	Serial  string `json:"serial"`
+	Keycode uint32 `json:"keycode"`
 }
 
 type UpdateCheckRequest struct {

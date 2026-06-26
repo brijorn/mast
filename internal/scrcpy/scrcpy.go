@@ -7,13 +7,30 @@ import (
 	"time"
 )
 
+// Message types
 const (
-	ActionDown       = 0
-	ActionUp         = 1
-	ActionMove       = 2
 	InjectTouchEvent = 2
-	DefaultPressure  = 0xffff
+	InjectKeycode    = 0
 )
+const (
+	ActionDown      = 0
+	ActionUp        = 1
+	ActionMove      = 2
+	DefaultPressure = 0xffff
+)
+
+// Android keycodes for navigation
+const (
+	KeycodeBack      = 4
+	KeycodeHome      = 3
+	KeycodeAppSwitch = 187
+)
+
+var ValidKeycodes = map[int]bool{
+	KeycodeBack:      true,
+	KeycodeHome:      true,
+	KeycodeAppSwitch: true,
+}
 
 const (
 	DefaultSwipeDuration = 250 * time.Millisecond
@@ -104,4 +121,24 @@ func writeTouch(w io.Writer, action byte, x, y, width, height int, pressure uint
 	binary.BigEndian.PutUint32(buf[28:32], 0) // buttons
 
 	return writeFull(w, buf)
+}
+
+func writeKeycode(w io.Writer, action byte, keycode uint32) error {
+	buf := make([]byte, 14)
+
+	buf[0] = InjectKeycode
+	buf[1] = action
+	binary.BigEndian.PutUint32(buf[2:6], keycode)
+	binary.BigEndian.PutUint32(buf[6:10], 0)  // repeat
+	binary.BigEndian.PutUint32(buf[10:14], 0) // meta state
+
+	return writeFull(w, buf)
+
+}
+
+func PressKey(w io.Writer, keycode uint32) error {
+	if err := writeKeycode(w, ActionDown, keycode); err != nil {
+		return err
+	}
+	return writeKeycode(w, ActionUp, keycode)
 }

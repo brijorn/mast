@@ -301,6 +301,17 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				log.Println("swipe:", err)
 				break
 			}
+		case transport.TypePressKeyRequest:
+			var req transport.PressKeyRequest
+			if err := json.Unmarshal(message, &req); err != nil {
+				log.Println("decode press key request:", err)
+				break
+			}
+
+			if err := n.pressKeyLocal(req.Payload.Serial, req.Payload.Keycode); err != nil {
+				log.Println("press key:", err)
+				break
+			}
 		case transport.TypeUpdateCheckRequest:
 			var req transport.UpdateCheckRequest
 			if err := json.Unmarshal(message, &req); err != nil {

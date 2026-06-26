@@ -21,6 +21,7 @@ type nodeBackend interface {
 	Touch(serial string, action string, x, y int) error
 	Tap(serial string, x, y int) error
 	Swipe(serial string, startX, startY, endX, endY int) error
+	PressKey(serial string, keycode uint32) error
 }
 
 type restartBackend interface {
@@ -57,6 +58,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/control/touch", s.Touch)
 	mux.HandleFunc("POST /api/control/tap", s.Tap)
 	mux.HandleFunc("POST /api/control/swipe", s.Swipe)
+	mux.HandleFunc("/api/control/keypress", s.PressKey)
 	return mux
 }
 

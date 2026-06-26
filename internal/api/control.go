@@ -133,7 +133,7 @@ func (s *Server) PressKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if scrcpy.ValidKeycodes[int(req.Keycode)] {
+	if !scrcpy.ValidKeycodes[int(req.Keycode)] {
 		http.Error(w, "invalid keycode", http.StatusBadRequest)
 		return
 	}

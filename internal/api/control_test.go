@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/brijorn/mast/internal/scrcpy"
 )
 
 func TestTapCallsBackend(t *testing.T) {
@@ -62,6 +64,38 @@ func TestSwipeCallsBackend(t *testing.T) {
 	}
 }
 
+func TestPressKeyCallsBackend(t *testing.T) {
+	backend := &controlBackend{}
+	server := NewServer(backend)
+
+	body := []byte(`{"serial":"local-123","keycode":4}`)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/control/keypress", bytes.NewReader(body))
+
+	server.PressKey(res, req)
+
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusNoContent, res.Body.String())
+	}
+	if backend.keySerial != "local-123" || backend.keycode != scrcpy.KeycodeBack {
+		t.Fatalf("press key call = serial %q keycode %d", backend.keySerial, backend.keycode)
+	}
+}
+
+func TestPressKeyRejectsInvalidKeycode(t *testing.T) {
+	server := NewServer(&controlBackend{})
+
+	body := []byte(`{"serial":"local-123","keycode":999}`)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/control/keypress", bytes.NewReader(body))
+
+	server.PressKey(res, req)
+
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", res.Code, http.StatusBadRequest)
+	}
+}
+
 func TestTapRejectsInvalidRequest(t *testing.T) {
 	server := NewServer(&controlBackend{})
 
@@ -107,6 +141,9 @@ type controlBackend struct {
 	endX        int
 	endY        int
 
+	keySerial string
+	keycode   uint32
+
 	err error
 }
 
@@ -131,5 +168,11 @@ func (b *controlBackend) Swipe(serial string, startX, startY, endX, endY int) er
 	b.startY = startY
 	b.endX = endX
 	b.endY = endY
+	return b.err
+}
+
+func (b *controlBackend) PressKey(serial string, keycode uint32) error {
+	b.keySerial = serial
+	b.keycode = keycode
 	return b.err
 }

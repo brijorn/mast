@@ -81,6 +81,10 @@ func (f *fakeBackend) Swipe(_ string, _, _, _, _ int) error {
 	return nil
 }
 
+func (f *fakeBackend) PressKey(_ string, _ uint32) error {
+	return nil
+}
+
 func (f *fakeBackend) callCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

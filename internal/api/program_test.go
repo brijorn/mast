@@ -21,7 +21,6 @@ func (f *fakeProgramBackend) Register(opts program.RegisterOptions) (*program.Pr
 	return &program.Program{
 		ID:        "sha256-test",
 		Name:      opts.Name,
-		Platform:  opts.Platform,
 		Entry:     opts.Entry,
 		CreatedAt: time.Now().UTC(),
 	}, nil
@@ -44,7 +43,6 @@ func (f *fakeProgramBackend) RegisterUpload(opts program.RegisterUploadOptions) 
 	return &program.Program{
 		ID:       "sha256-upload",
 		Name:     opts.Name,
-		Platform: opts.Platform,
 		Entry:    opts.Entry,
 	}, nil
 }

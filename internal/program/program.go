@@ -42,7 +42,6 @@ type Program struct {
 	ID        string     `json:"id"`
 	Slug      string     `json:"slug,omitempty"`
 	Name      string     `json:"name"`
-	Platform  string     `json:"platform"`
 	Entry     Entry      `json:"entry"`
 	INIValues []INIValue `json:"ini_values,omitempty"`
 	CreatedAt time.Time  `json:"created_at"`
@@ -71,7 +70,6 @@ type Run struct {
 type RegisterOptions struct {
 	Path      string     `json:"path"`
 	Name      string     `json:"name,omitempty"`
-	Platform  string     `json:"platform,omitempty"`
 	Entry     Entry      `json:"entry"`
 	INIValues []INIValue `json:"ini_values,omitempty"`
 }
@@ -86,7 +84,6 @@ type UploadFile struct {
 // RegisterUploadOptions describes a program bundle uploaded as individual files.
 type RegisterUploadOptions struct {
 	Name      string
-	Platform  string
 	Entry     Entry
 	INIValues []INIValue
 	Files     []UploadFile
@@ -180,17 +177,12 @@ func (s *Store) Register(opts RegisterOptions) (*Program, error) {
 	if name == "" {
 		name = filepath.Base(opts.Path)
 	}
-	platform := opts.Platform
-	if platform == "" {
-		platform = inferPlatform(opts.Entry.Command)
-	}
 	slug := toSlug(name)
 
 	program := Program{
 		ID:        id,
 		Slug:      slug,
 		Name:      name,
-		Platform:  platform,
 		Entry:     opts.Entry,
 		INIValues: opts.INIValues,
 		CreatedAt: time.Now().UTC(),
@@ -289,16 +281,10 @@ func (s *Store) RegisterUpload(opts RegisterUploadOptions) (*Program, error) {
 		name = "unnamed"
 	}
 	slug := toSlug(name)
-	platform := opts.Platform
-	if platform == "" {
-		platform = inferPlatform(opts.Entry.Command)
-	}
-
 	program := Program{
 		ID:        id,
 		Slug:      slug,
 		Name:      name,
-		Platform:  platform,
 		Entry:     opts.Entry,
 		INIValues: opts.INIValues,
 		CreatedAt: time.Now().UTC(),
@@ -388,9 +374,7 @@ func (s *Store) Start(opts StartOptions) ([]Run, error) {
 	if !ok {
 		return nil, errors.New("program not found")
 	}
-	if err := s.checkPlatform(p.Platform, p.Entry.Command); err != nil {
-		return nil, err
-	}
+
 
 	devices, err := s.devices.ListDevices()
 	if err != nil {
@@ -533,7 +517,7 @@ func (s *Store) startOne(p Program, device node.DeviceInfo, nodes []node.NodeInf
 	if localCommand := filepath.Join(workspace, command); fileExists(localCommand) {
 		command = localCommand
 	}
-	command, args = s.runnerCommand(p.Platform, command, args)
+	command, args = s.runnerCommand(command, args)
 	cmd := s.startCmd(command, args...)
 	cmd.Dir = workspace
 	cmd.Stdout = stdout
@@ -737,73 +721,22 @@ func fileExists(path string) bool {
 	return err == nil && !info.IsDir()
 }
 
-func inferPlatform(command string) string {
-	if strings.EqualFold(filepath.Ext(command), ".exe") {
-		return "windows"
-	}
-	return runtime.GOOS
-}
-
 func (s *Store) SetRunners(runners map[string]string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.runners = runners
 }
 
-func (s *Store) checkPlatform(platform string, command string) error {
-	if platform == "" || platform == "any" || platform == runtime.GOOS {
-		return nil
-	}
-
+func (s *Store) runnerCommand(command string, args []string) (string, []string) {
 	s.mu.Lock()
 	runners := s.runners
 	s.mu.Unlock()
 
 	var runner string
 	if runners != nil {
-		if r, ok := runners[platform]; ok && r != "" {
+		ext := filepath.Ext(command)
+		if r, ok := runners[ext]; ok && r != "" {
 			runner = r
-		} else {
-			ext := filepath.Ext(command)
-			if r, ok := runners[ext]; ok && r != "" {
-				runner = r
-			}
-		}
-	}
-
-	if runner != "" {
-		parts := strings.Fields(runner)
-		if len(parts) > 0 {
-			if _, err := exec.LookPath(parts[0]); err == nil {
-				return nil
-			}
-			return fmt.Errorf("program platform %q requires runner %q (command %q) on %s", platform, runner, parts[0], runtime.GOOS)
-		}
-	}
-
-	if platform == "windows" && runtime.GOOS == "linux" {
-		if _, err := exec.LookPath("winerun"); err == nil {
-			return nil
-		}
-		return errors.New("program platform \"windows\" requires winerun on linux")
-	}
-	return fmt.Errorf("program platform %q cannot run on %s", platform, runtime.GOOS)
-}
-
-func (s *Store) runnerCommand(platform string, command string, args []string) (string, []string) {
-	s.mu.Lock()
-	runners := s.runners
-	s.mu.Unlock()
-
-	var runner string
-	if runners != nil {
-		if r, ok := runners[platform]; ok && r != "" {
-			runner = r
-		} else {
-			ext := filepath.Ext(command)
-			if r, ok := runners[ext]; ok && r != "" {
-				runner = r
-			}
 		}
 	}
 
@@ -814,7 +747,7 @@ func (s *Store) runnerCommand(platform string, command string, args []string) (s
 		}
 	}
 
-	if platform == "windows" && runtime.GOOS == "linux" {
+	if filepath.Ext(command) == ".exe" && runtime.GOOS == "linux" {
 		return "winerun", append([]string{command}, args...)
 	}
 	return command, args

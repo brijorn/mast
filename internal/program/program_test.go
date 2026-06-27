@@ -72,10 +72,9 @@ printf 'ADB_PORT=%s\n' "$ANDROID_ADB_SERVER_PORT"
 	}
 
 	registered, err := store.Register(RegisterOptions{
-		Path:     source,
-		Name:     "test runner",
-		Platform: runtime.GOOS,
-		Entry:    Entry{Command: "/bin/sh", Args: []string{"run.sh"}},
+		Path:  source,
+		Name:  "test runner",
+		Entry: Entry{Command: "/bin/sh", Args: []string{"run.sh"}},
 		INIValues: []INIValue{
 			{Section: "Settings", Key: "DEVICE_ID", Value: "{{phone.serial}}"},
 			{Section: "Settings", Key: "RESOLUTION", Value: "{{resolution}}"},
@@ -142,13 +141,13 @@ func waitForRun(t *testing.T, store *Store, id string) {
 func TestCustomRunners(t *testing.T) {
 	s := &Store{
 		runners: map[string]string{
-			"windows": "wine",
-			".py":     "python3 -u",
+			".exe": "wine",
+			".py":  "python3 -u",
 		},
 	}
 
-	// 1. Match by platform
-	cmd, args := s.runnerCommand("windows", "test.exe", []string{"arg1", "arg2"})
+	// 1. Match by .exe extension
+	cmd, args := s.runnerCommand("test.exe", []string{"arg1", "arg2"})
 	if cmd != "wine" {
 		t.Errorf("expected cmd to be 'wine', got %q", cmd)
 	}
@@ -157,8 +156,8 @@ func TestCustomRunners(t *testing.T) {
 		t.Errorf("expected args to be %v, got %v", expectedArgs, args)
 	}
 
-	// 2. Match by file extension
-	cmd, args = s.runnerCommand("linux", "test.py", []string{"arg1"})
+	// 2. Match by .py file extension
+	cmd, args = s.runnerCommand("test.py", []string{"arg1"})
 	if cmd != "python3" {
 		t.Errorf("expected cmd to be 'python3', got %q", cmd)
 	}
@@ -170,36 +169,13 @@ func TestCustomRunners(t *testing.T) {
 	// 3. Fallback (windows executable on linux without config for it)
 	s.SetRunners(nil)
 	if runtime.GOOS == "linux" {
-		cmd, args = s.runnerCommand("windows", "test.exe", []string{"arg1"})
+		cmd, args = s.runnerCommand("test.exe", []string{"arg1"})
 		if cmd != "winerun" {
 			t.Errorf("expected fallback cmd to be 'winerun', got %q", cmd)
 		}
 		expectedArgs = []string{"test.exe", "arg1"}
 		if len(args) != len(expectedArgs) || args[0] != "test.exe" || args[1] != "arg1" {
 			t.Errorf("expected fallback args to be %v, got %v", expectedArgs, args)
-		}
-	}
-}
-
-func TestCheckPlatform(t *testing.T) {
-	s := &Store{}
-
-	// Default behavior when no runner configured
-	if runtime.GOOS == "linux" {
-		err := s.checkPlatform("windows", "test.exe")
-		if err != nil && !strings.Contains(err.Error(), "requires winerun") {
-			t.Errorf("unexpected error: %v", err)
-		}
-	}
-
-	// Custom runner configured
-	s.SetRunners(map[string]string{
-		"windows": "ls", // "ls" is guaranteed to exist on Unix/Linux
-	})
-	if runtime.GOOS != "windows" {
-		err := s.checkPlatform("windows", "test.exe")
-		if err != nil {
-			t.Errorf("expected checkPlatform to succeed with available runner 'ls', got err: %v", err)
 		}
 	}
 }

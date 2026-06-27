@@ -64,7 +64,6 @@ func (s *Server) UploadProgram(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name := r.FormValue("name")
-	platform := r.FormValue("platform")
 
 	var entry program.Entry
 	if entryStr := r.FormValue("entry"); entryStr != "" {
@@ -112,7 +111,6 @@ func (s *Server) UploadProgram(w http.ResponseWriter, r *http.Request) {
 
 	registered, err := s.programs.RegisterUpload(program.RegisterUploadOptions{
 		Name:      name,
-		Platform:  platform,
 		Entry:     entry,
 		INIValues: iniValues,
 		Files:     uploadFiles,

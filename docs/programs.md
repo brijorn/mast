@@ -135,15 +135,14 @@ A future `DELETE /api/programs/{id}` endpoint may automate this.
 
 ## Custom Program Runners
 
-When Mast starts a program, it normally runs the program command directly. However, if a program specifies a custom `platform` (such as `windows`) or uses standard file formats (such as a `.py` script or `.jar` binary), the host machine can configure a wrapper/runner command to execute them.
+When Mast starts a program, it normally runs the program command directly. However, if a program uses standard file formats (such as a `.py` script or `.jar` binary), the host machine can configure a wrapper/runner command to execute them.
 
 This configuration is stored in the local host's `~/.mast/config.json` configuration file, which means it is specific to the machine running the program and does not need to be committed to the public repository.
 
 ### Matching Order
-When looking up a runner for a program, Mast evaluates the following in order:
-1. **Platform name**: Looks up the program's registered platform in the `runners` map (e.g., `windows`).
-2. **File extension**: Looks up the entrypoint command's file extension in the `runners` map (e.g., `.py` or `.exe`).
-3. **Fallback default**: If no runner matches and the platform is `windows` on a `linux` host, Mast defaults to using `winerun`.
+When looking up a runner for a program, Mast evaluates the following:
+1. **File extension**: Looks up the entrypoint command's file extension in the `runners` map (e.g., `.py` or `.exe`).
+2. **Fallback default**: If no runner matches and the file extension is `.exe` on a `linux` host, Mast defaults to using `winerun`.
 
 ### Runner Formatting
 Runner commands can contain flags. When executing, the wrapper is split and any additional arguments are prepended before the target executable/file path.

@@ -11,10 +11,12 @@ func TestListNodesIncludesLocalAndPeers(t *testing.T) {
 		ID:             "local-node",
 		AdvertiseHost:  "100.64.0.1",
 		AndroidEnabled: true,
+		ProxyEnabled:   true,
 		Peers: map[string]*PeerConn{
 			"remote-node": {
 				Addr:           "100.64.0.2",
 				AndroidEnabled: false,
+				ProxyEnabled:   true,
 				Version:        "0.2.0",
 				Commit:         "abc123",
 				BuildDate:      "2026-06-25T17:00:00Z",
@@ -29,7 +31,7 @@ func TestListNodesIncludesLocalAndPeers(t *testing.T) {
 	}
 
 	local := got[0]
-	if local.ID != "local-node" || !local.Local || local.Addr != "100.64.0.1" || !local.AndroidEnabled {
+	if local.ID != "local-node" || !local.Local || local.Addr != "100.64.0.1" || !local.AndroidEnabled || !local.ProxyEnabled {
 		t.Fatalf("local node = %+v", local)
 	}
 
@@ -39,6 +41,7 @@ func TestListNodesIncludesLocalAndPeers(t *testing.T) {
 		Addr:           "100.64.0.2",
 		Local:          false,
 		AndroidEnabled: false,
+		ProxyEnabled:   true,
 		Version:        "0.2.0",
 		Commit:         "abc123",
 		BuildDate:      "2026-06-25T17:00:00Z",

@@ -120,6 +120,7 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 			},
 			Payload: transport.ConnectionRequestPayload{
 				AndroidEnabled: n.AndroidEnabled,
+				ProxyEnabled:   n.ProxyEnabled,
 				ADBPort:        n.ADBPort,
 				Version:        version.Version,
 				Commit:         version.Commit,
@@ -194,6 +195,7 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				}
 			}
 			peer.AndroidEnabled = req.Payload.AndroidEnabled
+			peer.ProxyEnabled = req.Payload.ProxyEnabled
 			peer.ADBPort = req.Payload.ADBPort
 			peer.Version = req.Payload.Version
 			peer.Commit = req.Payload.Commit
@@ -214,6 +216,7 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 						},
 						Payload: transport.ConnectionRequestPayload{
 							AndroidEnabled: n.AndroidEnabled,
+							ProxyEnabled:   n.ProxyEnabled,
 							ADBPort:        n.ADBPort,
 							Version:        version.Version,
 							Commit:         version.Commit,
@@ -275,6 +278,13 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				break
 			}
 			n.handleStartStreamRequest(peer, req)
+		case transport.TypeScreenshotRequest:
+			var req transport.ScreenshotRequest
+			if err := json.Unmarshal(message, &req); err != nil {
+				log.Println("decode screenshot request:", err)
+				break
+			}
+			n.handleScreenshotRequest(peer, req)
 		case transport.TypeStopStreamRequest:
 			var req transport.StopStreamRequest
 			if err := json.Unmarshal(message, &req); err != nil {
@@ -344,6 +354,20 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				break
 			}
 			n.handleUpdateApplyRequest(peer, req)
+		case transport.TypeConfigGetRequest:
+			var req transport.ConfigGetRequest
+			if err := json.Unmarshal(message, &req); err != nil {
+				log.Println("decode config get request:", err)
+				break
+			}
+			n.handleConfigGetRequest(peer, req)
+		case transport.TypeConfigUpdateRequest:
+			var req transport.ConfigUpdateRequest
+			if err := json.Unmarshal(message, &req); err != nil {
+				log.Println("decode config update request:", err)
+				break
+			}
+			n.handleConfigUpdateRequest(peer, req)
 		}
 	}
 }

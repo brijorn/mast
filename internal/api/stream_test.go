@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	mastconfig "github.com/brijorn/mast/internal/config"
 	"github.com/brijorn/mast/internal/node"
 	streamcfg "github.com/brijorn/mast/internal/stream"
 	"github.com/brijorn/mast/internal/update"
@@ -20,6 +21,7 @@ type fakeBackend struct {
 
 	session *node.StreamSession
 	err     error
+	devices []node.DeviceInfo
 	calls   int
 	serials []string
 	options []streamcfg.Options
@@ -29,6 +31,10 @@ type fakeBackend struct {
 }
 
 func (f *fakeBackend) ListDevices() ([]node.DeviceInfo, error) {
+	return f.devices, nil
+}
+
+func (f *fakeBackend) Screenshot(_ string) ([]byte, error) {
 	return nil, nil
 }
 
@@ -45,6 +51,14 @@ func (f *fakeBackend) CheckNodeUpdate(_ context.Context, _ string) (*update.Chec
 }
 
 func (f *fakeBackend) ApplyNodeUpdate(_ context.Context, _ string, _ update.ApplyOptions) (*update.ApplyResult, error) {
+	return nil, nil
+}
+
+func (f *fakeBackend) GetNodeConfig(_ context.Context, _ string) (*mastconfig.Config, error) {
+	return nil, nil
+}
+
+func (f *fakeBackend) UpdateNodeConfig(_ context.Context, _ string, _ map[string]string) (*mastconfig.UpdateResult, error) {
 	return nil, nil
 }
 

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	mastconfig "github.com/brijorn/mast/internal/config"
 	"github.com/brijorn/mast/internal/update"
 	"github.com/gorilla/websocket"
 )
@@ -15,6 +16,7 @@ type PeerConn struct {
 	conn           *websocket.Conn
 	mu             sync.Mutex
 	AndroidEnabled bool
+	ProxyEnabled   bool
 	Addr           string
 	ADBPort        int
 	Version        string
@@ -40,6 +42,7 @@ type Node struct {
 	cancel         context.CancelFunc
 	PingInterval   time.Duration
 	AndroidEnabled bool
+	ProxyEnabled   bool
 	ADBPort        int
 	adb            adbRunner
 	updateChecker  update.UpdateChecker
@@ -48,9 +51,16 @@ type Node struct {
 	pending        map[string]chan peerRPCResponse
 	streams        map[string]*streamEntry
 	streamsMu      sync.RWMutex
+	batteryMu      sync.RWMutex
+	batteryCache   map[string]batterySnapshot
+	configMu       sync.RWMutex
+	configPath     string
+	configState    mastconfig.Config
+	configReady    bool
+	configApplier  RuntimeConfigApplier
 }
 
-func NewNode(id string, addr string, advertiseHost string, androidEnabled bool) (*Node, error) {
+func NewNode(id string, addr string, advertiseHost string, androidEnabled bool, proxyEnabled bool) (*Node, error) {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, err
@@ -66,8 +76,10 @@ func NewNode(id string, addr string, advertiseHost string, androidEnabled bool) 
 		cancel:         cancel,
 		AdvertiseHost:  advertiseHost,
 		streams:        make(map[string]*streamEntry),
+		batteryCache:   make(map[string]batterySnapshot),
 		PingInterval:   30 * time.Second,
 		AndroidEnabled: androidEnabled,
+		ProxyEnabled:   proxyEnabled,
 		ADBPort:        5037,
 		adb:            realADB{},
 		updateChecker:  updateChecker,

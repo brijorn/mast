@@ -40,6 +40,7 @@ type INIValue struct {
 
 type Program struct {
 	ID        string     `json:"id"`
+	Slug      string     `json:"slug,omitempty"`
 	Name      string     `json:"name"`
 	Platform  string     `json:"platform"`
 	Entry     Entry      `json:"entry"`
@@ -48,17 +49,23 @@ type Program struct {
 }
 
 type Run struct {
-	ID          string            `json:"id"`
-	ProgramID   string            `json:"program_id"`
-	Serial      string            `json:"serial"`
-	NodeID      string            `json:"node_id"`
-	Workspace   string            `json:"workspace"`
-	Status      string            `json:"status"`
-	ExitCode    *int              `json:"exit_code,omitempty"`
-	Error       string            `json:"error,omitempty"`
-	Env         map[string]string `json:"env,omitempty"`
-	StartedAt   time.Time         `json:"started_at"`
-	CompletedAt *time.Time        `json:"completed_at,omitempty"`
+	ID               string            `json:"id"`
+	ProgramID        string            `json:"program_id"`
+	Serial           string            `json:"serial"`
+	NodeID           string            `json:"node_id"`
+	Workspace        string            `json:"workspace"`
+	Status           string            `json:"status"`
+	ExitCode         *int              `json:"exit_code,omitempty"`
+	Error            string            `json:"error,omitempty"`
+	Env              map[string]string `json:"env,omitempty"`
+	StartedAt        time.Time         `json:"started_at"`
+	CompletedAt      *time.Time        `json:"completed_at,omitempty"`
+	// UpdateAvailable is true when the program slug has a newer bundle than the
+	// one this run was started from. Computed at list time; not persisted.
+	UpdateAvailable bool `json:"update_available,omitempty"`
+	// WorkspaceCleaned is true after the run's workspace directory has been
+	// removed. Set by CleanupRun or auto-cleanup on next start for the serial.
+	WorkspaceCleaned bool `json:"workspace_cleaned,omitempty"`
 }
 
 type RegisterOptions struct {
@@ -67,6 +74,22 @@ type RegisterOptions struct {
 	Platform  string     `json:"platform,omitempty"`
 	Entry     Entry      `json:"entry"`
 	INIValues []INIValue `json:"ini_values,omitempty"`
+}
+
+// UploadFile is a single file within a directory upload.
+// Path is the relative path inside the program bundle (e.g. "config.ini").
+type UploadFile struct {
+	Path    string
+	Content io.Reader
+}
+
+// RegisterUploadOptions describes a program bundle uploaded as individual files.
+type RegisterUploadOptions struct {
+	Name      string
+	Platform  string
+	Entry     Entry
+	INIValues []INIValue
+	Files     []UploadFile
 }
 
 type StartOptions struct {
@@ -80,8 +103,10 @@ type Store struct {
 	mu       sync.Mutex
 	programs map[string]Program
 	runs     map[string]*runState
+	versions map[string]string // slug -> current program ID
 	devices  deviceLister
 	startCmd func(command string, args ...string) *exec.Cmd
+	runners  map[string]string
 }
 
 type deviceLister interface {
@@ -107,6 +132,7 @@ func NewStore(root string, devices deviceLister) (*Store, error) {
 		root:     root,
 		programs: make(map[string]Program),
 		runs:     make(map[string]*runState),
+		versions: make(map[string]string),
 		devices:  devices,
 		startCmd: exec.Command,
 	}
@@ -117,6 +143,9 @@ func NewStore(root string, devices deviceLister) (*Store, error) {
 		return nil, err
 	}
 	if err := s.loadRegistry(); err != nil {
+		return nil, err
+	}
+	if err := s.loadVersions(); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -155,9 +184,11 @@ func (s *Store) Register(opts RegisterOptions) (*Program, error) {
 	if platform == "" {
 		platform = inferPlatform(opts.Entry.Command)
 	}
+	slug := toSlug(name)
 
 	program := Program{
 		ID:        id,
+		Slug:      slug,
 		Name:      name,
 		Platform:  platform,
 		Entry:     opts.Entry,
@@ -178,7 +209,121 @@ func (s *Store) Register(opts RegisterOptions) (*Program, error) {
 
 	s.mu.Lock()
 	s.programs[id] = program
+	s.versions[slug] = id
 	err = s.saveRegistryLocked()
+	if err == nil {
+		err = s.saveVersionsLocked()
+	}
+	s.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+
+	return &program, nil
+}
+
+// RegisterUpload registers a program from a set of uploaded files. Files are
+// written directly into a temporary directory inside the bundle store, then
+// atomically moved to the final content-addressed path.
+//
+// Re-uploading a program with the same slug replaces its bundle in the
+// versions index so that subsequent Start calls using the slug get the new
+// bundle. Running instances are not affected — they already hold a copy of the
+// old bundle in their workspace — but ListRuns will mark them with
+// UpdateAvailable = true.
+func (s *Store) RegisterUpload(opts RegisterUploadOptions) (*Program, error) {
+	if opts.Entry.Command == "" {
+		return nil, errors.New("entry command required")
+	}
+	if len(opts.Files) == 0 {
+		return nil, errors.New("at least one file required")
+	}
+
+	// Create a temporary directory inside bundleDir so that os.Rename later
+	// stays on the same filesystem (avoiding a cross-device link error).
+	tmp, err := os.MkdirTemp(s.bundleDir(), "upload-*")
+	if err != nil {
+		return nil, err
+	}
+	success := false
+	defer func() {
+		if !success {
+			_ = os.RemoveAll(tmp)
+		}
+	}()
+
+	for _, f := range opts.Files {
+		rel := filepath.FromSlash(f.Path)
+		if strings.Contains(rel, "..") {
+			return nil, fmt.Errorf("invalid file path: %q", f.Path)
+		}
+		target := filepath.Join(tmp, rel)
+		// Guard against path traversal after joining.
+		if !strings.HasPrefix(
+			filepath.Clean(target)+string(os.PathSeparator),
+			filepath.Clean(tmp)+string(os.PathSeparator),
+		) {
+			return nil, fmt.Errorf("invalid file path: %q", f.Path)
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0700); err != nil {
+			return nil, err
+		}
+		out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+		if err != nil {
+			return nil, err
+		}
+		_, copyErr := io.Copy(out, f.Content)
+		_ = out.Close()
+		if copyErr != nil {
+			return nil, copyErr
+		}
+	}
+
+	id, err := hashDir(tmp)
+	if err != nil {
+		return nil, err
+	}
+
+	name := strings.TrimSpace(opts.Name)
+	if name == "" {
+		name = "unnamed"
+	}
+	slug := toSlug(name)
+	platform := opts.Platform
+	if platform == "" {
+		platform = inferPlatform(opts.Entry.Command)
+	}
+
+	program := Program{
+		ID:        id,
+		Slug:      slug,
+		Name:      name,
+		Platform:  platform,
+		Entry:     opts.Entry,
+		INIValues: opts.INIValues,
+		CreatedAt: time.Now().UTC(),
+	}
+
+	bundlePath := s.bundlePath(id)
+	// Remove the target path if it already exists (same content = idempotent).
+	if err := os.RemoveAll(bundlePath); err != nil {
+		return nil, err
+	}
+	if err := os.Rename(tmp, bundlePath); err != nil {
+		return nil, err
+	}
+	if err := writeJSON(filepath.Join(bundlePath, "mast-program.json"), program); err != nil {
+		return nil, err
+	}
+	success = true
+
+	s.mu.Lock()
+	s.programs[id] = program
+	s.versions[slug] = id
+	err = s.saveRegistryLocked()
+	if err == nil {
+		err = s.saveVersionsLocked()
+	}
 	s.mu.Unlock()
 	if err != nil {
 		return nil, err
@@ -207,7 +352,15 @@ func (s *Store) ListRuns() []Run {
 
 	runs := make([]Run, 0, len(s.runs))
 	for _, state := range s.runs {
-		runs = append(runs, *state.run)
+		run := *state.run
+		// Compute UpdateAvailable: does the current bundle for this program's
+		// slug differ from the bundle this run was started from?
+		if p, ok := s.programs[run.ProgramID]; ok && p.Slug != "" {
+			if currentID, ok := s.versions[p.Slug]; ok && currentID != run.ProgramID {
+				run.UpdateAvailable = true
+			}
+		}
+		runs = append(runs, run)
 	}
 	sort.Slice(runs, func(i, j int) bool {
 		return runs[i].StartedAt.Before(runs[j].StartedAt)
@@ -225,11 +378,17 @@ func (s *Store) Start(opts StartOptions) ([]Run, error) {
 
 	s.mu.Lock()
 	p, ok := s.programs[opts.ProgramID]
+	if !ok {
+		// Accept a slug in place of a content-hash ID.
+		if id, slugOK := s.versions[opts.ProgramID]; slugOK {
+			p, ok = s.programs[id]
+		}
+	}
 	s.mu.Unlock()
 	if !ok {
 		return nil, errors.New("program not found")
 	}
-	if err := checkPlatform(p.Platform); err != nil {
+	if err := s.checkPlatform(p.Platform, p.Entry.Command); err != nil {
 		return nil, err
 	}
 
@@ -271,6 +430,31 @@ func (s *Store) Stop(id string) (*Run, error) {
 	return state.run, nil
 }
 
+// CleanupRun removes the workspace directory of a completed or failed run to
+// free disk space. Returns an error if the run is still active. Sets
+// WorkspaceCleaned on the run once the workspace has been removed.
+func (s *Store) CleanupRun(id string) (*Run, error) {
+	s.mu.Lock()
+	state := s.runs[id]
+	s.mu.Unlock()
+	if state == nil {
+		return nil, errors.New("run not found")
+	}
+	run := state.run
+	if run.Status == "running" || run.Status == "starting" {
+		return nil, errors.New("cannot clean up a running run")
+	}
+	if !run.WorkspaceCleaned {
+		if err := os.RemoveAll(run.Workspace); err != nil && !os.IsNotExist(err) {
+			return nil, err
+		}
+		s.mu.Lock()
+		run.WorkspaceCleaned = true
+		s.mu.Unlock()
+	}
+	return run, nil
+}
+
 func (s *Store) Logs(id string) (string, string, error) {
 	s.mu.Lock()
 	state := s.runs[id]
@@ -290,7 +474,36 @@ func (s *Store) Logs(id string) (string, string, error) {
 	return string(stdout), string(stderr), nil
 }
 
+// cleanupCompletedRunsForSerial removes workspace directories for all
+// completed or failed runs belonging to the given device serial. It is called
+// automatically before a new run is started on that serial so that disk space
+// from prior runs is reclaimed when the phone switches programs.
+func (s *Store) cleanupCompletedRunsForSerial(serial string) {
+	s.mu.Lock()
+	var toClean []*runState
+	for _, state := range s.runs {
+		if state.run.Serial == serial &&
+			(state.run.Status == "exited" || state.run.Status == "failed") &&
+			!state.run.WorkspaceCleaned {
+			toClean = append(toClean, state)
+		}
+	}
+	s.mu.Unlock()
+
+	for _, state := range toClean {
+		if err := os.RemoveAll(state.run.Workspace); err == nil || os.IsNotExist(err) {
+			s.mu.Lock()
+			state.run.WorkspaceCleaned = true
+			s.mu.Unlock()
+		}
+	}
+}
+
 func (s *Store) startOne(p Program, device node.DeviceInfo, nodes []node.NodeInfo, variables map[string]string) (*Run, error) {
+	// Reclaim disk space from prior completed/failed runs on this serial
+	// before creating the new workspace.
+	s.cleanupCompletedRunsForSerial(device.Serial)
+
 	id := uuid.NewString()
 	workspace := filepath.Join(s.instanceDir(), id)
 	if err := copyDir(s.bundlePath(p.ID), workspace); err != nil {
@@ -320,7 +533,7 @@ func (s *Store) startOne(p Program, device node.DeviceInfo, nodes []node.NodeInf
 	if localCommand := filepath.Join(workspace, command); fileExists(localCommand) {
 		command = localCommand
 	}
-	command, args = runnerCommand(p.Platform, command, args)
+	command, args = s.runnerCommand(p.Platform, command, args)
 	cmd := s.startCmd(command, args...)
 	cmd.Dir = workspace
 	cmd.Stdout = stdout
@@ -531,10 +744,43 @@ func inferPlatform(command string) string {
 	return runtime.GOOS
 }
 
-func checkPlatform(platform string) error {
+func (s *Store) SetRunners(runners map[string]string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.runners = runners
+}
+
+func (s *Store) checkPlatform(platform string, command string) error {
 	if platform == "" || platform == "any" || platform == runtime.GOOS {
 		return nil
 	}
+
+	s.mu.Lock()
+	runners := s.runners
+	s.mu.Unlock()
+
+	var runner string
+	if runners != nil {
+		if r, ok := runners[platform]; ok && r != "" {
+			runner = r
+		} else {
+			ext := filepath.Ext(command)
+			if r, ok := runners[ext]; ok && r != "" {
+				runner = r
+			}
+		}
+	}
+
+	if runner != "" {
+		parts := strings.Fields(runner)
+		if len(parts) > 0 {
+			if _, err := exec.LookPath(parts[0]); err == nil {
+				return nil
+			}
+			return fmt.Errorf("program platform %q requires runner %q (command %q) on %s", platform, runner, parts[0], runtime.GOOS)
+		}
+	}
+
 	if platform == "windows" && runtime.GOOS == "linux" {
 		if _, err := exec.LookPath("winerun"); err == nil {
 			return nil
@@ -544,7 +790,30 @@ func checkPlatform(platform string) error {
 	return fmt.Errorf("program platform %q cannot run on %s", platform, runtime.GOOS)
 }
 
-func runnerCommand(platform string, command string, args []string) (string, []string) {
+func (s *Store) runnerCommand(platform string, command string, args []string) (string, []string) {
+	s.mu.Lock()
+	runners := s.runners
+	s.mu.Unlock()
+
+	var runner string
+	if runners != nil {
+		if r, ok := runners[platform]; ok && r != "" {
+			runner = r
+		} else {
+			ext := filepath.Ext(command)
+			if r, ok := runners[ext]; ok && r != "" {
+				runner = r
+			}
+		}
+	}
+
+	if runner != "" {
+		parts := strings.Fields(runner)
+		if len(parts) > 0 {
+			return parts[0], append(append(parts[1:], command), args...)
+		}
+	}
+
 	if platform == "windows" && runtime.GOOS == "linux" {
 		return "winerun", append([]string{command}, args...)
 	}

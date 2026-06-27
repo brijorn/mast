@@ -138,3 +138,68 @@ func waitForRun(t *testing.T, store *Store, id string) {
 	}
 	t.Fatalf("run %s did not finish", id)
 }
+
+func TestCustomRunners(t *testing.T) {
+	s := &Store{
+		runners: map[string]string{
+			"windows": "wine",
+			".py":     "python3 -u",
+		},
+	}
+
+	// 1. Match by platform
+	cmd, args := s.runnerCommand("windows", "test.exe", []string{"arg1", "arg2"})
+	if cmd != "wine" {
+		t.Errorf("expected cmd to be 'wine', got %q", cmd)
+	}
+	expectedArgs := []string{"test.exe", "arg1", "arg2"}
+	if len(args) != len(expectedArgs) || args[0] != "test.exe" || args[1] != "arg1" || args[2] != "arg2" {
+		t.Errorf("expected args to be %v, got %v", expectedArgs, args)
+	}
+
+	// 2. Match by file extension
+	cmd, args = s.runnerCommand("linux", "test.py", []string{"arg1"})
+	if cmd != "python3" {
+		t.Errorf("expected cmd to be 'python3', got %q", cmd)
+	}
+	expectedArgs = []string{"-u", "test.py", "arg1"}
+	if len(args) != len(expectedArgs) || args[0] != "-u" || args[1] != "test.py" || args[2] != "arg1" {
+		t.Errorf("expected args to be %v, got %v", expectedArgs, args)
+	}
+
+	// 3. Fallback (windows executable on linux without config for it)
+	s.SetRunners(nil)
+	if runtime.GOOS == "linux" {
+		cmd, args = s.runnerCommand("windows", "test.exe", []string{"arg1"})
+		if cmd != "winerun" {
+			t.Errorf("expected fallback cmd to be 'winerun', got %q", cmd)
+		}
+		expectedArgs = []string{"test.exe", "arg1"}
+		if len(args) != len(expectedArgs) || args[0] != "test.exe" || args[1] != "arg1" {
+			t.Errorf("expected fallback args to be %v, got %v", expectedArgs, args)
+		}
+	}
+}
+
+func TestCheckPlatform(t *testing.T) {
+	s := &Store{}
+
+	// Default behavior when no runner configured
+	if runtime.GOOS == "linux" {
+		err := s.checkPlatform("windows", "test.exe")
+		if err != nil && !strings.Contains(err.Error(), "requires winerun") {
+			t.Errorf("unexpected error: %v", err)
+		}
+	}
+
+	// Custom runner configured
+	s.SetRunners(map[string]string{
+		"windows": "ls", // "ls" is guaranteed to exist on Unix/Linux
+	})
+	if runtime.GOOS != "windows" {
+		err := s.checkPlatform("windows", "test.exe")
+		if err != nil {
+			t.Errorf("expected checkPlatform to succeed with available runner 'ls', got err: %v", err)
+		}
+	}
+}

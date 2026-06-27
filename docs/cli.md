@@ -47,6 +47,8 @@ command creates it first.
 mast config set advertise_host 100.64.0.10
 mast config set android_enabled true
 mast config set proxy_enabled true
+mast config set runners.windows wine
+mast config set runners..py "python3 -u"
 ```
 
 Supported keys:
@@ -58,6 +60,8 @@ api_addr
 advertise_host
 android_enabled
 proxy_enabled
+runners.<platform>
+runners.<file_extension>
 ```
 
 ## config show

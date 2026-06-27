@@ -66,6 +66,7 @@ func (s *StartCmd) Run() error {
 	if err != nil {
 		return err
 	}
+	programStore.SetRunners(cfg.Runners)
 	apiServer := api.NewServer(mastNode, programStore)
 
 	go func() {

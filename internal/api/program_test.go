@@ -40,12 +40,25 @@ func (f *fakeProgramBackend) ListRuns() []program.Run {
 	return []program.Run{{ID: "run-1", Status: "running"}}
 }
 
+func (f *fakeProgramBackend) RegisterUpload(opts program.RegisterUploadOptions) (*program.Program, error) {
+	return &program.Program{
+		ID:       "sha256-upload",
+		Name:     opts.Name,
+		Platform: opts.Platform,
+		Entry:    opts.Entry,
+	}, nil
+}
+
 func (f *fakeProgramBackend) Stop(id string) (*program.Run, error) {
 	return &program.Run{ID: id, Status: "running"}, nil
 }
 
 func (f *fakeProgramBackend) Logs(_ string) (string, string, error) {
 	return "out", "err", nil
+}
+
+func (f *fakeProgramBackend) CleanupRun(id string) (*program.Run, error) {
+	return &program.Run{ID: id, Status: "exited", WorkspaceCleaned: true}, nil
 }
 
 func TestRegisterProgramCallsBackend(t *testing.T) {

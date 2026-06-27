@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 const (
@@ -100,18 +101,35 @@ func (c *ConfigSetCmd) Run() error {
 }
 
 type Config struct {
-	BindAddr       string `json:"bind_addr"`
-	ProxyAddr      string `json:"proxy_addr"`
-	APIAddr        string `json:"api_addr"`
-	AdvertiseHost  string `json:"advertise_host"`
-	ADBHost        string `json:"adb_host"`
-	ADBPort        int    `json:"adb_port"`
-	ProgramsDir    string `json:"programs_dir"`
-	AndroidEnabled bool   `json:"android_enabled"`
-	ProxyEnabled   bool   `json:"proxy_enabled"`
+	BindAddr       string            `json:"bind_addr"`
+	ProxyAddr      string            `json:"proxy_addr"`
+	APIAddr        string            `json:"api_addr"`
+	AdvertiseHost  string            `json:"advertise_host"`
+	ADBHost        string            `json:"adb_host"`
+	ADBPort        int               `json:"adb_port"`
+	ProgramsDir    string            `json:"programs_dir"`
+	AndroidEnabled bool              `json:"android_enabled"`
+	ProxyEnabled   bool              `json:"proxy_enabled"`
+	Runners        map[string]string `json:"runners,omitempty"`
 }
 
 func (c *Config) Set(key string, value string) error {
+	if strings.HasPrefix(key, "runners.") {
+		if c.Runners == nil {
+			c.Runners = make(map[string]string)
+		}
+		target := strings.TrimPrefix(key, "runners.")
+		if target == "" {
+			return fmt.Errorf("invalid runner key")
+		}
+		if value == "" {
+			delete(c.Runners, target)
+		} else {
+			c.Runners[target] = value
+		}
+		return nil
+	}
+
 	switch key {
 	case "bind_addr":
 		c.BindAddr = value

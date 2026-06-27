@@ -111,6 +111,24 @@ func (s *Server) UploadProgram(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) DeleteProgram(w http.ResponseWriter, r *http.Request) {
+	if s.programs == nil {
+		http.Error(w, "program runner not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	if err := s.programs.DeleteProgram(r.PathValue("id")); err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			http.Error(w, err.Error(), http.StatusNotFound)
+		} else {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) ListPrograms(w http.ResponseWriter, _ *http.Request) {
 	if s.programs == nil {
 		http.Error(w, "program runner not configured", http.StatusServiceUnavailable)

@@ -219,6 +219,47 @@ func TestCustomRunners(t *testing.T) {
 	}
 }
 
+func TestDeleteProgramRemovesRegistryEntryAndBundleDirectory(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewStore(filepath.Join(root, "programs"), fakeDevices{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	registered, err := store.RegisterUpload(RegisterUploadOptions{
+		Name:  "delete app",
+		Entry: Entry{Command: "run.sh"},
+		Files: []UploadFile{
+			{Path: "run.sh", Content: strings.NewReader("echo delete\n")},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundlePath := store.bundlePath(registered.ID)
+	if _, err := os.Stat(bundlePath); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.DeleteProgram(registered.ID); err != nil {
+		t.Fatal(err)
+	}
+	if programs := store.ListPrograms(); len(programs) != 0 {
+		t.Fatalf("programs = %+v, want empty", programs)
+	}
+	if _, err := os.Stat(bundlePath); !os.IsNotExist(err) {
+		t.Fatalf("bundle stat error = %v, want not exist", err)
+	}
+
+	reloaded, err := NewStore(filepath.Join(root, "programs"), fakeDevices{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if programs := reloaded.ListPrograms(); len(programs) != 0 {
+		t.Fatalf("reloaded programs = %+v, want empty", programs)
+	}
+}
+
 func TestRegisterUploadDeletesReplacedBundleDirectory(t *testing.T) {
 	root := t.TempDir()
 	store, err := NewStore(filepath.Join(root, "programs"), fakeDevices{})

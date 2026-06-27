@@ -315,6 +315,28 @@ func (s *Store) UpdateProgram(id string, mappings []ConfigMapping) (*Program, er
 	return &p, nil
 }
 
+func (s *Store) DeleteProgram(id string) error {
+	s.mu.Lock()
+	p, ok := s.programs[id]
+	if !ok {
+		p, ok = s.programBySlugLocked(id)
+	}
+	if !ok {
+		s.mu.Unlock()
+		return errors.New("program not found")
+	}
+
+	delete(s.programs, p.ID)
+	if err := s.saveRegistryLocked(); err != nil {
+		s.programs[p.ID] = p
+		s.mu.Unlock()
+		return err
+	}
+	s.mu.Unlock()
+
+	return os.RemoveAll(s.bundlePath(p.ID))
+}
+
 func (s *Store) ListPrograms() []Program {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -47,6 +47,7 @@ type programBackend interface {
 	LogsSince(id string, offsets program.LogOffsets) (*program.LogsResult, error)
 	CleanupRun(id string) (*program.Run, error)
 	UpdateProgram(id string, mappings []program.ConfigMapping) (*program.Program, error)
+	DeleteProgram(id string) error
 }
 
 func NewServer(n nodeBackend, programs ...programBackend) *Server {
@@ -79,6 +80,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/programs", s.ListPrograms)
 	mux.HandleFunc("POST /api/programs/upload", s.UploadProgram)
 	mux.HandleFunc("PUT /api/programs/{id}", s.UpdateProgram)
+	mux.HandleFunc("DELETE /api/programs/{id}", s.DeleteProgram)
 	mux.HandleFunc("GET /api/runs", s.ListRuns)
 	mux.HandleFunc("POST /api/runs", s.StartRuns)
 	mux.HandleFunc("POST /api/runs/{id}/stop", s.StopRun)

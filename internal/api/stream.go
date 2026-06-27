@@ -52,6 +52,6 @@ func writeStartStreamResponse(w http.ResponseWriter, serial string, stream *node
 		Serial:    serial,
 		LocalPort: stream.LocalPort,
 	}); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 }

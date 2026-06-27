@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/brijorn/mast/internal/transport"
@@ -44,7 +45,8 @@ func (n *Node) sendPeerRequest(peerID string, messageType string, payload any) e
 	}
 
 	if err := peer.WriteMessage(websocket.TextMessage, encoded); err != nil {
-		return err
+		n.dropPeer(peerID, peer)
+		return fmt.Errorf("peer %s disconnected: %w", peerID, err)
 	}
 
 	return nil
@@ -87,7 +89,8 @@ func (n *Node) sendPeerRPC(ctx context.Context, peerID string, messageType strin
 	}()
 
 	if err := peer.WriteMessage(websocket.TextMessage, encoded); err != nil {
-		return peerRPCResponse{}, err
+		n.dropPeer(peerID, peer)
+		return peerRPCResponse{}, fmt.Errorf("peer %s disconnected: %w", peerID, err)
 	}
 
 	select {

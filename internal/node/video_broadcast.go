@@ -65,7 +65,7 @@ func newVideoBroadcaster() *videoBroadcaster {
 }
 
 func (b *videoBroadcaster) Subscribe() (<-chan VideoPacket, func()) {
-	ch := make(chan VideoPacket, 32)
+	ch := make(chan VideoPacket, 256)
 
 	b.mu.Lock()
 	b.subscribers[ch] = struct{}{}
@@ -101,7 +101,9 @@ func (b *videoBroadcaster) broadcast(packet VideoPacket) {
 		select {
 		case ch <- packet:
 		default:
-			// drop frame
+			// Keep the stream reader non-blocking. A full subscriber queue means
+			// that client is already behind; dropping here is preferable to
+			// stalling the scrcpy reader for every other client.
 		}
 	}
 }

@@ -4,8 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
+	"os/signal"
+	"sync/atomic"
+	"syscall"
 
 	"github.com/brijorn/mast/internal/api"
 	"github.com/brijorn/mast/internal/node"
@@ -66,6 +70,18 @@ func (s *StartCmd) Run() error {
 	}
 	programStore.SetRunners(cfg.Runners)
 	apiServer := api.NewServer(mastNode, programStore)
+	var shuttingDown atomic.Bool
+	stopSignals := make(chan os.Signal, 1)
+	signal.Notify(stopSignals, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(stopSignals)
+	go func() {
+		<-stopSignals
+		shuttingDown.Store(true)
+		programStore.Shutdown()
+		if err := mastNode.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			log.Println("node shutdown:", err)
+		}
+	}()
 
 	go func() {
 		if err := apiServer.Listen(cfg.APIAddr); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -84,5 +100,11 @@ func (s *StartCmd) Run() error {
 		}
 	}
 
-	return mastNode.Listen()
+	if err := mastNode.Listen(); err != nil {
+		if shuttingDown.Load() || errors.Is(err, net.ErrClosed) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }

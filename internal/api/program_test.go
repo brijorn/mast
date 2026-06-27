@@ -11,7 +11,10 @@ import (
 )
 
 type fakeProgramBackend struct {
-	started program.StartOptions
+	started          program.StartOptions
+	autostartID      string
+	autostartEnabled bool
+	logOffsets       program.LogOffsets
 }
 
 func (f *fakeProgramBackend) ListPrograms() []program.Program {
@@ -43,12 +46,30 @@ func (f *fakeProgramBackend) Logs(_ string) (string, string, error) {
 	return "out", "err", nil
 }
 
+func (f *fakeProgramBackend) LogsSince(_ string, offsets program.LogOffsets) (*program.LogsResult, error) {
+	f.logOffsets = offsets
+	return &program.LogsResult{
+		Stdout:       "out",
+		Stderr:       "err",
+		StdoutOffset: offsets.Stdout + 3,
+		StderrOffset: offsets.Stderr + 3,
+		StdoutSize:   offsets.Stdout + 3,
+		StderrSize:   offsets.Stderr + 3,
+	}, nil
+}
+
 func (f *fakeProgramBackend) CleanupRun(id string) (*program.Run, error) {
 	return &program.Run{ID: id, Status: "exited", WorkspaceCleaned: true}, nil
 }
 
 func (f *fakeProgramBackend) Resume(id string) (*program.Run, error) {
 	return &program.Run{ID: id, Status: "running"}, nil
+}
+
+func (f *fakeProgramBackend) SetRunAutostart(id string, enabled bool) (*program.Run, error) {
+	f.autostartID = id
+	f.autostartEnabled = enabled
+	return &program.Run{ID: id, Status: "stopped", Autostart: enabled}, nil
 }
 
 func (f *fakeProgramBackend) UpdateProgram(id string, mappings []program.ConfigMapping) (*program.Program, error) {
@@ -76,6 +97,32 @@ func TestStartRunsCallsBackend(t *testing.T) {
 	}
 }
 
+func TestSetRunAutostartCallsBackend(t *testing.T) {
+	programs := &fakeProgramBackend{}
+	server := NewServer(&fakeBackend{}, programs)
+
+	body := []byte(`{"enabled":true}`)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/api/runs/run-1/autostart", bytes.NewReader(body))
+
+	server.Handler().ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusOK, res.Body.String())
+	}
+	if programs.autostartID != "run-1" || !programs.autostartEnabled {
+		t.Fatalf("autostart = id %q enabled %v", programs.autostartID, programs.autostartEnabled)
+	}
+
+	var got program.Run
+	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !got.Autostart {
+		t.Fatalf("got Autostart = false, want true")
+	}
+}
+
 func TestRunLogsReturnsOutput(t *testing.T) {
 	server := NewServer(&fakeBackend{}, &fakeProgramBackend{})
 
@@ -94,6 +141,34 @@ func TestRunLogsReturnsOutput(t *testing.T) {
 	}
 	if got.Stdout != "out" || got.Stderr != "err" {
 		t.Fatalf("logs = %+v", got)
+	}
+	if got.StdoutOffset != 3 || got.StderrOffset != 3 {
+		t.Fatalf("offsets = stdout %d stderr %d, want 3/3", got.StdoutOffset, got.StderrOffset)
+	}
+}
+
+func TestRunLogsPassesOffsets(t *testing.T) {
+	programs := &fakeProgramBackend{}
+	server := NewServer(&fakeBackend{}, programs)
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/runs/run-1/logs?stdout_offset=10&stderr_offset=20", nil)
+
+	server.Handler().ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusOK, res.Body.String())
+	}
+	if programs.logOffsets.Stdout != 10 || programs.logOffsets.Stderr != 20 {
+		t.Fatalf("offsets = %+v, want stdout 10 stderr 20", programs.logOffsets)
+	}
+
+	var got runLogsResponse
+	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.StdoutOffset != 13 || got.StderrOffset != 23 {
+		t.Fatalf("response offsets = stdout %d stderr %d, want 13/23", got.StdoutOffset, got.StderrOffset)
 	}
 }
 

@@ -3,7 +3,6 @@
 package program
 
 import (
-	"bytes"
 	"errors"
 	"os"
 	"os/exec"
@@ -34,13 +33,7 @@ func runProcessStatus(run *Run) (alive bool, matches bool) {
 		return false, false
 	}
 
-	cmdline, err := os.ReadFile("/proc/" + strconv.Itoa(run.PID) + "/cmdline")
-	if err != nil {
-		return true, true
-	}
-	got := splitProcCmdline(cmdline)
-	want := append([]string{run.Cmd}, run.CmdArgs...)
-	return true, commandLineMatches(got, want)
+	return true, processCwdMatchesRun(run)
 }
 
 func killRunProcess(run *Run) error {
@@ -57,19 +50,6 @@ func killRunProcess(run *Run) error {
 	return process.Kill()
 }
 
-func splitProcCmdline(data []byte) []string {
-	data = bytes.TrimRight(data, "\x00")
-	if len(data) == 0 {
-		return nil
-	}
-	raw := bytes.Split(data, []byte{0})
-	parts := make([]string, 0, len(raw))
-	for _, part := range raw {
-		parts = append(parts, string(part))
-	}
-	return parts
-}
-
 func procIsZombie(pid int) bool {
 	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
 	if err != nil {
@@ -77,4 +57,15 @@ func procIsZombie(pid int) bool {
 	}
 	fields := strings.Fields(string(data))
 	return len(fields) > 2 && fields[2] == "Z"
+}
+
+func processCwdMatchesRun(run *Run) bool {
+	if run.PID <= 0 || run.Workspace == "" {
+		return false
+	}
+	cwd, err := os.Readlink("/proc/" + strconv.Itoa(run.PID) + "/cwd")
+	if err != nil {
+		return false
+	}
+	return cwd == run.Workspace
 }

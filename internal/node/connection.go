@@ -314,7 +314,7 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				break
 			}
 
-			if err := n.pressKeyLocal(req.Payload.Serial, req.Payload.Keycode); err != nil {
+			if err := n.pressKeyLocal(req.Payload.Serial, req.Payload.Keycode, req.Payload.MetaState); err != nil {
 				log.Println("press key:", err)
 				break
 			}

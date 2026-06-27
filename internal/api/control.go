@@ -29,8 +29,9 @@ type swipeRequest struct {
 }
 
 type PressKeyRequest struct {
-	Serial  string `json:"serial"`
-	Keycode uint32 `json:"keycode"`
+	Serial    string `json:"serial"`
+	Keycode   uint32 `json:"keycode"`
+	MetaState uint32 `json:"meta_state,omitempty"`
 }
 
 func (s *Server) Touch(w http.ResponseWriter, r *http.Request) {
@@ -138,7 +139,7 @@ func (s *Server) PressKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.node.PressKey(req.Serial, req.Keycode); err != nil {
+	if err := s.node.PressKey(req.Serial, req.Keycode, req.MetaState); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

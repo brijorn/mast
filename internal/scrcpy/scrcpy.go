@@ -30,6 +30,55 @@ var ValidKeycodes = map[int]bool{
 	KeycodeBack:      true,
 	KeycodeHome:      true,
 	KeycodeAppSwitch: true,
+
+	// Numbers 0-9, *, #
+	7:  true, // 0
+	8:  true, // 1
+	9:  true, // 2
+	10: true, // 3
+	11: true, // 4
+	12: true, // 5
+	13: true, // 6
+	14: true, // 7
+	15: true, // 8
+	16: true, // 9
+	17: true, // *
+	18: true, // #
+
+	// Dpad / Navigation
+	19: true, // Up
+	20: true, // Down
+	21: true, // Left
+	22: true, // Right
+
+	// Letters A-Z
+	29: true, 30: true, 31: true, 32: true, 33: true, 34: true, 35: true,
+	36: true, 37: true, 38: true, 39: true, 40: true, 41: true, 42: true,
+	43: true, 44: true, 45: true, 46: true, 47: true, 48: true, 49: true,
+	50: true, 51: true, 52: true, 53: true, 54: true,
+
+	// Punctuation and formatting
+	55:  true, // Comma
+	56:  true, // Period
+	59:  true, // Shift Left
+	60:  true, // Shift Right
+	61:  true, // Tab
+	62:  true, // Space
+	66:  true, // Enter
+	67:  true, // Del (Backspace)
+	68:  true, // Grave
+	69:  true, // Minus
+	70:  true, // Equals
+	71:  true, // Left bracket
+	72:  true, // Right bracket
+	73:  true, // Backslash
+	74:  true, // Semicolon
+	75:  true, // Apostrophe
+	76:  true, // Slash
+	77:  true, // At
+	81:  true, // Plus
+	111: true, // Escape
+	112: true, // Forward Del (Delete)
 }
 
 const (
@@ -123,22 +172,21 @@ func writeTouch(w io.Writer, action byte, x, y, width, height int, pressure uint
 	return writeFull(w, buf)
 }
 
-func writeKeycode(w io.Writer, action byte, keycode uint32) error {
+func writeKeycode(w io.Writer, action byte, keycode uint32, metaState uint32) error {
 	buf := make([]byte, 14)
 
 	buf[0] = InjectKeycode
 	buf[1] = action
 	binary.BigEndian.PutUint32(buf[2:6], keycode)
 	binary.BigEndian.PutUint32(buf[6:10], 0)  // repeat
-	binary.BigEndian.PutUint32(buf[10:14], 0) // meta state
+	binary.BigEndian.PutUint32(buf[10:14], metaState) // meta state
 
 	return writeFull(w, buf)
-
 }
 
-func PressKey(w io.Writer, keycode uint32) error {
-	if err := writeKeycode(w, ActionDown, keycode); err != nil {
+func PressKey(w io.Writer, keycode uint32, metaState uint32) error {
+	if err := writeKeycode(w, ActionDown, keycode, metaState); err != nil {
 		return err
 	}
-	return writeKeycode(w, ActionUp, keycode)
+	return writeKeycode(w, ActionUp, keycode, metaState)
 }

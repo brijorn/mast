@@ -12,6 +12,7 @@ import (
 
 type fakeProgramBackend struct {
 	started          program.StartOptions
+	deletedID        string
 	autostartID      string
 	autostartEnabled bool
 	logOffsets       program.LogOffsets
@@ -77,6 +78,11 @@ func (f *fakeProgramBackend) UpdateProgram(id string, mappings []program.ConfigM
 		ID:             id,
 		ConfigMappings: mappings,
 	}, nil
+}
+
+func (f *fakeProgramBackend) DeleteProgram(id string) error {
+	f.deletedID = id
+	return nil
 }
 
 func TestStartRunsCallsBackend(t *testing.T) {
@@ -195,5 +201,22 @@ func TestUpdateProgramCallsBackend(t *testing.T) {
 	}
 	if len(got.ConfigMappings) != 1 || got.ConfigMappings[0].Value != "{{phone.serial}}" {
 		t.Fatalf("got ConfigMappings = %+v", got.ConfigMappings)
+	}
+}
+
+func TestDeleteProgramCallsBackend(t *testing.T) {
+	programs := &fakeProgramBackend{}
+	server := NewServer(&fakeBackend{}, programs)
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/api/programs/test-id", nil)
+
+	server.Handler().ServeHTTP(res, req)
+
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusNoContent, res.Body.String())
+	}
+	if programs.deletedID != "test-id" {
+		t.Fatalf("deletedID = %q, want test-id", programs.deletedID)
 	}
 }

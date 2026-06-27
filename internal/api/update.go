@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 
 	"github.com/brijorn/mast/internal/update"
@@ -18,6 +19,7 @@ func (s *Server) CheckUpdate(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(res); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 
 }
@@ -41,14 +43,12 @@ func (s *Server) ApplyUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	var restarter restartBackend
 	if opts.Restart && res.Updated {
-		restarter, ok := s.node.(restartBackend)
+		var ok bool
+		restarter, ok = s.node.(restartBackend)
 		if !ok {
 			http.Error(w, "restart not supported", http.StatusInternalServerError)
-			return
-		}
-		if err := restarter.ScheduleRestart(0); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 	}
@@ -56,6 +56,15 @@ func (s *Server) ApplyUpdate(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(res); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if restarter != nil {
+		if err := http.NewResponseController(w).Flush(); err != nil {
+			log.Println("flush update response:", err)
+		}
+		if err := restarter.ScheduleRestart(0); err != nil {
+			log.Println("schedule restart:", err)
+		}
 	}
 }
 

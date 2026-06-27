@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/brijorn/mast/internal/transport"
@@ -47,7 +48,16 @@ func (n *Node) ApplyNodeUpdate(ctx context.Context, nodeID string, opts update.A
 		return nil, errors.New("node id required")
 	}
 	if nodeID == n.ID {
-		return n.applyLocalUpdate(ctx, opts)
+		result, err := n.applyLocalUpdate(ctx, opts)
+		if err != nil {
+			return nil, err
+		}
+		if opts.Restart && result != nil && result.Updated {
+			if err := n.ScheduleRestart(restartDelay); err != nil {
+				return nil, err
+			}
+		}
+		return result, nil
 	}
 
 	payload := transport.UpdateApplyOptionsPayload{Force: opts.Force, Restart: opts.Restart}
@@ -90,11 +100,6 @@ func (n *Node) applyLocalUpdate(ctx context.Context, opts update.ApplyOptions) (
 	if err != nil {
 		return nil, err
 	}
-	if opts.Restart && result.Updated {
-		if err := n.ScheduleRestart(restartDelay); err != nil {
-			return nil, err
-		}
-	}
 	return result, nil
 }
 
@@ -121,6 +126,11 @@ func (n *Node) handleUpdateApplyRequest(peer *PeerConn, req transport.UpdateAppl
 	}
 
 	n.writePeerResponse(peer, transport.TypeUpdateApplyResponse, req.RawMessage, payload)
+	if err == nil && opts.Restart && result != nil && result.Updated {
+		if err := n.ScheduleRestart(restartDelay); err != nil {
+			log.Println("schedule restart:", err)
+		}
+	}
 }
 
 func (n *Node) writePeerResponse(peer *PeerConn, messageType string, req transport.RawMessage, payload any) {

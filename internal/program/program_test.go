@@ -53,6 +53,7 @@ printf '\nSERIAL=%s\n' "$ANDROID_SERIAL"
 printf 'SOCKET=%s\n' "$ADB_SERVER_SOCKET"
 printf 'ADB_HOST=%s\n' "$ANDROID_ADB_SERVER_ADDRESS"
 printf 'ADB_PORT=%s\n' "$ANDROID_ADB_SERVER_PORT"
+printf 'ARGS=%s\n' "$*"
 `
 	if err := os.WriteFile(filepath.Join(source, "run.sh"), []byte(script), 0700); err != nil {
 		t.Fatal(err)
@@ -72,9 +73,10 @@ printf 'ADB_PORT=%s\n' "$ANDROID_ADB_SERVER_PORT"
 	}
 
 	registered, err := store.Register(RegisterOptions{
-		Path:  source,
-		Name:  "test runner",
-		Entry: Entry{Command: "/bin/sh", Args: []string{"run.sh"}},
+		Path:       source,
+		Name:       "test runner",
+		ConfigFile: "config.ini",
+		Entry:      Entry{Command: "/bin/sh", Args: []string{"run.sh", "--license", "{{license_key}}"}},
 		ConfigMappings: []ConfigMapping{
 			{Section: "Settings", Key: "DEVICE_ID", Value: "{{phone.serial}}"},
 			{Section: "Settings", Key: "RESOLUTION", Value: "{{resolution}}"},
@@ -117,6 +119,7 @@ printf 'ADB_PORT=%s\n' "$ANDROID_ADB_SERVER_PORT"
 		"SOCKET=tcp:10.0.0.4:5038",
 		"ADB_HOST=10.0.0.4",
 		"ADB_PORT=5038",
+		"ARGS=--license abc-123",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout missing %q:\n%s", want, stdout)

@@ -80,11 +80,6 @@ func (s *Server) UploadProgram(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid config_mappings: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-	} else if iniStr := r.FormValue("ini_values"); iniStr != "" {
-		if err := json.Unmarshal([]byte(iniStr), &configMappings); err != nil {
-			http.Error(w, "invalid ini_values: "+err.Error(), http.StatusBadRequest)
-			return
-		}
 	}
 
 	fileHeaders := r.MultipartForm.File["files"]
@@ -119,7 +114,6 @@ func (s *Server) UploadProgram(w http.ResponseWriter, r *http.Request) {
 		Name:           name,
 		ConfigFile:     configFile,
 		ConfigMappings: configMappings,
-		INIValues:      configMappings,
 		Entry:          entry,
 		Files:          uploadFiles,
 	})

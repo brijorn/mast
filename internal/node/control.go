@@ -76,7 +76,7 @@ func (n *Node) tapLocal(serial string, x int, y int) error {
 	return nil
 }
 
-func (n *Node) pressKeyLocal(serial string, keycode uint32) error {
+func (n *Node) pressKeyLocal(serial string, keycode uint32, metaState uint32) error {
 	session, err := n.GetStream(serial)
 	if err != nil {
 		return err
@@ -86,21 +86,22 @@ func (n *Node) pressKeyLocal(serial string, keycode uint32) error {
 		return errors.New("stream control connection not available")
 	}
 
-	return scrcpy.PressKey(session.controlConn, keycode)
+	return scrcpy.PressKey(session.controlConn, keycode, metaState)
 }
-func (n *Node) PressKey(serial string, keycode uint32) error {
+func (n *Node) PressKey(serial string, keycode uint32, metaState uint32) error {
 	device, err := n.deviceBySerial(serial)
 	if err != nil {
 		return err
 	}
 
 	if device.NodeID == n.ID {
-		return n.pressKeyLocal(serial, keycode)
+		return n.pressKeyLocal(serial, keycode, metaState)
 	}
 
 	payload := transport.PressKeyRequestPayload{
-		Serial:  serial,
-		Keycode: keycode,
+		Serial:    serial,
+		Keycode:   keycode,
+		MetaState: metaState,
 	}
 
 	return n.sendPeerRequest(device.NodeID, transport.TypePressKeyRequest, payload)

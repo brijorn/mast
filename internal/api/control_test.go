@@ -171,7 +171,7 @@ func (b *controlBackend) Swipe(serial string, startX, startY, endX, endY int) er
 	return b.err
 }
 
-func (b *controlBackend) PressKey(serial string, keycode uint32) error {
+func (b *controlBackend) PressKey(serial string, keycode uint32, metaState uint32) error {
 	b.keySerial = serial
 	b.keycode = keycode
 	return b.err

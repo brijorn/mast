@@ -22,7 +22,7 @@ type nodeBackend interface {
 	Touch(serial string, action string, x, y int) error
 	Tap(serial string, x, y int) error
 	Swipe(serial string, startX, startY, endX, endY int) error
-	PressKey(serial string, keycode uint32) error
+	PressKey(serial string, keycode uint32, metaState uint32) error
 }
 
 type restartBackend interface {

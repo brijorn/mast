@@ -160,8 +160,9 @@ type PressKeyRequest struct {
 }
 
 type PressKeyRequestPayload struct {
-	Serial  string `json:"serial"`
-	Keycode uint32 `json:"keycode"`
+	Serial    string `json:"serial"`
+	Keycode   uint32 `json:"keycode"`
+	MetaState uint32 `json:"meta_state,omitempty"`
 }
 
 type UpdateCheckRequest struct {

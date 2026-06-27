@@ -75,7 +75,7 @@ printf 'ADB_PORT=%s\n' "$ANDROID_ADB_SERVER_PORT"
 		Path:  source,
 		Name:  "test runner",
 		Entry: Entry{Command: "/bin/sh", Args: []string{"run.sh"}},
-		INIValues: []INIValue{
+		ConfigMappings: []ConfigMapping{
 			{Section: "Settings", Key: "DEVICE_ID", Value: "{{phone.serial}}"},
 			{Section: "Settings", Key: "RESOLUTION", Value: "{{resolution}}"},
 			{Section: "LICENSE", Key: "LICENSE_KEY", Value: "{{license_key}}"},
@@ -177,5 +177,41 @@ func TestCustomRunners(t *testing.T) {
 		if len(args) != len(expectedArgs) || args[0] != "test.exe" || args[1] != "arg1" {
 			t.Errorf("expected fallback args to be %v, got %v", expectedArgs, args)
 		}
+	}
+}
+
+func TestApplyConfigReplacements(t *testing.T) {
+	tmp, err := os.CreateTemp("", "test-config-replace-*.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmp.Name())
+
+	content := `LICENSE = "{{license_key}}"`
+	if err := os.WriteFile(tmp.Name(), []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	mappings := []ConfigMapping{
+		{Value: "{{license_key}}"},
+	}
+	variables := map[string]string{
+		"license_key": "my-license-123",
+	}
+	device := node.DeviceInfo{Serial: "device-123"}
+
+	err = applyConfigReplacements(tmp.Name(), mappings, variables, device)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(tmp.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(data)
+	want := `LICENSE = "my-license-123"`
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }

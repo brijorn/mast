@@ -32,19 +32,28 @@ type Entry struct {
 	Args    []string `json:"args,omitempty"`
 }
 
-type INIValue struct {
-	Section string `json:"section"`
-	Key     string `json:"key"`
+type ConfigMapping struct {
+	Section string `json:"section,omitempty"`
+	Key     string `json:"key,omitempty"`
 	Value   string `json:"value"`
 }
 
 type Program struct {
-	ID        string     `json:"id"`
-	Slug      string     `json:"slug,omitempty"`
-	Name      string     `json:"name"`
-	Entry     Entry      `json:"entry"`
-	INIValues []INIValue `json:"ini_values,omitempty"`
-	CreatedAt time.Time  `json:"created_at"`
+	ID             string          `json:"id"`
+	Slug           string          `json:"slug,omitempty"`
+	Name           string          `json:"name"`
+	ConfigFile     string          `json:"config_file,omitempty"`
+	ConfigMappings []ConfigMapping `json:"config_mappings,omitempty"`
+	INIValues      []ConfigMapping `json:"ini_values,omitempty"` // For backward compatibility
+	Entry          Entry           `json:"entry"`
+	CreatedAt      time.Time       `json:"created_at"`
+}
+
+func (p Program) Mappings() []ConfigMapping {
+	if len(p.ConfigMappings) > 0 {
+		return p.ConfigMappings
+	}
+	return p.INIValues
 }
 
 type Run struct {
@@ -68,10 +77,19 @@ type Run struct {
 }
 
 type RegisterOptions struct {
-	Path      string     `json:"path"`
-	Name      string     `json:"name,omitempty"`
-	Entry     Entry      `json:"entry"`
-	INIValues []INIValue `json:"ini_values,omitempty"`
+	Path           string          `json:"path"`
+	Name           string          `json:"name,omitempty"`
+	ConfigFile     string          `json:"config_file,omitempty"`
+	ConfigMappings []ConfigMapping `json:"config_mappings,omitempty"`
+	INIValues      []ConfigMapping `json:"ini_values,omitempty"` // For backward compatibility
+	Entry          Entry           `json:"entry"`
+}
+
+func (o RegisterOptions) Mappings() []ConfigMapping {
+	if len(o.ConfigMappings) > 0 {
+		return o.ConfigMappings
+	}
+	return o.INIValues
 }
 
 // UploadFile is a single file within a directory upload.
@@ -83,10 +101,19 @@ type UploadFile struct {
 
 // RegisterUploadOptions describes a program bundle uploaded as individual files.
 type RegisterUploadOptions struct {
-	Name      string
-	Entry     Entry
-	INIValues []INIValue
-	Files     []UploadFile
+	Name           string
+	ConfigFile     string
+	ConfigMappings []ConfigMapping
+	INIValues      []ConfigMapping // For backward compatibility
+	Entry          Entry
+	Files          []UploadFile
+}
+
+func (o RegisterUploadOptions) Mappings() []ConfigMapping {
+	if len(o.ConfigMappings) > 0 {
+		return o.ConfigMappings
+	}
+	return o.INIValues
 }
 
 type StartOptions struct {
@@ -180,12 +207,14 @@ func (s *Store) Register(opts RegisterOptions) (*Program, error) {
 	slug := toSlug(name)
 
 	program := Program{
-		ID:        id,
-		Slug:      slug,
-		Name:      name,
-		Entry:     opts.Entry,
-		INIValues: opts.INIValues,
-		CreatedAt: time.Now().UTC(),
+		ID:             id,
+		Slug:           slug,
+		Name:           name,
+		ConfigFile:     opts.ConfigFile,
+		ConfigMappings: opts.ConfigMappings,
+		INIValues:      opts.INIValues,
+		Entry:          opts.Entry,
+		CreatedAt:      time.Now().UTC(),
 	}
 
 	bundlePath := s.bundlePath(id)
@@ -282,12 +311,14 @@ func (s *Store) RegisterUpload(opts RegisterUploadOptions) (*Program, error) {
 	}
 	slug := toSlug(name)
 	program := Program{
-		ID:        id,
-		Slug:      slug,
-		Name:      name,
-		Entry:     opts.Entry,
-		INIValues: opts.INIValues,
-		CreatedAt: time.Now().UTC(),
+		ID:             id,
+		Slug:           slug,
+		Name:           name,
+		ConfigFile:     opts.ConfigFile,
+		ConfigMappings: opts.ConfigMappings,
+		INIValues:      opts.INIValues,
+		Entry:          opts.Entry,
+		CreatedAt:      time.Now().UTC(),
 	}
 
 	bundlePath := s.bundlePath(id)
@@ -493,7 +524,11 @@ func (s *Store) startOne(p Program, device node.DeviceInfo, nodes []node.NodeInf
 	if err := copyDir(s.bundlePath(p.ID), workspace); err != nil {
 		return nil, err
 	}
-	if err := applyINIValues(filepath.Join(workspace, "config.ini"), p.INIValues, variables, device); err != nil {
+	configFile := p.ConfigFile
+	if configFile == "" {
+		configFile = "config.ini"
+	}
+	if err := applyConfigReplacements(filepath.Join(workspace, configFile), p.Mappings(), variables, device); err != nil {
 		return nil, err
 	}
 
@@ -823,7 +858,7 @@ func mergeEnv(base []string, overlay map[string]string) []string {
 	return env
 }
 
-func applyINIValues(path string, values []INIValue, variables map[string]string, device node.DeviceInfo) error {
+func applyConfigReplacements(path string, values []ConfigMapping, variables map[string]string, device node.DeviceInfo) error {
 	if len(values) == 0 {
 		return nil
 	}
@@ -831,11 +866,25 @@ func applyINIValues(path string, values []INIValue, variables map[string]string,
 	if err != nil {
 		return err
 	}
-	rendered := renderINIValues(string(data), values, variables, device)
-	return os.WriteFile(path, []byte(rendered), 0600)
+	content := string(data)
+
+	// 1. Global placeholder replace (e.g., replacing "{{license_key}}" inside config.py)
+	for _, val := range values {
+		if strings.HasPrefix(val.Value, "{{") && strings.HasSuffix(val.Value, "}}") {
+			resolved := resolveValue(val.Value, variables, device)
+			content = strings.ReplaceAll(content, val.Value, resolved)
+		}
+	}
+
+	// 2. Structured INI replacement (fallback for traditional .ini config files)
+	if filepath.Ext(path) == ".ini" {
+		content = renderINIValues(content, values, variables, device)
+	}
+
+	return os.WriteFile(path, []byte(content), 0600)
 }
 
-func renderINIValues(input string, values []INIValue, variables map[string]string, device node.DeviceInfo) string {
+func renderINIValues(input string, values []ConfigMapping, variables map[string]string, device node.DeviceInfo) string {
 	type sectionKey struct {
 		section string
 		key     string

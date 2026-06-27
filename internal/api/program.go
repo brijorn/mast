@@ -64,6 +64,7 @@ func (s *Server) UploadProgram(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name := r.FormValue("name")
+	configFile := r.FormValue("config_file")
 
 	var entry program.Entry
 	if entryStr := r.FormValue("entry"); entryStr != "" {
@@ -73,9 +74,14 @@ func (s *Server) UploadProgram(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var iniValues []program.INIValue
-	if iniStr := r.FormValue("ini_values"); iniStr != "" {
-		if err := json.Unmarshal([]byte(iniStr), &iniValues); err != nil {
+	var configMappings []program.ConfigMapping
+	if mappingsStr := r.FormValue("config_mappings"); mappingsStr != "" {
+		if err := json.Unmarshal([]byte(mappingsStr), &configMappings); err != nil {
+			http.Error(w, "invalid config_mappings: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+	} else if iniStr := r.FormValue("ini_values"); iniStr != "" {
+		if err := json.Unmarshal([]byte(iniStr), &configMappings); err != nil {
 			http.Error(w, "invalid ini_values: "+err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -110,10 +116,12 @@ func (s *Server) UploadProgram(w http.ResponseWriter, r *http.Request) {
 	}
 
 	registered, err := s.programs.RegisterUpload(program.RegisterUploadOptions{
-		Name:      name,
-		Entry:     entry,
-		INIValues: iniValues,
-		Files:     uploadFiles,
+		Name:           name,
+		ConfigFile:     configFile,
+		ConfigMappings: configMappings,
+		INIValues:      configMappings,
+		Entry:          entry,
+		Files:          uploadFiles,
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)

@@ -393,7 +393,6 @@ func TestStreamOptionsFormat(t *testing.T) {
 		"audio=false",
 		"control=false",
 		"stay_awake=true",
-		"video_codec_options=i-frame-interval=2",
 		"video_bit_rate=8000000",
 		"max_size=1080",
 	}
@@ -473,7 +472,6 @@ func TestStartStreamSetsUpLocalDeviceStream(t *testing.T) {
 				"audio=false",
 				"control=false",
 				"stay_awake=true",
-				"video_codec_options=i-frame-interval=2",
 				"video_bit_rate=8000000",
 				"max_size=1080",
 			},

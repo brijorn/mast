@@ -24,12 +24,12 @@ func waitFor(t *testing.T, timeout time.Duration, condition func() bool) {
 
 func createNodePair(t *testing.T) (*Node, *Node) {
 	t.Helper()
-	nodeA, err := NewNode("a", ":0", "", false)
+	nodeA, err := NewNode("a", ":0", "", false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	nodeB, err := NewNode("b", ":0", "", false)
+	nodeB, err := NewNode("b", ":0", "", false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestNodeReconect(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	nodeB2, err := NewNode("b", ":"+port, "", false)
+	nodeB2, err := NewNode("b", ":"+port, "", false, false)
 	if err != nil {
 		t.Fatal(err)
 	}

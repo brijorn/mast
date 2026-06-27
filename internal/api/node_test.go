@@ -16,6 +16,7 @@ func TestListNodesReturnsNodeInventory(t *testing.T) {
 				ID:             "local-node",
 				Local:          true,
 				AndroidEnabled: true,
+				ProxyEnabled:   true,
 				Version:        "0.2.0",
 				Commit:         "abc123",
 				BuildDate:      "2026-06-25T17:00:00Z",
@@ -25,6 +26,7 @@ func TestListNodesReturnsNodeInventory(t *testing.T) {
 				Addr:           "100.64.0.2",
 				Local:          false,
 				AndroidEnabled: false,
+				ProxyEnabled:   true,
 				Version:        "0.1.0",
 				Commit:         "def456",
 				BuildDate:      "2026-06-24T17:00:00Z",
@@ -53,7 +55,7 @@ func TestListNodesReturnsNodeInventory(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("len(response) = %d, want 2", len(got))
 	}
-	if got[1].ID != "remote-node" || got[1].Version != "0.1.0" {
+	if got[1].ID != "remote-node" || got[1].Version != "0.1.0" || !got[1].ProxyEnabled {
 		t.Fatalf("remote node = %+v", got[1])
 	}
 }

@@ -37,6 +37,8 @@ type fakeADB struct {
 	errors           map[string]error
 	shellOutputs     map[string][]byte
 	shellErrors      map[string]error
+	execOutOutputs   map[string][]byte
+	execOutErrors    map[string]error
 	calls            []string
 	pushCalls        []pushCall
 	reverseCalls     []reverseCall
@@ -92,6 +94,18 @@ func (a *fakeADB) Shell(host string, serial string, arg ...string) ([]byte, erro
 		return nil, err
 	}
 	return a.shellOutputs[serial], nil
+}
+
+func (a *fakeADB) ExecOut(host string, serial string, arg ...string) ([]byte, error) {
+	a.shellOutputCalls = append(a.shellOutputCalls, shellCall{
+		Host:   host,
+		Serial: serial,
+		Args:   append([]string(nil), append([]string{"exec-out"}, arg...)...),
+	})
+	if err := a.execOutErrors[serial]; err != nil {
+		return nil, err
+	}
+	return a.execOutOutputs[serial], nil
 }
 
 func writeFakeScrcpyVideoMetadata(port int) {
@@ -174,6 +188,92 @@ func TestParseBatteryLevelReturnsNilForUnknownOutput(t *testing.T) {
 	}
 }
 
+func TestParseBatterySnapshotCharging(t *testing.T) {
+	got, err := parseBatterySnapshot("Current Battery Service state:\n  AC powered: false\n  USB powered: true\n  Wireless powered: false\n  Dock powered: false\n  status: 2\n  level: 87\n  current now: 120\n")
+	if err != nil {
+		t.Fatalf("parseBatterySnapshot returned error: %v", err)
+	}
+	if got.BatteryPercent == nil || *got.BatteryPercent != 87 {
+		t.Fatalf("battery percent = %v, want 87", got.BatteryPercent)
+	}
+	if got.PowerConnected == nil || !*got.PowerConnected {
+		t.Fatalf("power connected = %v, want true", got.PowerConnected)
+	}
+	if got.PowerSource != "usb" || got.BatteryStatus != "charging" || got.PowerHealth != "charging" {
+		t.Fatalf("snapshot = %+v, want usb charging", got)
+	}
+}
+
+func TestParseBatterySnapshotUSBPoweredButCurrentDraining(t *testing.T) {
+	got, err := parseBatterySnapshot("Current Battery Service state:\n  AC powered: false\n  USB powered: true\n  Wireless powered: false\n  Dock powered: false\n  status: 2\n  level: 53\n  current now: -479\n")
+	if err != nil {
+		t.Fatalf("parseBatterySnapshot returned error: %v", err)
+	}
+	if got.PowerHealth != "plugged_draining" {
+		t.Fatalf("PowerHealth = %q, want plugged_draining", got.PowerHealth)
+	}
+}
+
+func TestParseBatterySnapshotSamsungHistoryShowsPluggedDraining(t *testing.T) {
+	got, err := parseBatterySnapshot(`Current Battery Service state:
+  AC powered: false
+  USB powered: true
+  Wireless powered: false
+  Dock powered: false
+  status: 2
+  level: 53
+  current now: 115
+[BattActionChangedLogBuffer]
+06-27 04:18:12.894  Sending ACTION_BATTERY_CHANGED: level:69, status:2, health:2, ac:false, usb:true, wireless:false, pogo:false, current_avg:-180
+06-27 12:37:24.271  Sending ACTION_BATTERY_CHANGED: level:53, status:2, health:2, ac:false, usb:true, wireless:false, pogo:false, current_avg:-183
+`)
+	if err != nil {
+		t.Fatalf("parseBatterySnapshot returned error: %v", err)
+	}
+	if got.BatteryTrendPercentPerHour == nil || *got.BatteryTrendPercentPerHour >= -1.8 {
+		t.Fatalf("BatteryTrendPercentPerHour = %v, want strong negative trend", got.BatteryTrendPercentPerHour)
+	}
+	if got.BatteryCurrentAvg == nil || *got.BatteryCurrentAvg != -183 {
+		t.Fatalf("BatteryCurrentAvg = %v, want -183", got.BatteryCurrentAvg)
+	}
+	if got.PowerHealth != "plugged_draining" {
+		t.Fatalf("PowerHealth = %q, want plugged_draining", got.PowerHealth)
+	}
+}
+
+func TestParseBatterySnapshotUnpluggedDischarging(t *testing.T) {
+	got, err := parseBatterySnapshot("Current Battery Service state:\n  AC powered: false\n  USB powered: false\n  Wireless powered: false\n  Dock powered: false\n  status: 3\n  level: 42\n")
+	if err != nil {
+		t.Fatalf("parseBatterySnapshot returned error: %v", err)
+	}
+	if got.PowerConnected == nil || *got.PowerConnected {
+		t.Fatalf("power connected = %v, want false", got.PowerConnected)
+	}
+	if got.PowerSource != "none" || got.PowerHealth != "unplugged_draining" {
+		t.Fatalf("snapshot = %+v, want unplugged draining", got)
+	}
+}
+
+func TestParseBatterySnapshotFull(t *testing.T) {
+	got, err := parseBatterySnapshot("Current Battery Service state:\n  AC powered: true\n  USB powered: false\n  Wireless powered: false\n  Dock powered: false\n  status: 5\n  level: 100\n")
+	if err != nil {
+		t.Fatalf("parseBatterySnapshot returned error: %v", err)
+	}
+	if got.PowerSource != "ac" || got.BatteryStatus != "full" || got.PowerHealth != "full" {
+		t.Fatalf("snapshot = %+v, want ac full", got)
+	}
+}
+
+func TestParseBatterySnapshotUnknownOutput(t *testing.T) {
+	got, err := parseBatterySnapshot("not battery output")
+	if err != nil {
+		t.Fatalf("parseBatterySnapshot returned error: %v", err)
+	}
+	if got != (batterySnapshot{}) {
+		t.Fatalf("snapshot = %+v, want empty", got)
+	}
+}
+
 func TestListDevicesIncludesLocalDevices(t *testing.T) {
 	localADBOutput := []byte("List of devices attached\nlocal-123\tdevice\n")
 	fake := &fakeADB{
@@ -208,12 +308,13 @@ func TestListDevicesIncludesLocalDevices(t *testing.T) {
 func TestListDevicesIncludesLocalBattery(t *testing.T) {
 	localADBOutput := []byte("List of devices attached\nlocal-123\tdevice\n")
 	battery := 64
+	powerConnected := true
 	fake := &fakeADB{
 		outputs: map[string][]byte{
 			"": localADBOutput,
 		},
 		shellOutputs: map[string][]byte{
-			"local-123": []byte("Current Battery Service state:\n  level: 64\n"),
+			"local-123": []byte("Current Battery Service state:\n  USB powered: true\n  status: 2\n  level: 64\n"),
 		},
 	}
 	node := &Node{
@@ -228,7 +329,16 @@ func TestListDevicesIncludesLocalBattery(t *testing.T) {
 	}
 
 	expected := []DeviceInfo{
-		{Serial: "local-123", State: "device", BatteryPercent: &battery, NodeID: "local-node"},
+		{
+			Serial:         "local-123",
+			State:          "device",
+			BatteryPercent: &battery,
+			PowerConnected: &powerConnected,
+			PowerSource:    "usb",
+			BatteryStatus:  "charging",
+			PowerHealth:    "charging",
+			NodeID:         "local-node",
+		},
 	}
 	if diff := cmp.Diff(expected, got); diff != "" {
 		t.Fatalf("devices mismatch (-want +got):\n%s", diff)
@@ -239,6 +349,52 @@ func TestListDevicesIncludesLocalBattery(t *testing.T) {
 	}
 	if diff := cmp.Diff(expectedShellCalls, fake.shellOutputCalls); diff != "" {
 		t.Fatalf("shell calls mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestListDevicesUsesCachedBatteryWhenBatteryFails(t *testing.T) {
+	localADBOutput := []byte("List of devices attached\nlocal-123\tdevice\n")
+	battery := 64
+	powerConnected := true
+	fake := &fakeADB{
+		outputs: map[string][]byte{
+			"": localADBOutput,
+		},
+		shellOutputs: map[string][]byte{
+			"local-123": []byte("Current Battery Service state:\n  USB powered: true\n  status: 2\n  level: 64\n"),
+		},
+	}
+	node := &Node{
+		ID:    "local-node",
+		Peers: map[string]*PeerConn{},
+		adb:   fake,
+	}
+
+	if _, err := node.ListDevices(); err != nil {
+		t.Fatalf("first ListDevices returned error: %v", err)
+	}
+	fake.shellOutputs = nil
+	fake.shellErrors = map[string]error{"local-123": errors.New("battery failed")}
+
+	got, err := node.ListDevices()
+	if err != nil {
+		t.Fatalf("second ListDevices returned error: %v", err)
+	}
+
+	expected := []DeviceInfo{
+		{
+			Serial:         "local-123",
+			State:          "device",
+			BatteryPercent: &battery,
+			PowerConnected: &powerConnected,
+			PowerSource:    "usb",
+			BatteryStatus:  "charging",
+			PowerHealth:    "charging",
+			NodeID:         "local-node",
+		},
+	}
+	if diff := cmp.Diff(expected, got); diff != "" {
+		t.Fatalf("devices mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -479,5 +635,74 @@ func TestStartStreamSetsUpLocalDeviceStream(t *testing.T) {
 	}
 	if diff := cmp.Diff(expectedShellCalls, fake.shellCalls); diff != "" {
 		t.Fatalf("shell calls mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestScreenshotLocalUsesExecOut(t *testing.T) {
+	node := newControlTestNode("node-a", "local-123")
+	fake := &fakeADB{
+		outputs: map[string][]byte{
+			"": []byte("List of devices attached\nlocal-123\tdevice\n"),
+		},
+		execOutOutputs: map[string][]byte{
+			"local-123": []byte("png-bytes"),
+		},
+	}
+	node.adb = fake
+
+	got, err := node.Screenshot("local-123")
+	if err != nil {
+		t.Fatalf("Screenshot returned error: %v", err)
+	}
+	if string(got) != "png-bytes" {
+		t.Fatalf("screenshot = %q, want png-bytes", got)
+	}
+	if len(fake.shellOutputCalls) == 0 {
+		t.Fatal("ExecOut was not called")
+	}
+	call := fake.shellOutputCalls[len(fake.shellOutputCalls)-1]
+	if call.Serial != "local-123" || strings.Join(call.Args, " ") != "exec-out screencap -p" {
+		t.Fatalf("exec-out call = %+v", call)
+	}
+}
+
+func TestScreenshotRemoteRoutesToPeerOwner(t *testing.T) {
+	nodeA, nodeB := createNodePair(t)
+	defer func() { _ = nodeA.Close() }()
+	defer func() { _ = nodeB.Close() }()
+
+	nodeA.adb = &fakeADB{
+		outputs: map[string][]byte{
+			"": []byte("List of devices attached\n"),
+		},
+	}
+	nodeB.adb = &fakeADB{
+		outputs: map[string][]byte{
+			"": []byte("List of devices attached\nremote-123\tdevice\n"),
+		},
+		shellOutputs: map[string][]byte{
+			"remote-123": []byte("level: 80"),
+		},
+		execOutOutputs: map[string][]byte{
+			"remote-123": []byte("peer-png"),
+		},
+	}
+	nodeB.AndroidEnabled = true
+	connectNodePair(t, nodeA, nodeB)
+
+	got, err := nodeA.Screenshot("remote-123")
+	if err != nil {
+		t.Fatalf("Screenshot returned error: %v", err)
+	}
+	if string(got) != "peer-png" {
+		t.Fatalf("screenshot = %q, want peer-png", got)
+	}
+	fake := nodeB.adb.(*fakeADB)
+	if len(fake.shellOutputCalls) == 0 {
+		t.Fatal("peer ExecOut was not called")
+	}
+	call := fake.shellOutputCalls[len(fake.shellOutputCalls)-1]
+	if call.Serial != "remote-123" || strings.Join(call.Args, " ") != "exec-out screencap -p" {
+		t.Fatalf("peer exec-out call = %+v", call)
 	}
 }

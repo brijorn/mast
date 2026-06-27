@@ -36,6 +36,7 @@ Returns the local Mast node and all connected peer nodes known to it.
     "id": "node-a",
     "local": true,
     "android_enabled": true,
+    "proxy_enabled": true,
     "version": "0.1.0",
     "commit": "abc123",
     "build_date": "2026-06-25T17:00:00Z"
@@ -45,12 +46,88 @@ Returns the local Mast node and all connected peer nodes known to it.
     "addr": "100.64.0.2",
     "local": false,
     "android_enabled": false,
+    "proxy_enabled": false,
     "version": "0.1.0",
     "commit": "def456",
     "build_date": "2026-06-25T17:00:00Z"
   }
 ]
 ```
+
+## Get Node Config
+
+```http
+GET /api/nodes/{id}/config
+```
+
+Returns the selected local or peer node's persisted runtime config.
+
+```json
+{
+  "bind_addr": ":6270",
+  "proxy_addr": ":6272",
+  "api_addr": ":6271",
+  "advertise_host": "127.0.0.1",
+  "adb_port": 5037,
+  "programs_dir": "/home/user/.mast/programs",
+  "android_enabled": true,
+  "proxy_enabled": false,
+  "runners": {
+    ".py": "python3"
+  }
+}
+```
+
+## Update Node Config
+
+```http
+PUT /api/nodes/{id}/config
+```
+
+Updates the selected local or peer node's config, applies fields that can change
+during the current run, and saves `config.json` for future runs. The request may
+wrap values in `values` or send config keys directly. Runner entries can be sent
+as a `runners` object or as `runners.<extension>` keys.
+
+```json
+{
+  "values": {
+    "android_enabled": true,
+    "adb_port": 5038,
+    "api_addr": ":7001",
+    "runners": {
+      ".py": "python3"
+    }
+  }
+}
+```
+
+Response body:
+
+```json
+{
+  "config": {
+    "bind_addr": ":6270",
+    "proxy_addr": ":6272",
+    "api_addr": ":7001",
+    "advertise_host": "127.0.0.1",
+    "adb_port": 5038,
+    "programs_dir": "/home/user/.mast/programs",
+    "android_enabled": true,
+    "proxy_enabled": false,
+    "runners": {
+      ".py": "python3"
+    }
+  },
+  "changed_keys": ["adb_port", "android_enabled", "api_addr", "runners..py"],
+  "restart_required": true,
+  "restart_required_keys": ["api_addr"]
+}
+```
+
+Listener and directory fields such as `bind_addr`, `api_addr`, `proxy_addr`, and
+`programs_dir` are persisted immediately but require a restart to fully take
+effect.
 
 ## Add Peer
 

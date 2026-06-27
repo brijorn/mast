@@ -17,31 +17,6 @@ type runLogsResponse struct {
 	Stderr string `json:"stderr"`
 }
 
-func (s *Server) RegisterProgram(w http.ResponseWriter, r *http.Request) {
-	if s.programs == nil {
-		http.Error(w, "program runner not configured", http.StatusServiceUnavailable)
-		return
-	}
-
-	var req program.RegisterOptions
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	registered, err := s.programs.Register(req)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	if err := json.NewEncoder(w).Encode(registered); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
-}
-
 // UploadProgram handles POST /api/programs/upload.
 // It accepts a multipart/form-data body with the following fields:
 //
@@ -196,6 +171,30 @@ func (s *Server) StopRun(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// ResumeRun handles POST /api/runs/{id}/resume.
+// It re-executes a stopped, failed, exited, or lost run in its existing workspace.
+func (s *Server) ResumeRun(w http.ResponseWriter, r *http.Request) {
+	if s.programs == nil {
+		http.Error(w, "program runner not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	run, err := s.programs.Resume(r.PathValue("id"))
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			http.Error(w, err.Error(), http.StatusNotFound)
+		} else {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		}
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(run); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
 // CleanupRun handles POST /api/runs/{id}/cleanup.
 // It removes the workspace directory of a completed or failed run.
 func (s *Server) CleanupRun(w http.ResponseWriter, r *http.Request) {
@@ -234,6 +233,33 @@ func (s *Server) RunLogs(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(runLogsResponse{Stdout: stdout, Stderr: stderr}); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func (s *Server) UpdateProgram(w http.ResponseWriter, r *http.Request) {
+	if s.programs == nil {
+		http.Error(w, "program runner not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	id := r.PathValue("id")
+	var req struct {
+		ConfigMappings []program.ConfigMapping `json:"config_mappings"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	updated, err := s.programs.UpdateProgram(id, req.ConfigMappings)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(updated); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }

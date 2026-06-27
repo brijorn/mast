@@ -16,7 +16,6 @@ type PeerConn struct {
 	mu             sync.Mutex
 	AndroidEnabled bool
 	Addr           string
-	ADBHost        string
 	ADBPort        int
 	Version        string
 	Commit         string
@@ -41,7 +40,6 @@ type Node struct {
 	cancel         context.CancelFunc
 	PingInterval   time.Duration
 	AndroidEnabled bool
-	ADBHost        string
 	ADBPort        int
 	adb            adbRunner
 	updateChecker  update.UpdateChecker
@@ -70,7 +68,6 @@ func NewNode(id string, addr string, advertiseHost string, androidEnabled bool) 
 		streams:        make(map[string]*streamEntry),
 		PingInterval:   30 * time.Second,
 		AndroidEnabled: androidEnabled,
-		ADBHost:        "127.0.0.1",
 		ADBPort:        5037,
 		adb:            realADB{},
 		updateChecker:  updateChecker,

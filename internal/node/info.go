@@ -7,7 +7,6 @@ type NodeInfo struct {
 	Addr           string `json:"addr,omitempty"`
 	Local          bool   `json:"local"`
 	AndroidEnabled bool   `json:"android_enabled"`
-	ADBHost        string `json:"adb_host,omitempty"`
 	ADBPort        int    `json:"adb_port,omitempty"`
 	Version        string `json:"version"`
 	Commit         string `json:"commit"`
@@ -21,7 +20,6 @@ func (n *Node) ListNodes() []NodeInfo {
 			Addr:           n.AdvertiseHost,
 			Local:          true,
 			AndroidEnabled: n.AndroidEnabled,
-			ADBHost:        n.ADBHost,
 			ADBPort:        n.ADBPort,
 			Version:        version.Version,
 			Commit:         version.Commit,
@@ -37,7 +35,6 @@ func (n *Node) ListNodes() []NodeInfo {
 			Addr:           peer.Addr,
 			Local:          false,
 			AndroidEnabled: peer.AndroidEnabled,
-			ADBHost:        peer.ADBHost,
 			ADBPort:        peer.ADBPort,
 			Version:        peer.Version,
 			Commit:         peer.Commit,

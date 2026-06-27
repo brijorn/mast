@@ -105,7 +105,6 @@ type Config struct {
 	ProxyAddr      string            `json:"proxy_addr"`
 	APIAddr        string            `json:"api_addr"`
 	AdvertiseHost  string            `json:"advertise_host"`
-	ADBHost        string            `json:"adb_host"`
 	ADBPort        int               `json:"adb_port"`
 	ProgramsDir    string            `json:"programs_dir"`
 	AndroidEnabled bool              `json:"android_enabled"`
@@ -139,8 +138,7 @@ func (c *Config) Set(key string, value string) error {
 		c.APIAddr = value
 	case "advertise_host":
 		c.AdvertiseHost = value
-	case "adb_host":
-		c.ADBHost = value
+
 	case "adb_port":
 		parsed, err := strconv.Atoi(value)
 		if err != nil {
@@ -249,7 +247,6 @@ func DefaultConfig() Config {
 		ProxyAddr:      defaultProxyAddr,
 		APIAddr:        defaultAPIAddr,
 		AdvertiseHost:  "127.0.0.1",
-		ADBHost:        "127.0.0.1",
 		ADBPort:        5037,
 		ProgramsDir:    programsDir,
 		AndroidEnabled: false,

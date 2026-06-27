@@ -15,8 +15,7 @@ bundles and run instances.
 
 ```
 ~/.mast/programs/
-  registry.json           – index of all registered programs (one entry per bundle)
-  versions.json           – maps slug → current bundle ID
+  registry.json           – current program metadata, one entry per slug
   bundles/
     sha256-<hash>/        – one directory per registered bundle
       mast-program.json   – program metadata
@@ -48,27 +47,16 @@ Content-Type: multipart/form-data
 
 Response: `201 Created` with the `Program` JSON object.
 
-### Via API (path-based, legacy)
-
-```http
-POST /api/programs
-Content-Type: application/json
-{"path":"/absolute/server/path","entry":{"command":"run.sh"}}
-```
-
-This requires the program files to already exist on the server running Mast.
-
----
-
 ## Versioning
 
 Mast uses a **latest-only** versioning model:
 
 - Each program has a **slug** derived from its name.
-- Only one bundle is kept as "current" per slug in `versions.json`.
-- Re-uploading the same program name replaces the current bundle entry.
-- Old bundle directories become orphans (they are not deleted automatically
-  because a running instance may still be executing from them).
+- `registry.json` stores one current program entry per slug.
+- Re-uploading the same program name replaces the current bundle entry and
+  increments that program's `version`.
+- Replacing a bundle deletes the previous bundle directory. Existing runs keep
+  their own copied instance workspace.
 
 ### Starting a program by slug
 
@@ -82,11 +70,12 @@ bundle automatically:
 
 This always starts the latest uploaded version of `my-app`.
 
-### Detecting an update
+### Program versions
 
-`GET /api/runs` includes `"update_available": true` on any run whose bundle
-differs from the current bundle for that program's slug. This means a newer
-version of the program has been uploaded since this run started.
+`GET /api/programs` includes the current `version` for each program. Each run
+stores the `program_slug`, `program_version`, and content-hash `program_id`
+that it started with. Clients can compare run metadata with the current program
+metadata when they need to show update state.
 
 Running instances are never interrupted by an upload — they hold their own
 copy of the bundle files in their instance workspace.
@@ -101,9 +90,9 @@ cleanup at two levels.
 ### Automatic cleanup on new start
 
 When a new run is started for a device serial, Mast automatically removes the
-workspace directories of **all completed or failed** previous runs for that
-serial before creating the new instance. Runs that are still `running` or
-`starting` are never touched.
+workspace directories of previous `exited`, `failed`, or `stopped` runs for
+that serial before creating the new instance. Runs that are still `running`,
+`starting`, or `lost` are never touched.
 
 This policy reclaims disk naturally when a phone switches programs or re-runs
 the same program, without interfering with active 20–30 day sessions.
@@ -116,20 +105,34 @@ To free the workspace of a specific completed run immediately:
 POST /api/runs/{id}/cleanup
 ```
 
-Returns `400 Bad Request` if the run is still active. Returns the updated `Run`
-object with `"workspace_cleaned": true` on success.
+Returns `400 Bad Request` if the run is still active. Lost runs can be cleaned
+up only after Mast confirms the saved process is no longer alive. Returns the
+updated `Run` object with `"workspace_cleaned": true` on success.
+
+### Resume
+
+`POST /api/runs/{id}/resume` re-runs the saved command in the same instance
+workspace, preserving the same run ID and appending to the existing logs. Mast
+uses this for `exited`, `failed`, `stopped`, or `lost` runs. If a lost run's
+saved PID is still alive and still matches the saved command, Mast terminates
+that process tree before starting the replacement.
+
+When Mast restarts while a run is active, it restores that run as `lost` rather
+than `failed`, because Mast no longer knows whether the program itself failed.
 
 ---
 
-## Orphaned bundles
+## Replaced bundles
 
 When a program is re-uploaded, the old bundle directory (`bundles/<old-hash>/`)
-is no longer referenced by `versions.json` but is not automatically deleted
-because a running instance may still be using it. Once all runs that reference
-the old bundle have completed and had their instances cleaned up, the old bundle
-directory can be safely removed manually.
+is deleted after the new bundle is registered. Mast does not use symlinks for
+run instances; each run gets a full copy of the bundle files in its instance
+workspace. Existing runs do not need the replaced bundle directory to keep
+executing.
 
-A future `DELETE /api/programs/{id}` endpoint may automate this.
+Runs store the program slug and version in `run.json`, so clients can still
+compare a run with the current registry entry after the replaced bundle record
+is removed.
 
 ---
 
@@ -142,7 +145,10 @@ This configuration is stored in the local host's `~/.mast/config.json` configura
 ### Matching Order
 When looking up a runner for a program, Mast evaluates the following:
 1. **File extension**: Looks up the entrypoint command's file extension in the `runners` map (e.g., `.py` or `.exe`).
-2. **Fallback default**: If no runner matches and the file extension is `.exe` on a `linux` host, Mast defaults to using `winerun`.
+
+If a non-native executable such as `.exe` is started on a non-Windows host,
+Mast requires an explicit runner. Without one, the run fails before the process
+is started.
 
 ### Runner Formatting
 Runner commands can contain flags. When executing, the wrapper is split and any additional arguments are prepended before the target executable/file path.
@@ -155,3 +161,22 @@ If a program with entry command `test.py` and arguments `["arg1"]` is executed, 
 ```sh
 python3 -u test.py arg1
 ```
+
+---
+
+## Configuration Variables & Templates
+
+Programs can contain dynamic placeholders in their configuration files (like `.ini`, `.toml`, `.cfg`, `.conf`) or program arguments.
+
+### Template Placeholders
+Placeholders are defined using `{{placeholder}}` token notation.
+
+#### 1. Built-in Tokens
+Built-in tokens are automatically populated by Mast depending on the executing phone. There are exactly two supported built-in tokens:
+- `{{phone.serial}}` - Replaced with the target phone's serial number.
+- `{{phone.node_id}}` - Replaced with the node ID of the host.
+
+#### 2. Custom Tokens
+Any other token (e.g. `{{license_key}}`, `{{resolution}}`) represents a custom variable.
+- In the Runway UI, these are presented as editable input fields when starting a program run.
+- Custom variables can have default values extracted from the configuration file or edited directly on the program detail page.

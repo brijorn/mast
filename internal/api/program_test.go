@@ -6,24 +6,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/brijorn/mast/internal/program"
 )
 
 type fakeProgramBackend struct {
-	registered program.RegisterOptions
-	started    program.StartOptions
-}
-
-func (f *fakeProgramBackend) Register(opts program.RegisterOptions) (*program.Program, error) {
-	f.registered = opts
-	return &program.Program{
-		ID:        "sha256-test",
-		Name:      opts.Name,
-		Entry:     opts.Entry,
-		CreatedAt: time.Now().UTC(),
-	}, nil
+	started program.StartOptions
 }
 
 func (f *fakeProgramBackend) ListPrograms() []program.Program {
@@ -41,9 +29,9 @@ func (f *fakeProgramBackend) ListRuns() []program.Run {
 
 func (f *fakeProgramBackend) RegisterUpload(opts program.RegisterUploadOptions) (*program.Program, error) {
 	return &program.Program{
-		ID:       "sha256-upload",
-		Name:     opts.Name,
-		Entry:    opts.Entry,
+		ID:    "sha256-upload",
+		Name:  opts.Name,
+		Entry: opts.Entry,
 	}, nil
 }
 
@@ -59,30 +47,15 @@ func (f *fakeProgramBackend) CleanupRun(id string) (*program.Run, error) {
 	return &program.Run{ID: id, Status: "exited", WorkspaceCleaned: true}, nil
 }
 
-func TestRegisterProgramCallsBackend(t *testing.T) {
-	programs := &fakeProgramBackend{}
-	server := NewServer(&fakeBackend{}, programs)
+func (f *fakeProgramBackend) Resume(id string) (*program.Run, error) {
+	return &program.Run{ID: id, Status: "running"}, nil
+}
 
-	body := []byte(`{"path":"/tmp/example","name":"Example","entry":{"command":"app.exe"},"config_mappings":[{"section":"Settings","key":"DEVICE_ID","value":"{{phone.serial}}"}]}`)
-	res := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/programs", bytes.NewReader(body))
-
-	server.Handler().ServeHTTP(res, req)
-
-	if res.Code != http.StatusCreated {
-		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusCreated, res.Body.String())
-	}
-	if programs.registered.Path != "/tmp/example" || programs.registered.Entry.Command != "app.exe" {
-		t.Fatalf("registered = %+v", programs.registered)
-	}
-
-	var got program.Program
-	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if got.ID != "sha256-test" {
-		t.Fatalf("ID = %q, want sha256-test", got.ID)
-	}
+func (f *fakeProgramBackend) UpdateProgram(id string, mappings []program.ConfigMapping) (*program.Program, error) {
+	return &program.Program{
+		ID:             id,
+		ConfigMappings: mappings,
+	}, nil
 }
 
 func TestStartRunsCallsBackend(t *testing.T) {
@@ -121,5 +94,31 @@ func TestRunLogsReturnsOutput(t *testing.T) {
 	}
 	if got.Stdout != "out" || got.Stderr != "err" {
 		t.Fatalf("logs = %+v", got)
+	}
+}
+
+func TestUpdateProgramCallsBackend(t *testing.T) {
+	programs := &fakeProgramBackend{}
+	server := NewServer(&fakeBackend{}, programs)
+
+	body := []byte(`{"config_mappings":[{"section":"Settings","key":"DEVICE_ID","value":"{{phone.serial}}"}]}`)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/api/programs/test-id", bytes.NewReader(body))
+
+	server.Handler().ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusOK, res.Body.String())
+	}
+
+	var got program.Program
+	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.ID != "test-id" {
+		t.Fatalf("got ID = %q, want test-id", got.ID)
+	}
+	if len(got.ConfigMappings) != 1 || got.ConfigMappings[0].Value != "{{phone.serial}}" {
+		t.Fatalf("got ConfigMappings = %+v", got.ConfigMappings)
 	}
 }

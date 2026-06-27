@@ -25,6 +25,7 @@ import (
 const (
 	RegistryFileName = "registry.json"
 	DefaultADBPort   = 5037
+	runLogMaxBytes   = 10 << 20
 
 	RunStatusStarting = "starting"
 	RunStatusRunning  = "running"
@@ -40,10 +41,10 @@ type Entry struct {
 }
 
 type ConfigMapping struct {
-	Section      string `json:"section,omitempty"`
-	Key          string `json:"key,omitempty"`
-	Value        string `json:"value"`
-	DefaultValue string `json:"default_value,omitempty"`
+	Section string `json:"section,omitempty"`
+	Key     string `json:"key,omitempty"`
+	Value   string `json:"value"`
+	Comment string `json:"comment,omitempty"`
 }
 
 type Program struct {
@@ -66,6 +67,7 @@ type Run struct {
 	NodeID         string            `json:"node_id"`
 	Workspace      string            `json:"workspace"`
 	Status         string            `json:"status"`
+	Autostart      bool              `json:"autostart,omitempty"`
 	ExitCode       *int              `json:"exit_code,omitempty"`
 	Error          string            `json:"error,omitempty"`
 	Env            map[string]string `json:"env,omitempty"`
@@ -78,7 +80,9 @@ type Run struct {
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
 	// WorkspaceCleaned is true after the run's workspace directory has been
 	// removed. Set by CleanupRun or auto-cleanup on next start for the serial.
-	WorkspaceCleaned bool `json:"workspace_cleaned,omitempty"`
+	WorkspaceCleaned bool  `json:"workspace_cleaned,omitempty"`
+	StdoutLogStart   int64 `json:"stdout_log_start,omitempty"`
+	StderrLogStart   int64 `json:"stderr_log_start,omitempty"`
 }
 
 // UploadFile is a single file within a directory upload.
@@ -101,6 +105,22 @@ type StartOptions struct {
 	ProgramID string            `json:"program_id"`
 	Serials   []string          `json:"serials"`
 	Variables map[string]string `json:"variables,omitempty"`
+}
+
+type LogOffsets struct {
+	Stdout int64
+	Stderr int64
+}
+
+type LogsResult struct {
+	Stdout       string `json:"stdout"`
+	Stderr       string `json:"stderr"`
+	StdoutOffset int64  `json:"stdout_offset"`
+	StderrOffset int64  `json:"stderr_offset"`
+	StdoutSize   int64  `json:"stdout_size"`
+	StderrSize   int64  `json:"stderr_size"`
+	StdoutReset  bool   `json:"stdout_reset,omitempty"`
+	StderrReset  bool   `json:"stderr_reset,omitempty"`
 }
 
 type Store struct {
@@ -153,6 +173,7 @@ func NewStore(root string, devices deviceLister) (*Store, error) {
 	// running or starting when the daemon stopped are marked as lost because
 	// Mast no longer owns a process handle for them.
 	s.loadRuns()
+	go s.resumeAutostartRuns()
 	return s, nil
 }
 
@@ -376,28 +397,100 @@ func (s *Store) Start(opts StartOptions) ([]Run, error) {
 func (s *Store) Stop(id string) (*Run, error) {
 	s.mu.Lock()
 	state := s.runs[id]
-	s.mu.Unlock()
 	if state == nil {
+		s.mu.Unlock()
 		return nil, errors.New("run not found")
 	}
+	state.run.Autostart = false
 	if state.cmd == nil || state.cmd.Process == nil {
-		return state.run, nil
+		run := *state.run
+		s.mu.Unlock()
+		_ = writeJSON(filepath.Join(run.Workspace, "run.json"), &run)
+		return &run, nil
 	}
-	s.mu.Lock()
 	state.stopping = true
 	if state.run.PID == 0 {
 		state.run.PID = state.cmd.Process.Pid
 	}
+	run := *state.run
 	s.mu.Unlock()
-	if err := killRunProcess(state.run); err != nil {
+	_ = writeJSON(filepath.Join(run.Workspace, "run.json"), &run)
+	if err := killRunProcess(&run); err != nil {
 		return nil, err
 	}
-	return state.run, nil
+	return &run, nil
 }
 
-// Resume re-executes a completed, failed, stopped, or lost run in its existing workspace,
-// appending to the existing log files. The run's Cmd and CmdArgs must have
-// been persisted when the run was originally started.
+func (s *Store) SetRunAutostart(id string, enabled bool) (*Run, error) {
+	s.mu.Lock()
+	state := s.runs[id]
+	if state == nil {
+		s.mu.Unlock()
+		return nil, errors.New("run not found")
+	}
+	if enabled {
+		if state.run.WorkspaceCleaned {
+			s.mu.Unlock()
+			return nil, errors.New("workspace has been cleaned up")
+		}
+		if state.run.Cmd == "" {
+			s.mu.Unlock()
+			return nil, errors.New("run has no persisted command")
+		}
+	}
+	state.run.Autostart = enabled
+	run := *state.run
+	s.mu.Unlock()
+
+	if err := writeJSON(filepath.Join(run.Workspace, "run.json"), &run); err != nil {
+		return nil, err
+	}
+	return &run, nil
+}
+
+func (s *Store) Shutdown() {
+	s.mu.Lock()
+	states := make([]*runState, 0, len(s.runs))
+	for _, state := range s.runs {
+		if state.cmd != nil && state.cmd.Process != nil &&
+			(state.run.Status == RunStatusRunning || state.run.Status == RunStatusStarting) {
+			state.stopping = true
+			if state.run.PID == 0 {
+				state.run.PID = state.cmd.Process.Pid
+			}
+			states = append(states, state)
+		}
+	}
+	s.mu.Unlock()
+
+	for _, state := range states {
+		_ = killRunProcess(state.run)
+	}
+	for _, state := range states {
+		_ = waitForRunProcessExit(state.run, 2*time.Second)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		allStopped := true
+		s.mu.Lock()
+		for _, state := range states {
+			if state.run.Status == RunStatusRunning || state.run.Status == RunStatusStarting {
+				allStopped = false
+				break
+			}
+		}
+		s.mu.Unlock()
+		if allStopped {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+// Resume re-executes a completed, failed, stopped, or lost run in its existing
+// workspace, preserving the run ID and replacing the previous log files.
+// The run's Cmd and CmdArgs must have been persisted when the run was
+// originally started.
 func (s *Store) Resume(id string) (*Run, error) {
 	s.mu.Lock()
 	state := s.runs[id]
@@ -418,7 +511,7 @@ func (s *Store) Resume(id string) (*Run, error) {
 	alive, matches := runProcessStatus(run)
 	if alive {
 		if !matches {
-			return nil, fmt.Errorf("run pid %d is still alive but does not match the saved command", run.PID)
+			return nil, fmt.Errorf("run pid %d is still alive but does not belong to the saved run workspace", run.PID)
 		}
 		if err := killRunProcess(run); err != nil {
 			return nil, err
@@ -428,12 +521,14 @@ func (s *Store) Resume(id string) (*Run, error) {
 		}
 	}
 
-	// Append to existing log files.
-	stdout, err := os.OpenFile(filepath.Join(run.Workspace, "stdout.log"), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0600)
+	// Start a fresh log stream for the resumed attempt.
+	run.StdoutLogStart = 0
+	run.StderrLogStart = 0
+	stdout, err := s.newRunLogWriter(run, filepath.Join(run.Workspace, "stdout.log"), "stdout")
 	if err != nil {
 		return nil, err
 	}
-	stderr, err := os.OpenFile(filepath.Join(run.Workspace, "stderr.log"), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0600)
+	stderr, err := s.newRunLogWriter(run, filepath.Join(run.Workspace, "stderr.log"), "stderr")
 	if err != nil {
 		_ = stdout.Close()
 		return nil, err
@@ -444,7 +539,8 @@ func (s *Store) Resume(id string) (*Run, error) {
 	cmd.Dir = run.Workspace
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
-	cmd.Env = mergeEnv(os.Environ(), run.Env)
+	env := withDefaultRunEnv(run.Env)
+	cmd.Env = mergeEnv(os.Environ(), env)
 
 	s.mu.Lock()
 	run.Status = RunStatusStarting
@@ -452,6 +548,8 @@ func (s *Store) Resume(id string) (*Run, error) {
 	run.Error = ""
 	run.CompletedAt = nil
 	run.PID = 0
+	run.StartedAt = time.Now().UTC()
+	run.Env = env
 	state.stopping = false
 	s.mu.Unlock()
 
@@ -512,22 +610,39 @@ func (s *Store) CleanupRun(id string) (*Run, error) {
 }
 
 func (s *Store) Logs(id string) (string, string, error) {
+	logs, err := s.LogsSince(id, LogOffsets{})
+	if err != nil {
+		return "", "", err
+	}
+	return logs.Stdout, logs.Stderr, nil
+}
+
+func (s *Store) LogsSince(id string, offsets LogOffsets) (*LogsResult, error) {
 	s.mu.Lock()
 	state := s.runs[id]
 	s.mu.Unlock()
 	if state == nil {
-		return "", "", errors.New("run not found")
+		return nil, errors.New("run not found")
 	}
 
-	stdout, err := os.ReadFile(filepath.Join(state.run.Workspace, "stdout.log"))
-	if err != nil && !os.IsNotExist(err) {
-		return "", "", err
+	stdout, stdoutOffset, stdoutSize, stdoutReset, err := readLogFileSince(filepath.Join(state.run.Workspace, "stdout.log"), offsets.Stdout, state.run.StdoutLogStart)
+	if err != nil {
+		return nil, err
 	}
-	stderr, err := os.ReadFile(filepath.Join(state.run.Workspace, "stderr.log"))
-	if err != nil && !os.IsNotExist(err) {
-		return "", "", err
+	stderr, stderrOffset, stderrSize, stderrReset, err := readLogFileSince(filepath.Join(state.run.Workspace, "stderr.log"), offsets.Stderr, state.run.StderrLogStart)
+	if err != nil {
+		return nil, err
 	}
-	return string(stdout), string(stderr), nil
+	return &LogsResult{
+		Stdout:       stdout,
+		Stderr:       stderr,
+		StdoutOffset: stdoutOffset,
+		StderrOffset: stderrOffset,
+		StdoutSize:   stdoutSize,
+		StderrSize:   stderrSize,
+		StdoutReset:  stdoutReset,
+		StderrReset:  stderrReset,
+	}, nil
 }
 
 // cleanupCompletedRunsForSerial removes workspace directories for all
@@ -571,19 +686,12 @@ func (s *Store) startOne(p Program, device node.DeviceInfo, nodes []node.NodeInf
 		}
 	}
 
-	env := adbEnv(device, nodes)
-	for key, value := range variables {
+	env := defaultRunEnv()
+	for key, value := range adbEnv(device, nodes) {
 		env[key] = value
 	}
-
-	stdout, err := os.Create(filepath.Join(workspace, "stdout.log"))
-	if err != nil {
-		return nil, err
-	}
-	stderr, err := os.Create(filepath.Join(workspace, "stderr.log"))
-	if err != nil {
-		_ = stdout.Close()
-		return nil, err
+	for key, value := range variables {
+		env[key] = value
 	}
 
 	command := p.Entry.Command
@@ -596,16 +704,8 @@ func (s *Store) startOne(p Program, device node.DeviceInfo, nodes []node.NodeInf
 	}
 	command, args, err := s.runnerCommand(command, resolvedArgs)
 	if err != nil {
-		_ = stdout.Close()
-		_ = stderr.Close()
 		return nil, err
 	}
-	cmd := s.startCmd(command, args...)
-	configureRunCommand(cmd)
-	cmd.Dir = workspace
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
-	cmd.Env = mergeEnv(os.Environ(), env)
 
 	run := &Run{
 		ID:             id,
@@ -621,6 +721,21 @@ func (s *Store) startOne(p Program, device node.DeviceInfo, nodes []node.NodeInf
 		CmdArgs:        args,
 		StartedAt:      time.Now().UTC(),
 	}
+	stdout, err := s.newRunLogWriter(run, filepath.Join(workspace, "stdout.log"), "stdout")
+	if err != nil {
+		return nil, err
+	}
+	stderr, err := s.newRunLogWriter(run, filepath.Join(workspace, "stderr.log"), "stderr")
+	if err != nil {
+		_ = stdout.Close()
+		return nil, err
+	}
+	cmd := s.startCmd(command, args...)
+	configureRunCommand(cmd)
+	cmd.Dir = workspace
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	cmd.Env = mergeEnv(os.Environ(), env)
 	if err := writeJSON(filepath.Join(workspace, "run.json"), run); err != nil {
 		_ = stdout.Close()
 		_ = stderr.Close()
@@ -645,7 +760,7 @@ func (s *Store) startOne(p Program, device node.DeviceInfo, nodes []node.NodeInf
 	return run, nil
 }
 
-func (s *Store) waitRun(state *runState, stdout, stderr *os.File) {
+func (s *Store) waitRun(state *runState, stdout, stderr io.Closer) {
 	err := state.cmd.Wait()
 	_ = stdout.Close()
 	_ = stderr.Close()
@@ -727,6 +842,33 @@ func (s *Store) loadRuns() {
 			_ = writeJSON(runFile, &run)
 		}
 		s.runs[run.ID] = &runState{run: &run}
+	}
+}
+
+func (s *Store) resumeAutostartRuns() {
+	s.mu.Lock()
+	ids := make([]string, 0)
+	for id, state := range s.runs {
+		run := state.run
+		if !run.Autostart || run.WorkspaceCleaned || run.Cmd == "" {
+			continue
+		}
+		if run.Status == RunStatusStopped || run.Status == RunStatusLost {
+			ids = append(ids, id)
+		}
+	}
+	s.mu.Unlock()
+
+	for _, id := range ids {
+		if _, err := s.Resume(id); err != nil {
+			s.mu.Lock()
+			state := s.runs[id]
+			if state != nil {
+				state.run.Error = "autostart resume failed: " + err.Error()
+				_ = writeJSON(filepath.Join(state.run.Workspace, "run.json"), state.run)
+			}
+			s.mu.Unlock()
+		}
 	}
 }
 
@@ -954,6 +1096,181 @@ func mergeEnv(base []string, overlay map[string]string) []string {
 	return env
 }
 
+type boundedLogWriter struct {
+	mu       sync.Mutex
+	path     string
+	maxBytes int64
+	start    int64
+	size     int64
+	file     *os.File
+	onTrim   func(start int64)
+}
+
+func (s *Store) newRunLogWriter(run *Run, path, stream string) (*boundedLogWriter, error) {
+	if err := removeLogFiles(path); err != nil {
+		return nil, err
+	}
+	return newBoundedLogWriter(path, runLogMaxBytes, func(start int64) {
+		s.mu.Lock()
+		switch stream {
+		case "stdout":
+			run.StdoutLogStart = start
+		case "stderr":
+			run.StderrLogStart = start
+		}
+		_ = writeJSON(filepath.Join(run.Workspace, "run.json"), run)
+		s.mu.Unlock()
+	})
+}
+
+func newBoundedLogWriter(path string, maxBytes int64, onTrim func(start int64)) (*boundedLogWriter, error) {
+	if maxBytes <= 0 {
+		maxBytes = runLogMaxBytes
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	if err != nil {
+		return nil, err
+	}
+	return &boundedLogWriter{
+		path:     path,
+		maxBytes: maxBytes,
+		file:     file,
+		onTrim:   onTrim,
+	}, nil
+}
+
+func (w *boundedLogWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	n, err := w.file.Write(p)
+	w.size += int64(n)
+	if err != nil {
+		return n, err
+	}
+	if err := w.trimLocked(); err != nil {
+		return n, err
+	}
+	return n, nil
+}
+
+func (w *boundedLogWriter) Close() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.file == nil {
+		return nil
+	}
+	err := w.file.Close()
+	w.file = nil
+	return err
+}
+
+func (w *boundedLogWriter) trimLocked() error {
+	if w.size <= w.maxBytes {
+		return nil
+	}
+	trimBytes := w.size - w.maxBytes
+	if w.file != nil {
+		if err := w.file.Close(); err != nil {
+			return err
+		}
+		w.file = nil
+	}
+
+	in, err := os.Open(w.path)
+	if err != nil {
+		return err
+	}
+	if _, err := in.Seek(trimBytes, io.SeekStart); err != nil {
+		_ = in.Close()
+		return err
+	}
+	tail, err := io.ReadAll(in)
+	_ = in.Close()
+	if err != nil {
+		return err
+	}
+	tmp := w.path + ".tmp"
+	if err := os.WriteFile(tmp, tail, 0600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, w.path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	file, err := os.OpenFile(w.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
+		return err
+	}
+	w.file = file
+	w.start += trimBytes
+	w.size = int64(len(tail))
+	if w.onTrim != nil {
+		w.onTrim(w.start)
+	}
+	return nil
+}
+
+func readLogFileSince(path string, offset, start int64) (string, int64, int64, bool, error) {
+	if offset < 0 {
+		offset = 0
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", start, 0, offset > start, nil
+		}
+		return "", 0, 0, false, err
+	}
+	defer func() {
+		_ = file.Close()
+	}()
+
+	info, err := file.Stat()
+	if err != nil {
+		return "", 0, 0, false, err
+	}
+	size := info.Size()
+	end := start + size
+	reset := false
+	if offset < start || offset > end {
+		offset = start
+		reset = true
+	}
+	if _, err := file.Seek(offset-start, io.SeekStart); err != nil {
+		return "", 0, 0, false, err
+	}
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return "", 0, 0, false, err
+	}
+	return string(data), end, size, reset, nil
+}
+
+func removeLogFiles(path string) error {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.Remove(path + ".tmp"); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+func defaultRunEnv() map[string]string {
+	return map[string]string{
+		"PYTHONUNBUFFERED": "1",
+	}
+}
+
+func withDefaultRunEnv(overrides map[string]string) map[string]string {
+	env := defaultRunEnv()
+	for key, value := range overrides {
+		env[key] = value
+	}
+	return env
+}
+
 func applyConfigReplacements(path string, values []ConfigMapping, variables map[string]string, device node.DeviceInfo) error {
 	if len(values) == 0 {
 		return nil
@@ -1089,7 +1406,7 @@ func replaceOnce(val string, variables map[string]string, device node.DeviceInfo
 		out.WriteString(val[pos:startIdx])
 
 		// Extract placeholder name
-		placeholder := val[startIdx+2 : endIdx]
+		placeholder := strings.TrimSpace(val[startIdx+2 : endIdx])
 
 		// Resolve placeholder
 		var resolved string

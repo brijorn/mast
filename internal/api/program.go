@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/brijorn/mast/internal/program"
@@ -13,8 +14,14 @@ import (
 const maxUploadSize = 200 << 20
 
 type runLogsResponse struct {
-	Stdout string `json:"stdout"`
-	Stderr string `json:"stderr"`
+	Stdout       string `json:"stdout"`
+	Stderr       string `json:"stderr"`
+	StdoutOffset int64  `json:"stdout_offset"`
+	StderrOffset int64  `json:"stderr_offset"`
+	StdoutSize   int64  `json:"stdout_size"`
+	StderrSize   int64  `json:"stderr_size"`
+	StdoutReset  bool   `json:"stdout_reset,omitempty"`
+	StderrReset  bool   `json:"stderr_reset,omitempty"`
 }
 
 // UploadProgram handles POST /api/programs/upload.
@@ -195,6 +202,36 @@ func (s *Server) ResumeRun(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) SetRunAutostart(w http.ResponseWriter, r *http.Request) {
+	if s.programs == nil {
+		http.Error(w, "program runner not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	run, err := s.programs.SetRunAutostart(r.PathValue("id"), req.Enabled)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			http.Error(w, err.Error(), http.StatusNotFound)
+		} else {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		}
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(run); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
 // CleanupRun handles POST /api/runs/{id}/cleanup.
 // It removes the workspace directory of a completed or failed run.
 func (s *Server) CleanupRun(w http.ResponseWriter, r *http.Request) {
@@ -225,16 +262,58 @@ func (s *Server) RunLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	stdout, stderr, err := s.programs.Logs(r.PathValue("id"))
+	offsets, err := parseLogOffsets(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	logs, err := s.programs.LogsSince(r.PathValue("id"), offsets)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(runLogsResponse{Stdout: stdout, Stderr: stderr}); err != nil {
+	w.Header().Set("Cache-Control", "no-store")
+	if err := json.NewEncoder(w).Encode(runLogsResponse{
+		Stdout:       logs.Stdout,
+		Stderr:       logs.Stderr,
+		StdoutOffset: logs.StdoutOffset,
+		StderrOffset: logs.StderrOffset,
+		StdoutSize:   logs.StdoutSize,
+		StderrSize:   logs.StderrSize,
+		StdoutReset:  logs.StdoutReset,
+		StderrReset:  logs.StderrReset,
+	}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+func parseLogOffsets(r *http.Request) (program.LogOffsets, error) {
+	query := r.URL.Query()
+	stdout, err := parseOptionalOffset(query.Get("stdout_offset"))
+	if err != nil {
+		return program.LogOffsets{}, err
+	}
+	stderr, err := parseOptionalOffset(query.Get("stderr_offset"))
+	if err != nil {
+		return program.LogOffsets{}, err
+	}
+	return program.LogOffsets{Stdout: stdout, Stderr: stderr}, nil
+}
+
+func parseOptionalOffset(value string) (int64, error) {
+	if value == "" {
+		return 0, nil
+	}
+	offset, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	if offset < 0 {
+		return 0, nil
+	}
+	return offset, nil
 }
 
 func (s *Server) UpdateProgram(w http.ResponseWriter, r *http.Request) {

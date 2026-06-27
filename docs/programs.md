@@ -112,10 +112,50 @@ updated `Run` object with `"workspace_cleaned": true` on success.
 ### Resume
 
 `POST /api/runs/{id}/resume` re-runs the saved command in the same instance
-workspace, preserving the same run ID and appending to the existing logs. Mast
+workspace, preserving the same run ID and replacing the previous logs. Mast
 uses this for `exited`, `failed`, `stopped`, or `lost` runs. If a lost run's
-saved PID is still alive and still matches the saved command, Mast terminates
-that process tree before starting the replacement.
+saved PID is still alive, Mast verifies ownership by the saved run workspace
+where the platform supports it, then terminates that process tree before
+starting the replacement. Mast does not compare process argv because wrappers
+such as Wine can replace the visible command line after launch.
+
+### Logs
+
+`GET /api/runs/{id}/logs` returns stdout and stderr. Without query parameters,
+the response contains the full current log files.
+
+Clients can poll incrementally by passing byte offsets:
+
+```http
+GET /api/runs/{id}/logs?stdout_offset=123&stderr_offset=456
+```
+
+The response includes appended `stdout` and `stderr` chunks plus
+`stdout_offset` and `stderr_offset` values for the next request. If a log file
+was truncated, such as after resume, Mast returns the current file from the
+beginning and sets the corresponding `*_reset` flag.
+
+Mast caps each stdout/stderr stream to one retained file of up to 10 MiB. When
+the file exceeds the cap, Mast keeps the newest bytes and records the logical
+start offset in `run.json` so offset polling can continue. If a client asks for
+an offset older than the retained window, Mast returns the retained window and
+sets the corresponding reset flag.
+
+### Autostart
+
+`PUT /api/runs/{id}/autostart` stores a run-owned autostart flag:
+
+```json
+{"enabled": true}
+```
+
+When Mast starts, it automatically resumes autostart-enabled runs that are
+`stopped` or `lost`, using the same run ID and instance workspace. Normal
+`exited` and `failed` runs are not restarted automatically.
+
+Manual `POST /api/runs/{id}/stop` disables autostart for that run. Mast's own
+shutdown path stops active programs without clearing autostart, so configured
+runs come back when Mast is launched again.
 
 When Mast restarts while a run is active, it restores that run as `lost` rather
 than `failed`, because Mast no longer knows whether the program itself failed.
@@ -162,6 +202,13 @@ If a program with entry command `test.py` and arguments `["arg1"]` is executed, 
 python3 -u test.py arg1
 ```
 
+## Run environment
+
+Mast adds `PYTHONUNBUFFERED=1` to each run by default so Python and PyInstaller
+programs flush stdout/stderr promptly when their output is captured in log
+files. Run variables can override this value when a program explicitly needs a
+different setting.
+
 ---
 
 ## Configuration Variables & Templates
@@ -179,4 +226,5 @@ Built-in tokens are automatically populated by Mast depending on the executing p
 #### 2. Custom Tokens
 Any other token (e.g. `{{license_key}}`, `{{resolution}}`) represents a custom variable.
 - In the Runway UI, these are presented as editable input fields when starting a program run.
-- Custom variables can have default values extracted from the configuration file or edited directly on the program detail page.
+- For config-backed fields, the mapping value is the default value used for runs unless the run provides an override.
+- Config mappings may include an optional comment for help text.

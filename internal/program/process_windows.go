@@ -27,16 +27,7 @@ func runProcessStatus(run *Run) (alive bool, matches bool) {
 	if text == "" || strings.Contains(text, "No tasks are running") {
 		return false, false
 	}
-	cmdline, err := exec.Command(
-		"powershell",
-		"-NoProfile",
-		"-Command",
-		"(Get-CimInstance Win32_Process -Filter 'ProcessId = "+strconv.Itoa(run.PID)+"').CommandLine",
-	).Output()
-	if err != nil {
-		return true, false
-	}
-	return true, commandLineStringMatches(string(cmdline), append([]string{run.Cmd}, run.CmdArgs...))
+	return true, true
 }
 
 func killRunProcess(run *Run) error {

@@ -84,6 +84,27 @@ func (n *Node) Close() error {
 	return err
 }
 
+func (n *Node) dropPeer(peerID string, peer *PeerConn) {
+	n.mu.Lock()
+	if current, ok := n.Peers[peerID]; ok && current == peer {
+		delete(n.Peers, peerID)
+	}
+	n.mu.Unlock()
+	_ = peer.conn.Close()
+}
+
+func (n *Node) removePeer(peer *PeerConn) (string, bool) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	for id, current := range n.Peers {
+		if current == peer {
+			delete(n.Peers, id)
+			return id, true
+		}
+	}
+	return "", false
+}
+
 func (n *Node) handleConnection(peer *PeerConn, addr string) {
 	defer func() { _ = peer.conn.Close() }()
 	registered := false
@@ -128,15 +149,9 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 		_, message, err := peer.conn.ReadMessage()
 		if err != nil {
 			log.Println("read:", err)
-			n.mu.Lock()
-			for id, p := range n.Peers {
-				if p == peer {
-					log.Println("removing peer", id)
-					delete(n.Peers, id)
-					break
-				}
+			if id, removed := n.removePeer(peer); removed {
+				log.Println("removing peer", id)
 			}
-			n.mu.Unlock()
 
 			if addr != "" {
 				go n.reconnect(addr)

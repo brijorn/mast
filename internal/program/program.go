@@ -44,16 +44,8 @@ type Program struct {
 	Name           string          `json:"name"`
 	ConfigFile     string          `json:"config_file,omitempty"`
 	ConfigMappings []ConfigMapping `json:"config_mappings,omitempty"`
-	INIValues      []ConfigMapping `json:"ini_values,omitempty"` // For backward compatibility
 	Entry          Entry           `json:"entry"`
 	CreatedAt      time.Time       `json:"created_at"`
-}
-
-func (p Program) Mappings() []ConfigMapping {
-	if len(p.ConfigMappings) > 0 {
-		return p.ConfigMappings
-	}
-	return p.INIValues
 }
 
 type Run struct {
@@ -81,15 +73,7 @@ type RegisterOptions struct {
 	Name           string          `json:"name,omitempty"`
 	ConfigFile     string          `json:"config_file,omitempty"`
 	ConfigMappings []ConfigMapping `json:"config_mappings,omitempty"`
-	INIValues      []ConfigMapping `json:"ini_values,omitempty"` // For backward compatibility
 	Entry          Entry           `json:"entry"`
-}
-
-func (o RegisterOptions) Mappings() []ConfigMapping {
-	if len(o.ConfigMappings) > 0 {
-		return o.ConfigMappings
-	}
-	return o.INIValues
 }
 
 // UploadFile is a single file within a directory upload.
@@ -104,16 +88,8 @@ type RegisterUploadOptions struct {
 	Name           string
 	ConfigFile     string
 	ConfigMappings []ConfigMapping
-	INIValues      []ConfigMapping // For backward compatibility
 	Entry          Entry
 	Files          []UploadFile
-}
-
-func (o RegisterUploadOptions) Mappings() []ConfigMapping {
-	if len(o.ConfigMappings) > 0 {
-		return o.ConfigMappings
-	}
-	return o.INIValues
 }
 
 type StartOptions struct {
@@ -212,7 +188,6 @@ func (s *Store) Register(opts RegisterOptions) (*Program, error) {
 		Name:           name,
 		ConfigFile:     opts.ConfigFile,
 		ConfigMappings: opts.ConfigMappings,
-		INIValues:      opts.INIValues,
 		Entry:          opts.Entry,
 		CreatedAt:      time.Now().UTC(),
 	}
@@ -316,7 +291,6 @@ func (s *Store) RegisterUpload(opts RegisterUploadOptions) (*Program, error) {
 		Name:           name,
 		ConfigFile:     opts.ConfigFile,
 		ConfigMappings: opts.ConfigMappings,
-		INIValues:      opts.INIValues,
 		Entry:          opts.Entry,
 		CreatedAt:      time.Now().UTC(),
 	}
@@ -524,12 +498,10 @@ func (s *Store) startOne(p Program, device node.DeviceInfo, nodes []node.NodeInf
 	if err := copyDir(s.bundlePath(p.ID), workspace); err != nil {
 		return nil, err
 	}
-	configFile := p.ConfigFile
-	if configFile == "" {
-		configFile = "config.ini"
-	}
-	if err := applyConfigReplacements(filepath.Join(workspace, configFile), p.Mappings(), variables, device); err != nil {
-		return nil, err
+	if p.ConfigFile != "" {
+		if err := applyConfigReplacements(filepath.Join(workspace, p.ConfigFile), p.ConfigMappings, variables, device); err != nil {
+			return nil, err
+		}
 	}
 
 	env := adbEnv(device, nodes)
@@ -548,11 +520,14 @@ func (s *Store) startOne(p Program, device node.DeviceInfo, nodes []node.NodeInf
 	}
 
 	command := p.Entry.Command
-	args := p.Entry.Args
+	resolvedArgs := make([]string, len(p.Entry.Args))
+	for i, arg := range p.Entry.Args {
+		resolvedArgs[i] = resolveValue(arg, variables, device)
+	}
 	if localCommand := filepath.Join(workspace, command); fileExists(localCommand) {
 		command = localCommand
 	}
-	command, args = s.runnerCommand(command, args)
+	command, args := s.runnerCommand(command, resolvedArgs)
 	cmd := s.startCmd(command, args...)
 	cmd.Dir = workspace
 	cmd.Stdout = stdout

@@ -63,7 +63,7 @@ func TestRegisterProgramCallsBackend(t *testing.T) {
 	programs := &fakeProgramBackend{}
 	server := NewServer(&fakeBackend{}, programs)
 
-	body := []byte(`{"path":"/tmp/example","name":"Example","platform":"windows","entry":{"command":"app.exe"},"ini_values":[{"section":"Settings","key":"DEVICE_ID","value":"{{phone.serial}}"}]}`)
+	body := []byte(`{"path":"/tmp/example","name":"Example","entry":{"command":"app.exe"},"config_mappings":[{"section":"Settings","key":"DEVICE_ID","value":"{{phone.serial}}"}]}`)
 	res := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/programs", bytes.NewReader(body))
 

@@ -25,6 +25,13 @@ import (
 const (
 	RegistryFileName = "registry.json"
 	DefaultADBPort   = 5037
+
+	RunStatusStarting = "starting"
+	RunStatusRunning  = "running"
+	RunStatusExited   = "exited"
+	RunStatusFailed   = "failed"
+	RunStatusStopped  = "stopped"
+	RunStatusLost     = "lost"
 )
 
 type Entry struct {
@@ -33,14 +40,16 @@ type Entry struct {
 }
 
 type ConfigMapping struct {
-	Section string `json:"section,omitempty"`
-	Key     string `json:"key,omitempty"`
-	Value   string `json:"value"`
+	Section      string `json:"section,omitempty"`
+	Key          string `json:"key,omitempty"`
+	Value        string `json:"value"`
+	DefaultValue string `json:"default_value,omitempty"`
 }
 
 type Program struct {
 	ID             string          `json:"id"`
 	Slug           string          `json:"slug,omitempty"`
+	Version        int             `json:"version"`
 	Name           string          `json:"name"`
 	ConfigFile     string          `json:"config_file,omitempty"`
 	ConfigMappings []ConfigMapping `json:"config_mappings,omitempty"`
@@ -49,31 +58,27 @@ type Program struct {
 }
 
 type Run struct {
-	ID               string            `json:"id"`
-	ProgramID        string            `json:"program_id"`
-	Serial           string            `json:"serial"`
-	NodeID           string            `json:"node_id"`
-	Workspace        string            `json:"workspace"`
-	Status           string            `json:"status"`
-	ExitCode         *int              `json:"exit_code,omitempty"`
-	Error            string            `json:"error,omitempty"`
-	Env              map[string]string `json:"env,omitempty"`
-	StartedAt        time.Time         `json:"started_at"`
-	CompletedAt      *time.Time        `json:"completed_at,omitempty"`
-	// UpdateAvailable is true when the program slug has a newer bundle than the
-	// one this run was started from. Computed at list time; not persisted.
-	UpdateAvailable bool `json:"update_available,omitempty"`
+	ID             string            `json:"id"`
+	ProgramID      string            `json:"program_id"`
+	ProgramSlug    string            `json:"program_slug,omitempty"`
+	ProgramVersion int               `json:"program_version,omitempty"`
+	Serial         string            `json:"serial"`
+	NodeID         string            `json:"node_id"`
+	Workspace      string            `json:"workspace"`
+	Status         string            `json:"status"`
+	ExitCode       *int              `json:"exit_code,omitempty"`
+	Error          string            `json:"error,omitempty"`
+	Env            map[string]string `json:"env,omitempty"`
+	// Cmd and CmdArgs are the resolved command and arguments used to start this
+	// run. They are persisted so that Resume can re-execute the same process.
+	Cmd         string     `json:"cmd,omitempty"`
+	CmdArgs     []string   `json:"cmd_args,omitempty"`
+	PID         int        `json:"pid,omitempty"`
+	StartedAt   time.Time  `json:"started_at"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
 	// WorkspaceCleaned is true after the run's workspace directory has been
 	// removed. Set by CleanupRun or auto-cleanup on next start for the serial.
 	WorkspaceCleaned bool `json:"workspace_cleaned,omitempty"`
-}
-
-type RegisterOptions struct {
-	Path           string          `json:"path"`
-	Name           string          `json:"name,omitempty"`
-	ConfigFile     string          `json:"config_file,omitempty"`
-	ConfigMappings []ConfigMapping `json:"config_mappings,omitempty"`
-	Entry          Entry           `json:"entry"`
 }
 
 // UploadFile is a single file within a directory upload.
@@ -103,7 +108,6 @@ type Store struct {
 	mu       sync.Mutex
 	programs map[string]Program
 	runs     map[string]*runState
-	versions map[string]string // slug -> current program ID
 	devices  deviceLister
 	startCmd func(command string, args ...string) *exec.Cmd
 	runners  map[string]string
@@ -115,8 +119,9 @@ type deviceLister interface {
 }
 
 type runState struct {
-	run *Run
-	cmd *exec.Cmd
+	run      *Run
+	cmd      *exec.Cmd
+	stopping bool
 }
 
 type registryFile struct {
@@ -132,7 +137,6 @@ func NewStore(root string, devices deviceLister) (*Store, error) {
 		root:     root,
 		programs: make(map[string]Program),
 		runs:     make(map[string]*runState),
-		versions: make(map[string]string),
 		devices:  devices,
 		startCmd: exec.Command,
 	}
@@ -145,9 +149,10 @@ func NewStore(root string, devices deviceLister) (*Store, error) {
 	if err := s.loadRegistry(); err != nil {
 		return nil, err
 	}
-	if err := s.loadVersions(); err != nil {
-		return nil, err
-	}
+	// Restore run history from workspace directories. Runs that were still
+	// running or starting when the daemon stopped are marked as lost because
+	// Mast no longer owns a process handle for them.
+	s.loadRuns()
 	return s, nil
 }
 
@@ -155,78 +160,13 @@ func (s *Store) Root() string {
 	return s.root
 }
 
-func (s *Store) Register(opts RegisterOptions) (*Program, error) {
-	if strings.TrimSpace(opts.Path) == "" {
-		return nil, errors.New("path required")
-	}
-	if opts.Entry.Command == "" {
-		return nil, errors.New("entry command required")
-	}
-
-	info, err := os.Stat(opts.Path)
-	if err != nil {
-		return nil, err
-	}
-	if !info.IsDir() {
-		return nil, errors.New("path must be a directory")
-	}
-
-	id, err := hashDir(opts.Path)
-	if err != nil {
-		return nil, err
-	}
-
-	name := opts.Name
-	if name == "" {
-		name = filepath.Base(opts.Path)
-	}
-	slug := toSlug(name)
-
-	program := Program{
-		ID:             id,
-		Slug:           slug,
-		Name:           name,
-		ConfigFile:     opts.ConfigFile,
-		ConfigMappings: opts.ConfigMappings,
-		Entry:          opts.Entry,
-		CreatedAt:      time.Now().UTC(),
-	}
-
-	bundlePath := s.bundlePath(id)
-	if err := os.RemoveAll(bundlePath); err != nil {
-		return nil, err
-	}
-	if err := copyDir(opts.Path, bundlePath); err != nil {
-		return nil, err
-	}
-	if err := writeJSON(filepath.Join(bundlePath, "mast-program.json"), program); err != nil {
-		return nil, err
-	}
-
-	s.mu.Lock()
-	s.programs[id] = program
-	s.versions[slug] = id
-	err = s.saveRegistryLocked()
-	if err == nil {
-		err = s.saveVersionsLocked()
-	}
-	s.mu.Unlock()
-	if err != nil {
-		return nil, err
-	}
-
-	return &program, nil
-}
-
 // RegisterUpload registers a program from a set of uploaded files. Files are
 // written directly into a temporary directory inside the bundle store, then
 // atomically moved to the final content-addressed path.
 //
-// Re-uploading a program with the same slug replaces its bundle in the
-// versions index so that subsequent Start calls using the slug get the new
-// bundle. Running instances are not affected — they already hold a copy of the
-// old bundle in their workspace — but ListRuns will mark them with
-// UpdateAvailable = true.
+// Re-uploading a program with the same slug replaces the current bundle and
+// increments the program version. Running instances are not affected because
+// they execute from a copied workspace.
 func (s *Store) RegisterUpload(opts RegisterUploadOptions) (*Program, error) {
 	if opts.Entry.Command == "" {
 		return nil, errors.New("entry command required")
@@ -285,9 +225,17 @@ func (s *Store) RegisterUpload(opts RegisterUploadOptions) (*Program, error) {
 		name = "unnamed"
 	}
 	slug := toSlug(name)
+	s.mu.Lock()
+	previous, hasPrevious := s.programBySlugLocked(slug)
+	s.mu.Unlock()
+	version := 1
+	if hasPrevious {
+		version = previous.Version + 1
+	}
 	program := Program{
 		ID:             id,
 		Slug:           slug,
+		Version:        version,
 		Name:           name,
 		ConfigFile:     opts.ConfigFile,
 		ConfigMappings: opts.ConfigMappings,
@@ -308,19 +256,42 @@ func (s *Store) RegisterUpload(opts RegisterUploadOptions) (*Program, error) {
 	}
 	success = true
 
+	var previousID string
 	s.mu.Lock()
-	s.programs[id] = program
-	s.versions[slug] = id
-	err = s.saveRegistryLocked()
-	if err == nil {
-		err = s.saveVersionsLocked()
+	if hasPrevious {
+		previousID = previous.ID
+		delete(s.programs, previousID)
 	}
+	s.programs[id] = program
+	err = s.saveRegistryLocked()
 	s.mu.Unlock()
 	if err != nil {
 		return nil, err
 	}
+	if previousID != "" && previousID != id {
+		_ = os.RemoveAll(s.bundlePath(previousID))
+	}
 
 	return &program, nil
+}
+
+func (s *Store) UpdateProgram(id string, mappings []ConfigMapping) (*Program, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	p, ok := s.programs[id]
+	if !ok {
+		return nil, errors.New("program not found")
+	}
+
+	p.ConfigMappings = mappings
+	s.programs[id] = p
+
+	if err := s.saveRegistryLocked(); err != nil {
+		return nil, err
+	}
+
+	return &p, nil
 }
 
 func (s *Store) ListPrograms() []Program {
@@ -337,6 +308,15 @@ func (s *Store) ListPrograms() []Program {
 	return programs
 }
 
+func (s *Store) programBySlugLocked(slug string) (Program, bool) {
+	for _, p := range s.programs {
+		if p.Slug == slug {
+			return p, true
+		}
+	}
+	return Program{}, false
+}
+
 func (s *Store) ListRuns() []Run {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -344,13 +324,6 @@ func (s *Store) ListRuns() []Run {
 	runs := make([]Run, 0, len(s.runs))
 	for _, state := range s.runs {
 		run := *state.run
-		// Compute UpdateAvailable: does the current bundle for this program's
-		// slug differ from the bundle this run was started from?
-		if p, ok := s.programs[run.ProgramID]; ok && p.Slug != "" {
-			if currentID, ok := s.versions[p.Slug]; ok && currentID != run.ProgramID {
-				run.UpdateAvailable = true
-			}
-		}
 		runs = append(runs, run)
 	}
 	sort.Slice(runs, func(i, j int) bool {
@@ -371,15 +344,12 @@ func (s *Store) Start(opts StartOptions) ([]Run, error) {
 	p, ok := s.programs[opts.ProgramID]
 	if !ok {
 		// Accept a slug in place of a content-hash ID.
-		if id, slugOK := s.versions[opts.ProgramID]; slugOK {
-			p, ok = s.programs[id]
-		}
+		p, ok = s.programBySlugLocked(opts.ProgramID)
 	}
 	s.mu.Unlock()
 	if !ok {
 		return nil, errors.New("program not found")
 	}
-
 
 	devices, err := s.devices.ListDevices()
 	if err != nil {
@@ -413,13 +383,104 @@ func (s *Store) Stop(id string) (*Run, error) {
 	if state.cmd == nil || state.cmd.Process == nil {
 		return state.run, nil
 	}
-	if err := state.cmd.Process.Kill(); err != nil {
+	s.mu.Lock()
+	state.stopping = true
+	if state.run.PID == 0 {
+		state.run.PID = state.cmd.Process.Pid
+	}
+	s.mu.Unlock()
+	if err := killRunProcess(state.run); err != nil {
 		return nil, err
 	}
 	return state.run, nil
 }
 
-// CleanupRun removes the workspace directory of a completed or failed run to
+// Resume re-executes a completed, failed, stopped, or lost run in its existing workspace,
+// appending to the existing log files. The run's Cmd and CmdArgs must have
+// been persisted when the run was originally started.
+func (s *Store) Resume(id string) (*Run, error) {
+	s.mu.Lock()
+	state := s.runs[id]
+	s.mu.Unlock()
+	if state == nil {
+		return nil, errors.New("run not found")
+	}
+	run := state.run
+	if run.Status == RunStatusRunning || run.Status == RunStatusStarting {
+		return nil, errors.New("run is already active")
+	}
+	if run.WorkspaceCleaned {
+		return nil, errors.New("workspace has been cleaned up")
+	}
+	if run.Cmd == "" {
+		return nil, errors.New("run has no persisted command")
+	}
+	alive, matches := runProcessStatus(run)
+	if alive {
+		if !matches {
+			return nil, fmt.Errorf("run pid %d is still alive but does not match the saved command", run.PID)
+		}
+		if err := killRunProcess(run); err != nil {
+			return nil, err
+		}
+		if !waitForRunProcessExit(run, 2*time.Second) {
+			return nil, fmt.Errorf("run pid %d is still alive", run.PID)
+		}
+	}
+
+	// Append to existing log files.
+	stdout, err := os.OpenFile(filepath.Join(run.Workspace, "stdout.log"), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0600)
+	if err != nil {
+		return nil, err
+	}
+	stderr, err := os.OpenFile(filepath.Join(run.Workspace, "stderr.log"), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0600)
+	if err != nil {
+		_ = stdout.Close()
+		return nil, err
+	}
+
+	cmd := s.startCmd(run.Cmd, run.CmdArgs...)
+	configureRunCommand(cmd)
+	cmd.Dir = run.Workspace
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	cmd.Env = mergeEnv(os.Environ(), run.Env)
+
+	s.mu.Lock()
+	run.Status = RunStatusStarting
+	run.ExitCode = nil
+	run.Error = ""
+	run.CompletedAt = nil
+	run.PID = 0
+	state.stopping = false
+	s.mu.Unlock()
+
+	_ = writeJSON(filepath.Join(run.Workspace, "run.json"), run)
+
+	if err := cmd.Start(); err != nil {
+		_ = stdout.Close()
+		_ = stderr.Close()
+		s.mu.Lock()
+		run.Status = RunStatusFailed
+		run.Error = err.Error()
+		now := time.Now().UTC()
+		run.CompletedAt = &now
+		_ = writeJSON(filepath.Join(run.Workspace, "run.json"), run)
+		s.mu.Unlock()
+		return nil, err
+	}
+
+	s.mu.Lock()
+	run.Status = RunStatusRunning
+	run.PID = cmd.Process.Pid
+	state.cmd = cmd
+	_ = writeJSON(filepath.Join(run.Workspace, "run.json"), run)
+	s.mu.Unlock()
+
+	go s.waitRun(state, stdout, stderr)
+	return run, nil
+}
+
 // free disk space. Returns an error if the run is still active. Sets
 // WorkspaceCleaned on the run once the workspace has been removed.
 func (s *Store) CleanupRun(id string) (*Run, error) {
@@ -430,8 +491,14 @@ func (s *Store) CleanupRun(id string) (*Run, error) {
 		return nil, errors.New("run not found")
 	}
 	run := state.run
-	if run.Status == "running" || run.Status == "starting" {
-		return nil, errors.New("cannot clean up a running run")
+	if run.Status == RunStatusRunning || run.Status == RunStatusStarting {
+		return nil, errors.New("cannot clean up an active run")
+	}
+	if run.Status == RunStatusLost {
+		alive, matches := runProcessStatus(run)
+		if alive && matches {
+			return nil, errors.New("cannot clean up a lost run whose process is still alive")
+		}
 	}
 	if !run.WorkspaceCleaned {
 		if err := os.RemoveAll(run.Workspace); err != nil && !os.IsNotExist(err) {
@@ -472,7 +539,7 @@ func (s *Store) cleanupCompletedRunsForSerial(serial string) {
 	var toClean []*runState
 	for _, state := range s.runs {
 		if state.run.Serial == serial &&
-			(state.run.Status == "exited" || state.run.Status == "failed") &&
+			(state.run.Status == RunStatusExited || state.run.Status == RunStatusFailed || state.run.Status == RunStatusStopped) &&
 			!state.run.WorkspaceCleaned {
 			toClean = append(toClean, state)
 		}
@@ -527,22 +594,32 @@ func (s *Store) startOne(p Program, device node.DeviceInfo, nodes []node.NodeInf
 	if localCommand := filepath.Join(workspace, command); fileExists(localCommand) {
 		command = localCommand
 	}
-	command, args := s.runnerCommand(command, resolvedArgs)
+	command, args, err := s.runnerCommand(command, resolvedArgs)
+	if err != nil {
+		_ = stdout.Close()
+		_ = stderr.Close()
+		return nil, err
+	}
 	cmd := s.startCmd(command, args...)
+	configureRunCommand(cmd)
 	cmd.Dir = workspace
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	cmd.Env = mergeEnv(os.Environ(), env)
 
 	run := &Run{
-		ID:        id,
-		ProgramID: p.ID,
-		Serial:    device.Serial,
-		NodeID:    device.NodeID,
-		Workspace: workspace,
-		Status:    "starting",
-		Env:       env,
-		StartedAt: time.Now().UTC(),
+		ID:             id,
+		ProgramID:      p.ID,
+		ProgramSlug:    p.Slug,
+		ProgramVersion: p.Version,
+		Serial:         device.Serial,
+		NodeID:         device.NodeID,
+		Workspace:      workspace,
+		Status:         RunStatusStarting,
+		Env:            env,
+		Cmd:            command,
+		CmdArgs:        args,
+		StartedAt:      time.Now().UTC(),
 	}
 	if err := writeJSON(filepath.Join(workspace, "run.json"), run); err != nil {
 		_ = stdout.Close()
@@ -556,8 +633,10 @@ func (s *Store) startOne(p Program, device node.DeviceInfo, nodes []node.NodeInf
 		return nil, err
 	}
 
-	run.Status = "running"
+	run.Status = RunStatusRunning
+	run.PID = cmd.Process.Pid
 	state := &runState{run: run, cmd: cmd}
+	_ = writeJSON(filepath.Join(workspace, "run.json"), run)
 	s.mu.Lock()
 	s.runs[id] = state
 	s.mu.Unlock()
@@ -575,17 +654,22 @@ func (s *Store) waitRun(state *runState, stdout, stderr *os.File) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	state.run.CompletedAt = &now
-	if err == nil {
+	state.run.PID = 0
+	if state.stopping {
+		state.run.ExitCode = nil
+		state.run.Status = RunStatusStopped
+		state.run.Error = ""
+	} else if err == nil {
 		code := 0
 		state.run.ExitCode = &code
-		state.run.Status = "exited"
+		state.run.Status = RunStatusExited
 	} else if exitErr, ok := err.(*exec.ExitError); ok {
 		code := exitErr.ExitCode()
 		state.run.ExitCode = &code
-		state.run.Status = "failed"
+		state.run.Status = RunStatusFailed
 		state.run.Error = err.Error()
 	} else {
-		state.run.Status = "failed"
+		state.run.Status = RunStatusFailed
 		state.run.Error = err.Error()
 	}
 	_ = writeJSON(filepath.Join(state.run.Workspace, "run.json"), state.run)
@@ -605,6 +689,45 @@ func (s *Store) bundlePath(id string) string {
 
 func (s *Store) registryPath() string {
 	return filepath.Join(s.root, RegistryFileName)
+}
+
+// loadRuns scans the instances directory and restores run state from persisted
+// run.json files. Any run whose status was active is marked lost because Mast
+// no longer owns the process handle after a daemon restart.
+func (s *Store) loadRuns() {
+	entries, err := os.ReadDir(s.instanceDir())
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		runFile := filepath.Join(s.instanceDir(), entry.Name(), "run.json")
+		data, err := os.ReadFile(runFile)
+		if err != nil {
+			continue
+		}
+		var run Run
+		if err := json.Unmarshal(data, &run); err != nil {
+			continue
+		}
+		if run.Status == RunStatusRunning || run.Status == RunStatusStarting {
+			alive, matches := runProcessStatus(&run)
+			run.Status = RunStatusLost
+			run.CompletedAt = nil
+			switch {
+			case alive && matches:
+				run.Error = "mast restarted; process is still running unmanaged"
+			case alive:
+				run.Error = "mast restarted; saved pid is now owned by another process"
+			default:
+				run.Error = "mast restarted; process ownership was lost"
+			}
+			_ = writeJSON(runFile, &run)
+		}
+		s.runs[run.ID] = &runState{run: &run}
+	}
 }
 
 func (s *Store) loadRegistry() error {
@@ -737,7 +860,7 @@ func (s *Store) SetRunners(runners map[string]string) {
 	s.runners = runners
 }
 
-func (s *Store) runnerCommand(command string, args []string) (string, []string) {
+func (s *Store) runnerCommand(command string, args []string) (string, []string, error) {
 	s.mu.Lock()
 	runners := s.runners
 	s.mu.Unlock()
@@ -753,14 +876,14 @@ func (s *Store) runnerCommand(command string, args []string) (string, []string) 
 	if runner != "" {
 		parts := strings.Fields(runner)
 		if len(parts) > 0 {
-			return parts[0], append(append(parts[1:], command), args...)
+			return parts[0], append(append(parts[1:], command), args...), nil
 		}
 	}
 
-	if filepath.Ext(command) == ".exe" && runtime.GOOS == "linux" {
-		return "winerun", append([]string{command}, args...)
+	if filepath.Ext(command) == ".exe" && runtime.GOOS != "windows" {
+		return "", nil, fmt.Errorf("no runner configured for non-native executable %q", command)
 	}
-	return command, args
+	return command, args, nil
 }
 
 func findDevice(devices []node.DeviceInfo, serial string) (node.DeviceInfo, bool) {
@@ -780,19 +903,17 @@ func adbEnv(device node.DeviceInfo, nodes []node.NodeInfo) map[string]string {
 		if n.ID != device.NodeID || n.Local {
 			continue
 		}
-		host := n.ADBHost
-		port := n.ADBPort
-		if host == "" {
-			host, port = splitHostPortDefault(n.Addr, DefaultADBPort)
-		}
+		host, _ := splitHostPortDefault(n.Addr, DefaultADBPort)
 		if host == "" {
 			continue
 		}
+		port := n.ADBPort
 		if port <= 0 {
 			port = DefaultADBPort
 		}
 		env["ADB_SERVER_SOCKET"] = fmt.Sprintf("tcp:%s:%d", host, port)
 		env["ANDROID_ADB_SERVER_ADDRESS"] = host
+		env["ANDROID_ADB_SERVER_HOST"] = host
 		env["ANDROID_ADB_SERVER_PORT"] = strconv.Itoa(port)
 	}
 	return env
@@ -845,9 +966,35 @@ func applyConfigReplacements(path string, values []ConfigMapping, variables map[
 
 	// 1. Global placeholder replace (e.g., replacing "{{license_key}}" inside config.py)
 	for _, val := range values {
+		var placeholders []string
+		if val.Key != "" {
+			placeholders = append(placeholders, "{{"+val.Key+"}}", "{{"+strings.ToLower(val.Key)+"}}")
+		}
 		if strings.HasPrefix(val.Value, "{{") && strings.HasSuffix(val.Value, "}}") {
-			resolved := resolveValue(val.Value, variables, device)
-			content = strings.ReplaceAll(content, val.Value, resolved)
+			placeholders = append(placeholders, val.Value)
+		}
+
+		if len(placeholders) == 0 {
+			continue
+		}
+
+		resolvedVal := val.Value
+		varKey := val.Key
+		if varKey == "" && strings.HasPrefix(val.Value, "{{") && strings.HasSuffix(val.Value, "}}") {
+			varKey = strings.TrimSuffix(strings.TrimPrefix(val.Value, "{{"), "}}")
+		}
+
+		if varKey != "" {
+			if v, ok := variables[varKey]; ok && v != "" {
+				resolvedVal = v
+			} else if v, ok := variables[strings.ToLower(varKey)]; ok && v != "" {
+				resolvedVal = v
+			}
+		}
+
+		resolved := resolveValue(resolvedVal, variables, device)
+		for _, ph := range placeholders {
+			content = strings.ReplaceAll(content, ph, resolved)
 		}
 	}
 
@@ -866,7 +1013,13 @@ func renderINIValues(input string, values []ConfigMapping, variables map[string]
 	}
 	replacements := make(map[sectionKey]string)
 	for _, value := range values {
-		replacements[sectionKey{section: strings.ToLower(value.Section), key: strings.ToLower(value.Key)}] = resolveValue(value.Value, variables, device)
+		resolvedVal := value.Value
+		if v, ok := variables[value.Key]; ok && v != "" {
+			resolvedVal = v
+		} else if v, ok := variables[strings.ToLower(value.Key)]; ok && v != "" {
+			resolvedVal = v
+		}
+		replacements[sectionKey{section: strings.ToLower(value.Section), key: strings.ToLower(value.Key)}] = resolveValue(resolvedVal, variables, device)
 	}
 
 	var out strings.Builder
@@ -904,18 +1057,58 @@ func renderINIValues(input string, values []ConfigMapping, variables map[string]
 }
 
 func resolveValue(value string, variables map[string]string, device node.DeviceInfo) string {
-	switch value {
-	case "{{phone.serial}}", "{{device.serial}}":
-		return device.Serial
-	case "{{phone.node_id}}", "{{device.node_id}}":
-		return device.NodeID
-	default:
-		if strings.HasPrefix(value, "{{") && strings.HasSuffix(value, "}}") {
-			key := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(value, "{{"), "}}"))
-			if v, ok := variables[key]; ok {
-				return v
+	current := value
+	for i := 0; i < 5; i++ {
+		next := replaceOnce(current, variables, device)
+		if next == current {
+			break
+		}
+		current = next
+	}
+	return current
+}
+
+func replaceOnce(val string, variables map[string]string, device node.DeviceInfo) string {
+	var out strings.Builder
+	pos := 0
+	for {
+		start := strings.Index(val[pos:], "{{")
+		if start == -1 {
+			out.WriteString(val[pos:])
+			break
+		}
+		startIdx := pos + start
+		end := strings.Index(val[startIdx:], "}}")
+		if end == -1 {
+			out.WriteString(val[pos:])
+			break
+		}
+		endIdx := startIdx + end
+
+		// Write prefix
+		out.WriteString(val[pos:startIdx])
+
+		// Extract placeholder name
+		placeholder := val[startIdx+2 : endIdx]
+
+		// Resolve placeholder
+		var resolved string
+		switch placeholder {
+		case "phone.serial":
+			resolved = device.Serial
+		case "phone.node_id":
+			resolved = device.NodeID
+		default:
+			if v, ok := variables[placeholder]; ok {
+				resolved = v
+			} else {
+				// Keep the placeholder as is if not resolved
+				resolved = val[startIdx : endIdx+2]
 			}
 		}
-		return value
+
+		out.WriteString(resolved)
+		pos = endIdx + 2
 	}
+	return out.String()
 }

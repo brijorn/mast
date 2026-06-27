@@ -1,20 +1,9 @@
 package program
 
 import (
-	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"unicode"
 )
-
-const VersionsFileName = "versions.json"
-
-// versionsFile is the on-disk format for versions.json.
-// It maps each program slug to the content-hash ID of its current bundle.
-type versionsFile struct {
-	Versions map[string]string `json:"versions"`
-}
 
 // toSlug converts a program name to a URL-safe slug.
 //
@@ -33,33 +22,4 @@ func toSlug(name string) string {
 		}
 	}
 	return strings.TrimRight(out.String(), "-")
-}
-
-func (s *Store) versionsPath() string {
-	return filepath.Join(s.root, VersionsFileName)
-}
-
-func (s *Store) loadVersions() error {
-	f, err := os.Open(s.versionsPath())
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	defer func() { _ = f.Close() }()
-
-	var vf versionsFile
-	if err := json.NewDecoder(f).Decode(&vf); err != nil {
-		return err
-	}
-	if vf.Versions != nil {
-		s.versions = vf.Versions
-	}
-	return nil
-}
-
-// saveVersionsLocked writes versions.json. Must be called with s.mu held.
-func (s *Store) saveVersionsLocked() error {
-	return writeJSON(s.versionsPath(), versionsFile{Versions: s.versions})
 }

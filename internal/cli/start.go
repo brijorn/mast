@@ -40,9 +40,7 @@ func (s *StartCmd) Run() error {
 	if err != nil {
 		return err
 	}
-	if cfg.ADBHost != "" {
-		mastNode.ADBHost = cfg.ADBHost
-	}
+
 	if cfg.ADBPort > 0 {
 		mastNode.ADBPort = cfg.ADBPort
 	}

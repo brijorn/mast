@@ -36,14 +36,15 @@ type Server struct {
 }
 
 type programBackend interface {
-	Register(opts program.RegisterOptions) (*program.Program, error)
 	RegisterUpload(opts program.RegisterUploadOptions) (*program.Program, error)
 	ListPrograms() []program.Program
 	Start(opts program.StartOptions) ([]program.Run, error)
 	ListRuns() []program.Run
 	Stop(id string) (*program.Run, error)
+	Resume(id string) (*program.Run, error)
 	Logs(id string) (string, string, error)
 	CleanupRun(id string) (*program.Run, error)
+	UpdateProgram(id string, mappings []program.ConfigMapping) (*program.Program, error)
 }
 
 func NewServer(n nodeBackend, programs ...programBackend) *Server {
@@ -74,11 +75,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/streams/video", s.StreamVideo)
 
 	mux.HandleFunc("GET /api/programs", s.ListPrograms)
-	mux.HandleFunc("POST /api/programs", s.RegisterProgram)
 	mux.HandleFunc("POST /api/programs/upload", s.UploadProgram)
+	mux.HandleFunc("PUT /api/programs/{id}", s.UpdateProgram)
 	mux.HandleFunc("GET /api/runs", s.ListRuns)
 	mux.HandleFunc("POST /api/runs", s.StartRuns)
 	mux.HandleFunc("POST /api/runs/{id}/stop", s.StopRun)
+	mux.HandleFunc("POST /api/runs/{id}/resume", s.ResumeRun)
 	mux.HandleFunc("GET /api/runs/{id}/logs", s.RunLogs)
 	mux.HandleFunc("POST /api/runs/{id}/cleanup", s.CleanupRun)
 

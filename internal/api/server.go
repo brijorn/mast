@@ -50,7 +50,7 @@ type programBackend interface {
 	Logs(id string) (string, string, error)
 	LogsSince(id string, offsets program.LogOffsets) (*program.LogsResult, error)
 	CleanupRun(id string) (*program.Run, error)
-	UpdateProgram(id string, mappings []program.ConfigMapping) (*program.Program, error)
+	UpdateProgram(id string, name string, slug string, mappings []program.ConfigMapping) (*program.Program, error)
 	DeleteProgram(id string) error
 }
 

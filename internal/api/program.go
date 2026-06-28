@@ -46,6 +46,7 @@ func (s *Server) UploadProgram(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name := r.FormValue("name")
+	slug := r.FormValue("slug")
 	configFile := r.FormValue("config_file")
 
 	var entry program.Entry
@@ -94,6 +95,7 @@ func (s *Server) UploadProgram(w http.ResponseWriter, r *http.Request) {
 
 	registered, err := s.programs.RegisterUpload(program.RegisterUploadOptions{
 		Name:           name,
+		Slug:           slug,
 		ConfigFile:     configFile,
 		ConfigMappings: configMappings,
 		Entry:          entry,
@@ -351,6 +353,8 @@ func (s *Server) UpdateProgram(w http.ResponseWriter, r *http.Request) {
 
 	id := r.PathValue("id")
 	var req struct {
+		Name           string                  `json:"name"`
+		Slug           string                  `json:"slug"`
 		ConfigMappings []program.ConfigMapping `json:"config_mappings"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -358,7 +362,7 @@ func (s *Server) UpdateProgram(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	updated, err := s.programs.UpdateProgram(id, req.ConfigMappings)
+	updated, err := s.programs.UpdateProgram(id, req.Name, req.Slug, req.ConfigMappings)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return

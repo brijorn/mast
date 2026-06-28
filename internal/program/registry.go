@@ -75,21 +75,20 @@ func (s *Store) RegisterUpload(opts RegisterUploadOptions) (*Program, error) {
 	if name == "" {
 		name = "unnamed"
 	}
-	slug := toSlug(name)
+	slug := strings.TrimSpace(opts.Slug)
+	if slug == "" {
+		slug = toSlug(name)
+	}
 	s.mu.Lock()
 	previous, hasPrevious := s.programBySlugLocked(slug)
 	s.mu.Unlock()
 	version := 1
-	replacedIDs := []string(nil)
 	if hasPrevious {
 		version = previous.Version + 1
-		replacedIDs = append(replacedIDs, previous.ReplacedIDs...)
-		replacedIDs = append(replacedIDs, previous.ID)
 	}
 	program := Program{
 		ID:             id,
 		Slug:           slug,
-		ReplacedIDs:    replacedIDs,
 		Version:        version,
 		Name:           name,
 		ConfigFile:     opts.ConfigFile,
@@ -130,7 +129,7 @@ func (s *Store) RegisterUpload(opts RegisterUploadOptions) (*Program, error) {
 	return &program, nil
 }
 
-func (s *Store) UpdateProgram(id string, mappings []ConfigMapping) (*Program, error) {
+func (s *Store) UpdateProgram(id string, name string, slug string, mappings []ConfigMapping) (*Program, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -139,6 +138,14 @@ func (s *Store) UpdateProgram(id string, mappings []ConfigMapping) (*Program, er
 		return nil, errors.New("program not found")
 	}
 
+	name = strings.TrimSpace(name)
+	if name != "" {
+		p.Name = name
+	}
+	slug = strings.TrimSpace(slug)
+	if slug != "" {
+		p.Slug = slug
+	}
 	p.ConfigMappings = mappings
 	s.programs[id] = p
 

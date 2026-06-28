@@ -202,68 +202,6 @@ func TestLoadRunsMarksActiveRunsLost(t *testing.T) {
 	}
 }
 
-func TestStartWithReplacedProgramIDUsesCurrentBundle(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("/bin/sh is not available on Windows")
-	}
-
-	root := t.TempDir()
-	firstSource := filepath.Join(root, "first")
-	secondSource := filepath.Join(root, "second")
-	if err := os.MkdirAll(firstSource, 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(secondSource, 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(firstSource, "run.sh"), []byte("#!/bin/sh\necho old\n"), 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(secondSource, "run.sh"), []byte("#!/bin/sh\necho current\n"), 0700); err != nil {
-		t.Fatal(err)
-	}
-
-	store, err := NewStore(filepath.Join(root, "programs"), fakeDevices{
-		devices: []node.DeviceInfo{{Serial: "phone-1", State: "device", NodeID: "node-1"}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	first, err := registerTestProgram(t, store, firstSource, RegisterUploadOptions{
-		Name:  "stale form app",
-		Entry: Entry{Command: "/bin/sh", Args: []string{"run.sh"}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := registerTestProgram(t, store, secondSource, RegisterUploadOptions{
-		Name:  "stale form app",
-		Entry: Entry{Command: "/bin/sh", Args: []string{"run.sh"}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first.ID == second.ID {
-		t.Fatal("test setup produced identical bundle IDs")
-	}
-
-	runs, err := store.Start(StartOptions{ProgramID: first.ID, Serials: []string{"phone-1"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	waitForRun(t, store, runs[0].ID)
-	stdout, _, err := store.Logs(runs[0].ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stdout != "current\n" {
-		t.Fatalf("stdout = %q, want current bundle output", stdout)
-	}
-	if runs[0].ProgramID != second.ID || runs[0].ProgramVersion != 2 {
-		t.Fatalf("run program = %s v%d, want %s v2", runs[0].ProgramID, runs[0].ProgramVersion, second.ID)
-	}
-}
-
 func TestResumeReusesRunIDAndWorkspace(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("/bin/sh is not available on Windows")

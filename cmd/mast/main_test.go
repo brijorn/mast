@@ -7,6 +7,7 @@ import (
 
 func TestTrimAndroidExecutableArg(t *testing.T) {
 	executable := "/data/data/com.termux/files/usr/bin/mast"
+	executablePaths := []string{executable}
 	tests := []struct {
 		name string
 		args []string
@@ -31,10 +32,25 @@ func TestTrimAndroidExecutableArg(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := trimAndroidExecutableArg(test.args, executable)
+			got := trimAndroidExecutableArg(test.args, executablePaths)
 			if !reflect.DeepEqual(got, test.want) {
 				t.Fatalf("trimAndroidExecutableArg() = %#v, want %#v", got, test.want)
 			}
 		})
+	}
+}
+
+func TestTrimAndroidExecutableArgUsesInvokedPath(t *testing.T) {
+	args := []string{"version", "/data/data/com.termux/files/home/mast"}
+	executablePaths := []string{
+		"./mast",
+		"/data/data/com.termux/files/home/mast",
+		"/proc/self/exe",
+	}
+
+	got := trimAndroidExecutableArg(args, executablePaths)
+	want := []string{"version"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("trimAndroidExecutableArg() = %#v, want %#v", got, want)
 	}
 }

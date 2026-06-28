@@ -29,8 +29,9 @@ func scheduleProcessRestartForPlatform(delay time.Duration) error {
 
 	time.AfterFunc(delay, func() {
 		command := windowsRestartCommand(executable, args)
-		cmd := exec.Command("cmd", "/C", command)
+		cmd := exec.Command("cmd.exe")
 		cmd.SysProcAttr = &syscall.SysProcAttr{
+			CmdLine:       `/C "` + command + `"`,
 			CreationFlags: windowsCreateNewProcessGroup | windowsDetachedProcess,
 			HideWindow:    true,
 		}

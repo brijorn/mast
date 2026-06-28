@@ -410,6 +410,14 @@ func streamSessionFromPayload(payload *transport.StartStreamResultPayload) *Stre
 }
 
 func (n *Node) EnsureStream(serial string, opts streamcfg.Options) (*StreamSession, error) {
+	device, err := n.deviceBySerial(serial)
+	if err != nil {
+		return nil, err
+	}
+	if device.NodeID != n.ID {
+		return n.startPeerStream(n.ctx, device.NodeID, serial, opts)
+	}
+
 	return n.ensureStream(serial, opts, n.StartStream)
 }
 

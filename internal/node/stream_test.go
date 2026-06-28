@@ -99,3 +99,62 @@ func TestStartStreamRoutesRemoteDeviceToPeer(t *testing.T) {
 		t.Fatalf("node B reverse host = %q, want local host", nodeBADB.reverseCalls[0].Host)
 	}
 }
+
+func TestEnsureStreamRestartsRemoteStreamAfterPeerLosesState(t *testing.T) {
+	nodeA, nodeB := createNodePair(t)
+	defer func() { _ = nodeA.Close() }()
+	defer func() { _ = nodeB.Close() }()
+
+	nodeA.AndroidEnabled = true
+	nodeB.AndroidEnabled = true
+	nodeB.AdvertiseHost = "10.0.0.2"
+
+	nodeA.adb = &fakeADB{
+		outputs: map[string][]byte{
+			"":          []byte("List of devices attached\n"),
+			"127.0.0.1": []byte("List of devices attached\nremote-123\tdevice\n"),
+		},
+	}
+	nodeBADB := &fakeADB{
+		outputs: map[string][]byte{
+			"": []byte("List of devices attached\nremote-123\tdevice\n"),
+		},
+	}
+	nodeB.adb = nodeBADB
+
+	connectNodePair(t, nodeA, nodeB)
+
+	first, err := nodeA.EnsureStream("remote-123", streamcfg.Options{
+		NoAudio:   true,
+		NoControl: true,
+	})
+	if err != nil {
+		t.Fatalf("first EnsureStream returned error: %v", err)
+	}
+	if len(nodeBADB.reverseCalls) != 1 {
+		t.Fatalf("node B reverse calls after first stream = %d, want 1", len(nodeBADB.reverseCalls))
+	}
+
+	nodeB.streamsMu.Lock()
+	for serial, entry := range nodeB.streams {
+		delete(nodeB.streams, serial)
+		if entry.Session != nil {
+			_ = entry.Session.Stop()
+		}
+	}
+	nodeB.streamsMu.Unlock()
+
+	second, err := nodeA.EnsureStream("remote-123", streamcfg.Options{
+		NoAudio:   true,
+		NoControl: true,
+	})
+	if err != nil {
+		t.Fatalf("second EnsureStream returned error: %v", err)
+	}
+	if len(nodeBADB.reverseCalls) != 2 {
+		t.Fatalf("node B reverse calls after peer state reset = %d, want 2", len(nodeBADB.reverseCalls))
+	}
+	if second.ID == first.ID {
+		t.Fatalf("second stream ID = first stream ID %q, want fresh peer stream", second.ID)
+	}
+}

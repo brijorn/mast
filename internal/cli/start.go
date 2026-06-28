@@ -13,6 +13,7 @@ import (
 	"syscall"
 
 	"github.com/brijorn/mast/internal/api"
+	mastconfig "github.com/brijorn/mast/internal/config"
 	"github.com/brijorn/mast/internal/node"
 	"github.com/brijorn/mast/internal/program"
 	"github.com/brijorn/mast/internal/proxy"
@@ -68,6 +69,7 @@ func (s *StartCmd) Run() error {
 		return err
 	}
 	programStore.SetRunners(cfg.Runners)
+	programStore.SetBatteryProtection(cfg.BatteryProtection)
 	mastNode.SetConfig(s.ConfigPath, *cfg, &runtimeConfigApplier{programs: programStore, proxy: proxyRuntime})
 	apiServer := api.NewServer(mastNode, programStore)
 	var shuttingDown atomic.Bool
@@ -112,6 +114,7 @@ func (s *StartCmd) Run() error {
 type runtimeConfigApplier struct {
 	programs interface {
 		SetRunners(map[string]string)
+		SetBatteryProtection(mastconfig.BatteryProtection)
 	}
 	proxy *runtimeProxy
 }
@@ -119,9 +122,10 @@ type runtimeConfigApplier struct {
 func (a *runtimeConfigApplier) ApplyRuntimeConfig(cfg Config, changedKeys []string) error {
 	if a.programs != nil {
 		a.programs.SetRunners(cfg.Runners)
+		a.programs.SetBatteryProtection(cfg.BatteryProtection)
 	}
-	if cfg.ProxyEnabled && a.proxy != nil {
-		return a.proxy.Ensure(cfg.ProxyAddr)
+	if a.proxy != nil {
+		return a.proxy.SetEnabled(cfg.ProxyEnabled, cfg.ProxyAddr)
 	}
 	return nil
 }
@@ -130,23 +134,49 @@ type runtimeProxy struct {
 	mu      sync.Mutex
 	running bool
 	addr    string
+	server  *http.Server
+	ln      net.Listener
 }
 
 func (p *runtimeProxy) Ensure(addr string) error {
+	return p.SetEnabled(true, addr)
+}
+
+func (p *runtimeProxy) SetEnabled(enabled bool, addr string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.running {
+	if !enabled {
+		if !p.running {
+			return nil
+		}
+		err := p.server.Close()
+		p.running = false
+		p.addr = ""
+		p.server = nil
+		p.ln = nil
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	}
+	if p.running && p.addr == addr {
 		return nil
+	}
+	if p.running {
+		return fmt.Errorf("proxy addr change requires restart")
 	}
 	server := proxy.NewServer(addr)
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
 	}
+	httpServer := &http.Server{Handler: server.Handler()}
 	p.running = true
 	p.addr = addr
+	p.server = httpServer
+	p.ln = listener
 	go func() {
-		if err := http.Serve(listener, server.Handler()); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Println("proxy server listen err:", err)
 		}
 	}()

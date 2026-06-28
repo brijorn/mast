@@ -204,7 +204,16 @@ func (s *Server) ResumeRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	run, err := s.programs.Resume(r.PathValue("id"))
+	req := program.ResumeOptions{ID: r.PathValue("id")}
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	req.ID = r.PathValue("id")
+
+	run, err := s.programs.Resume(req)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			http.Error(w, err.Error(), http.StatusNotFound)

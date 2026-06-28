@@ -113,11 +113,24 @@ updated `Run` object with `"workspace_cleaned": true` on success.
 
 `POST /api/runs/{id}/resume` re-runs the saved command in the same instance
 workspace, preserving the same run ID and replacing the previous logs. Mast
-uses this for `exited`, `failed`, `stopped`, or `lost` runs. If a lost run's
-saved PID is still alive, Mast verifies ownership by the saved run workspace
-where the platform supports it, then terminates that process tree before
-starting the replacement. Mast does not compare process argv because wrappers
-such as Wine can replace the visible command line after launch.
+uses this for `exited`, `failed`, `stopped`, or `lost` runs. By default, resume
+uses the run's original starting config values. To change values for the resumed
+attempt, send a JSON body with `variables`; those values are applied to the
+process environment and rendered config file without changing the run's saved
+starting defaults.
+
+```json
+{
+  "variables": {
+    "MAX_LEVELS": "30"
+  }
+}
+```
+
+If a lost run's saved PID is still alive, Mast verifies ownership by the saved
+run workspace where the platform supports it, then terminates that process tree
+before starting the replacement. Mast does not compare process argv because
+wrappers such as Wine can replace the visible command line after launch.
 
 ### Logs
 

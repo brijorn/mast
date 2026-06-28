@@ -1,7 +1,6 @@
 package program
 
 import (
-	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -12,48 +11,6 @@ import (
 
 	"github.com/brijorn/mast/internal/node"
 )
-
-type fakeDevices struct {
-	devices []node.DeviceInfo
-	nodes   []node.NodeInfo
-}
-
-func (f fakeDevices) ListDevices() ([]node.DeviceInfo, error) {
-	return f.devices, nil
-}
-
-func (f fakeDevices) ListNodes() []node.NodeInfo {
-	return f.nodes
-}
-
-func registerTestProgram(t *testing.T, store *Store, source string, opts RegisterUploadOptions) (*Program, error) {
-	t.Helper()
-	err := filepath.WalkDir(source, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		rel, err := filepath.Rel(source, path)
-		if err != nil {
-			return err
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		opts.Files = append(opts.Files, UploadFile{
-			Path:    filepath.ToSlash(rel),
-			Content: bytes.NewReader(data),
-		})
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return store.RegisterUpload(opts)
-}
 
 func TestStartCopiesBundleRendersConfigAndSetsRemoteADBEnv(t *testing.T) {
 	if runtime.GOOS == "windows" {
@@ -161,20 +118,6 @@ printf 'ARGS=%s\n' "$*"
 	}
 }
 
-func waitForRun(t *testing.T, store *Store, id string) {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		for _, run := range store.ListRuns() {
-			if run.ID == id && run.Status != "running" && run.Status != "starting" {
-				return
-			}
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("run %s did not finish", id)
-}
-
 func TestCustomRunners(t *testing.T) {
 	s := &Store{
 		runners: map[string]string{
@@ -219,103 +162,6 @@ func TestCustomRunners(t *testing.T) {
 	}
 }
 
-func TestDeleteProgramRemovesRegistryEntryAndBundleDirectory(t *testing.T) {
-	root := t.TempDir()
-	store, err := NewStore(filepath.Join(root, "programs"), fakeDevices{})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	registered, err := store.RegisterUpload(RegisterUploadOptions{
-		Name:  "delete app",
-		Entry: Entry{Command: "run.sh"},
-		Files: []UploadFile{
-			{Path: "run.sh", Content: strings.NewReader("echo delete\n")},
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	bundlePath := store.bundlePath(registered.ID)
-	if _, err := os.Stat(bundlePath); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := store.DeleteProgram(registered.ID); err != nil {
-		t.Fatal(err)
-	}
-	if programs := store.ListPrograms(); len(programs) != 0 {
-		t.Fatalf("programs = %+v, want empty", programs)
-	}
-	if _, err := os.Stat(bundlePath); !os.IsNotExist(err) {
-		t.Fatalf("bundle stat error = %v, want not exist", err)
-	}
-
-	reloaded, err := NewStore(filepath.Join(root, "programs"), fakeDevices{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if programs := reloaded.ListPrograms(); len(programs) != 0 {
-		t.Fatalf("reloaded programs = %+v, want empty", programs)
-	}
-}
-
-func TestRegisterUploadDeletesReplacedBundleDirectory(t *testing.T) {
-	root := t.TempDir()
-	store, err := NewStore(filepath.Join(root, "programs"), fakeDevices{})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	first, err := store.RegisterUpload(RegisterUploadOptions{
-		Name:  "test app",
-		Entry: Entry{Command: "run.sh"},
-		Files: []UploadFile{
-			{Path: "run.sh", Content: strings.NewReader("echo first\n")},
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first.Version != 1 {
-		t.Fatalf("first Version = %d, want 1", first.Version)
-	}
-	firstPath := store.bundlePath(first.ID)
-	if _, err := os.Stat(firstPath); err != nil {
-		t.Fatal(err)
-	}
-
-	second, err := store.RegisterUpload(RegisterUploadOptions{
-		Name:  "test app",
-		Entry: Entry{Command: "run.sh"},
-		Files: []UploadFile{
-			{Path: "run.sh", Content: strings.NewReader("echo second\n")},
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if second.Version != 2 {
-		t.Fatalf("second Version = %d, want 2", second.Version)
-	}
-	if first.ID == second.ID {
-		t.Fatal("test setup produced identical bundle IDs")
-	}
-	if _, err := os.Stat(firstPath); !os.IsNotExist(err) {
-		t.Fatalf("old bundle stat error = %v, want not exist", err)
-	}
-	if _, err := os.Stat(store.bundlePath(second.ID)); err != nil {
-		t.Fatal(err)
-	}
-	programs := store.ListPrograms()
-	if len(programs) != 1 || programs[0].ID != second.ID {
-		t.Fatalf("programs = %+v, want only replacement bundle %s", programs, second.ID)
-	}
-	if programs[0].Version != 2 {
-		t.Fatalf("registry Version = %d, want 2", programs[0].Version)
-	}
-}
-
 func TestLoadRunsMarksActiveRunsLost(t *testing.T) {
 	root := t.TempDir()
 	programRoot := filepath.Join(root, "programs")
@@ -356,6 +202,68 @@ func TestLoadRunsMarksActiveRunsLost(t *testing.T) {
 	}
 }
 
+func TestStartWithReplacedProgramIDUsesCurrentBundle(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("/bin/sh is not available on Windows")
+	}
+
+	root := t.TempDir()
+	firstSource := filepath.Join(root, "first")
+	secondSource := filepath.Join(root, "second")
+	if err := os.MkdirAll(firstSource, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(secondSource, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(firstSource, "run.sh"), []byte("#!/bin/sh\necho old\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(secondSource, "run.sh"), []byte("#!/bin/sh\necho current\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := NewStore(filepath.Join(root, "programs"), fakeDevices{
+		devices: []node.DeviceInfo{{Serial: "phone-1", State: "device", NodeID: "node-1"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := registerTestProgram(t, store, firstSource, RegisterUploadOptions{
+		Name:  "stale form app",
+		Entry: Entry{Command: "/bin/sh", Args: []string{"run.sh"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := registerTestProgram(t, store, secondSource, RegisterUploadOptions{
+		Name:  "stale form app",
+		Entry: Entry{Command: "/bin/sh", Args: []string{"run.sh"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID == second.ID {
+		t.Fatal("test setup produced identical bundle IDs")
+	}
+
+	runs, err := store.Start(StartOptions{ProgramID: first.ID, Serials: []string{"phone-1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, store, runs[0].ID)
+	stdout, _, err := store.Logs(runs[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stdout != "current\n" {
+		t.Fatalf("stdout = %q, want current bundle output", stdout)
+	}
+	if runs[0].ProgramID != second.ID || runs[0].ProgramVersion != 2 {
+		t.Fatalf("run program = %s v%d, want %s v2", runs[0].ProgramID, runs[0].ProgramVersion, second.ID)
+	}
+}
+
 func TestResumeReusesRunIDAndWorkspace(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("/bin/sh is not available on Windows")
@@ -390,7 +298,7 @@ func TestResumeReusesRunIDAndWorkspace(t *testing.T) {
 	waitForRun(t, store, started[0].ID)
 	before := findRun(t, store, started[0].ID)
 
-	resumed, err := store.Resume(started[0].ID)
+	resumed, err := store.Resume(ResumeOptions{ID: started[0].ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -455,7 +363,7 @@ func TestResumeReplacesLogs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	resumed, err := store.Resume(started[0].ID)
+	resumed, err := store.Resume(ResumeOptions{ID: started[0].ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -469,98 +377,75 @@ func TestResumeReplacesLogs(t *testing.T) {
 	}
 }
 
-func TestLogsSinceReturnsAppendedBytesAndDetectsReset(t *testing.T) {
+func TestResumeCanOverrideStartingConfigValues(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("/bin/sh is not available on Windows")
+	}
+
 	root := t.TempDir()
-	workspace := filepath.Join(root, "instances", "run-1")
-	if err := os.MkdirAll(workspace, 0700); err != nil {
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(source, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workspace, "stdout.log"), []byte("first\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(source, "config.py"), []byte("MAX_LEVELS = {{MAX_LEVELS}}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\ncat config.py\nprintf 'ENV_MAX_LEVELS=%s\\n' \"$MAX_LEVELS\"\n"
+	if err := os.WriteFile(filepath.Join(source, "run.sh"), []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
 
-	store := &Store{
-		runs: map[string]*runState{
-			"run-1": {run: &Run{ID: "run-1", Workspace: workspace}},
-		},
-	}
-
-	initial, err := store.LogsSince("run-1", LogOffsets{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if initial.Stdout != "first\n" || initial.StdoutOffset != 6 {
-		t.Fatalf("initial logs = %+v, want first newline at offset 6", initial)
-	}
-
-	if err := os.WriteFile(filepath.Join(workspace, "stdout.log"), []byte("first\nsecond\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	next, err := store.LogsSince("run-1", LogOffsets{Stdout: initial.StdoutOffset})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if next.Stdout != "second\n" || next.StdoutOffset != 13 || next.StdoutReset {
-		t.Fatalf("next logs = %+v, want appended second line at offset 13", next)
-	}
-
-	if err := os.WriteFile(filepath.Join(workspace, "stdout.log"), []byte("new\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	reset, err := store.LogsSince("run-1", LogOffsets{Stdout: next.StdoutOffset})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if reset.Stdout != "new\n" || reset.StdoutOffset != 4 || !reset.StdoutReset {
-		t.Fatalf("reset logs = %+v, want full new log with reset", reset)
-	}
-}
-
-func TestBoundedLogWriterCapsSingleFileAndReadsWindow(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "stdout.log")
-	var start int64
-	writer, err := newBoundedLogWriter(path, 5, func(next int64) {
-		start = next
+	store, err := NewStore(filepath.Join(root, "programs"), fakeDevices{
+		devices: []node.DeviceInfo{{Serial: "phone-1", State: "device", NodeID: "node-1"}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := writer.Write([]byte("00000111112222233333")); err != nil {
-		t.Fatal(err)
-	}
-	if err := writer.Close(); err != nil {
+	registered, err := registerTestProgram(t, store, source, RegisterUploadOptions{
+		Name:       "resume config",
+		ConfigFile: "config.py",
+		Entry:      Entry{Command: "/bin/sh", Args: []string{"run.sh"}},
+		ConfigMappings: []ConfigMapping{
+			{Key: "MAX_LEVELS", Value: "1"},
+		},
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 
-	matches, err := filepath.Glob(path + "*")
+	started, err := store.Start(StartOptions{ProgramID: registered.ID, Serials: []string{"phone-1"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(matches) != 1 {
-		t.Fatalf("len(log files) = %d, want 1; files = %v", len(matches), matches)
-	}
-	data, err := os.ReadFile(path)
+	waitForRun(t, store, started[0].ID)
+	stdout, _, err := store.Logs(started[0].ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(data) != "33333" || start != 15 {
-		t.Fatalf("file = %q start = %d, want newest chunk at start 15", data, start)
+	if !strings.Contains(stdout, "MAX_LEVELS = 1") || !strings.Contains(stdout, "ENV_MAX_LEVELS=1") {
+		t.Fatalf("initial stdout = %q, want starting max level 1", stdout)
 	}
 
-	all, end, _, reset, err := readLogFileSince(path, 0, start)
+	resumed, err := store.Resume(ResumeOptions{
+		ID: started[0].ID,
+		Variables: map[string]string{
+			"MAX_LEVELS": "30",
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if all != "33333" || end != 20 || !reset {
-		t.Fatalf("all = %q end = %d reset = %v, want retained window ending at 20 with reset", all, end, reset)
-	}
-
-	tail, end, _, reset, err := readLogFileSince(path, 15, start)
+	waitForRun(t, store, resumed.ID)
+	stdout, _, err = store.Logs(resumed.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tail != "33333" || end != 20 || reset {
-		t.Fatalf("tail = %q end = %d reset = %v, want last segment without reset", tail, end, reset)
+	if !strings.Contains(stdout, "MAX_LEVELS = 30") || !strings.Contains(stdout, "ENV_MAX_LEVELS=30") {
+		t.Fatalf("resumed stdout = %q, want resumed max level 30", stdout)
+	}
+	after := findRun(t, store, resumed.ID)
+	if after.Env["MAX_LEVELS"] != "1" {
+		t.Fatalf("stored MAX_LEVELS = %q, want original starting value 1", after.Env["MAX_LEVELS"])
 	}
 }
 
@@ -663,125 +548,5 @@ func TestRunAutostartPersistsAndStopClears(t *testing.T) {
 	stopped := findRun(t, store, started[0].ID)
 	if stopped.Autostart {
 		t.Fatalf("Autostart = true, want false after manual stop")
-	}
-}
-
-func TestApplyConfigReplacements(t *testing.T) {
-	tmp, err := os.CreateTemp("", "test-config-replace-*.py")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.Remove(tmp.Name())
-
-	content := `LICENSE = "{{license_key}}"`
-	if err := os.WriteFile(tmp.Name(), []byte(content), 0600); err != nil {
-		t.Fatal(err)
-	}
-
-	mappings := []ConfigMapping{
-		{Value: "{{license_key}}"},
-	}
-	variables := map[string]string{
-		"license_key": "my-license-123",
-	}
-	device := node.DeviceInfo{Serial: "device-123"}
-
-	err = applyConfigReplacements(tmp.Name(), mappings, variables, device)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	data, err := os.ReadFile(tmp.Name())
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := string(data)
-	want := `LICENSE = "my-license-123"`
-	if got != want {
-		t.Errorf("got %q, want %q", got, want)
-	}
-}
-
-func findRun(t *testing.T, store *Store, id string) Run {
-	t.Helper()
-	for _, run := range store.ListRuns() {
-		if run.ID == id {
-			return run
-		}
-	}
-	t.Fatalf("run %s not found", id)
-	return Run{}
-}
-
-func TestResolveValue(t *testing.T) {
-	device := node.DeviceInfo{
-		Serial: "RZCYA1HFRDA",
-		NodeID: "node-123",
-	}
-
-	tests := []struct {
-		name      string
-		value     string
-		variables map[string]string
-		want      string
-	}{
-		{
-			name:  "Exact built-in serial",
-			value: "{{phone.serial}}",
-			want:  "RZCYA1HFRDA",
-		},
-		{
-			name:  "Exact built-in node ID",
-			value: "{{phone.node_id}}",
-			want:  "node-123",
-		},
-		{
-			name:  "Unsupported built-in device serial stays unresolved",
-			value: "{{device.serial}}",
-			want:  "{{device.serial}}",
-		},
-		{
-			name:  "Spaces and uppercase stays unresolved",
-			value: "{{  Phone.Serial  }}",
-			want:  "{{  Phone.Serial  }}",
-		},
-		{
-			name:  "Inline built-in",
-			value: "my-device-{{phone.serial}}",
-			want:  "my-device-RZCYA1HFRDA",
-		},
-		{
-			name:      "Custom variable",
-			value:     "{{license}}",
-			variables: map[string]string{"license": "LIC-ABC"},
-			want:      "LIC-ABC",
-		},
-		{
-			name:      "Nested variables",
-			value:     "{{device_id}}",
-			variables: map[string]string{"device_id": "{{phone.serial}}"},
-			want:      "RZCYA1HFRDA",
-		},
-		{
-			name:      "Unresolved variable stays",
-			value:     "{{unknown}}",
-			variables: map[string]string{},
-			want:      "{{unknown}}",
-		},
-		{
-			name:      "Mixed resolved and unresolved",
-			value:     "{{phone.serial}}-{{unknown}}",
-			variables: map[string]string{},
-			want:      "RZCYA1HFRDA-{{unknown}}",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := resolveValue(tt.value, tt.variables, device)
-			if got != tt.want {
-				t.Errorf("resolveValue(%q) = %q, want %q", tt.value, got, tt.want)
-			}
-		})
 	}
 }

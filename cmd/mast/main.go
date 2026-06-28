@@ -40,25 +40,37 @@ func commandArgs() []string {
 		return args
 	}
 
-	executable, err := os.Executable()
-	if err != nil {
-		return args
+	paths := []string{os.Args[0]}
+	if abs, err := filepath.Abs(os.Args[0]); err == nil {
+		paths = append(paths, abs)
 	}
-	return trimAndroidExecutableArg(args, executable)
+	if executable, err := os.Executable(); err == nil {
+		paths = append(paths, executable)
+	}
+	return trimAndroidExecutableArg(args, paths)
 }
 
-func samePath(a string, b string) bool {
-	if a == "" || b == "" {
+func samePath(a string, paths []string) bool {
+	if a == "" {
 		return false
 	}
-	return filepath.Clean(a) == filepath.Clean(b)
+	clean := filepath.Clean(a)
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+		if clean == filepath.Clean(path) {
+			return true
+		}
+	}
+	return false
 }
 
-func trimAndroidExecutableArg(args []string, executable string) []string {
-	for len(args) > 0 && samePath(args[0], executable) {
+func trimAndroidExecutableArg(args []string, executablePaths []string) []string {
+	for len(args) > 0 && samePath(args[0], executablePaths) {
 		args = args[1:]
 	}
-	for len(args) > 0 && samePath(args[len(args)-1], executable) {
+	for len(args) > 0 && samePath(args[len(args)-1], executablePaths) {
 		args = args[:len(args)-1]
 	}
 	return args

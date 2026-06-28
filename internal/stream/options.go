@@ -17,6 +17,7 @@ func (s *Options) Format() []string {
 		"audio="+strconv.FormatBool(!s.NoAudio),
 		"control="+strconv.FormatBool(!s.NoControl),
 		"stay_awake="+strconv.FormatBool(s.StayAwake),
+		"clipboard_autosync=false",
 	)
 	if s.VideoBitrate > 0 {
 		formatted = append(formatted, "video_bit_rate="+strconv.Itoa(s.VideoBitrate))

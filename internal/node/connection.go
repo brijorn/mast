@@ -340,6 +340,24 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				log.Println("press key:", err)
 				break
 			}
+		case transport.TypeClipboardGetRequest:
+			var req transport.ClipboardGetRequest
+			if err := json.Unmarshal(message, &req); err != nil {
+				log.Println("decode clipboard get request:", err)
+				break
+			}
+			n.handleClipboardGetRequest(peer, req)
+		case transport.TypeClipboardSetRequest:
+			var req transport.ClipboardSetRequest
+			if err := json.Unmarshal(message, &req); err != nil {
+				log.Println("decode clipboard set request:", err)
+				break
+			}
+
+			if err := n.setClipboardLocal(req.Payload.Serial, req.Payload.Text); err != nil {
+				log.Println("set clipboard:", err)
+				break
+			}
 		case transport.TypeUpdateCheckRequest:
 			var req transport.UpdateCheckRequest
 			if err := json.Unmarshal(message, &req); err != nil {

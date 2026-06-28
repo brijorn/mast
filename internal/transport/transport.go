@@ -20,6 +20,9 @@ const (
 	TypeTapRequest           = "tap_request"
 	TypeSwipeRequest         = "swipe_request"
 	TypePressKeyRequest      = "press_key_request"
+	TypeClipboardGetRequest  = "clipboard_get_request"
+	TypeClipboardGetResponse = "clipboard_get_response"
+	TypeClipboardSetRequest  = "clipboard_set_request"
 	TypeUpdateCheckRequest   = "update_check_request"
 	TypeUpdateCheckResponse  = "update_check_response"
 	TypeUpdateApplyRequest   = "update_apply_request"
@@ -196,6 +199,35 @@ type PressKeyRequestPayload struct {
 	Serial    string `json:"serial"`
 	Keycode   uint32 `json:"keycode"`
 	MetaState uint32 `json:"meta_state,omitempty"`
+}
+
+type ClipboardGetRequest struct {
+	RawMessage
+	Payload ClipboardGetRequestPayload `json:"payload"`
+}
+
+type ClipboardGetRequestPayload struct {
+	Serial string `json:"serial"`
+}
+
+type ClipboardGetResponse struct {
+	RawMessage
+	Payload ClipboardGetResponsePayload `json:"payload"`
+}
+
+type ClipboardGetResponsePayload struct {
+	Text  string `json:"text,omitempty"`
+	Error string `json:"error,omitempty"`
+}
+
+type ClipboardSetRequest struct {
+	RawMessage
+	Payload ClipboardSetRequestPayload `json:"payload"`
+}
+
+type ClipboardSetRequestPayload struct {
+	Serial string `json:"serial"`
+	Text   string `json:"text"`
 }
 
 type UpdateCheckRequest struct {

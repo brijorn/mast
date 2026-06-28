@@ -27,6 +27,8 @@ type nodeBackend interface {
 	Tap(serial string, x, y int) error
 	Swipe(serial string, startX, startY, endX, endY int) error
 	PressKey(serial string, keycode uint32, metaState uint32) error
+	GetClipboard(serial string) (string, error)
+	SetClipboard(serial string, text string) error
 }
 
 type restartBackend interface {
@@ -100,6 +102,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/control/tap", s.Tap)
 	mux.HandleFunc("POST /api/control/swipe", s.Swipe)
 	mux.HandleFunc("POST /api/control/keypress", s.PressKey)
+	mux.HandleFunc("POST /api/control/clipboard/get", s.GetClipboard)
+	mux.HandleFunc("POST /api/control/clipboard/set", s.SetClipboard)
 	return mux
 }
 

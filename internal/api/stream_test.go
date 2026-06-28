@@ -99,6 +99,14 @@ func (f *fakeBackend) PressKey(_ string, _ uint32, _ uint32) error {
 	return nil
 }
 
+func (f *fakeBackend) GetClipboard(_ string) (string, error) {
+	return "", nil
+}
+
+func (f *fakeBackend) SetClipboard(_ string, _ string) error {
+	return nil
+}
+
 func (f *fakeBackend) callCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

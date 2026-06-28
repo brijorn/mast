@@ -96,6 +96,45 @@ func TestPressKeyRejectsInvalidKeycode(t *testing.T) {
 	}
 }
 
+func TestGetClipboardReturnsBackendText(t *testing.T) {
+	backend := &controlBackend{clipboardText: "copied text"}
+	server := NewServer(backend)
+
+	body := []byte(`{"serial":"local-123"}`)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/control/clipboard/get", bytes.NewReader(body))
+
+	server.GetClipboard(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusOK, res.Body.String())
+	}
+	if res.Body.String() != "{\"text\":\"copied text\"}\n" {
+		t.Fatalf("body = %q", res.Body.String())
+	}
+	if backend.clipboardSerial != "local-123" {
+		t.Fatalf("clipboard serial = %q", backend.clipboardSerial)
+	}
+}
+
+func TestSetClipboardCallsBackend(t *testing.T) {
+	backend := &controlBackend{}
+	server := NewServer(backend)
+
+	body := []byte(`{"serial":"local-123","text":"paste text"}`)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/control/clipboard/set", bytes.NewReader(body))
+
+	server.SetClipboard(res, req)
+
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusNoContent, res.Body.String())
+	}
+	if backend.clipboardSerial != "local-123" || backend.clipboardText != "paste text" {
+		t.Fatalf("clipboard call = serial %q text %q", backend.clipboardSerial, backend.clipboardText)
+	}
+}
+
 func TestTapRejectsInvalidRequest(t *testing.T) {
 	server := NewServer(&controlBackend{})
 
@@ -144,6 +183,9 @@ type controlBackend struct {
 	keySerial string
 	keycode   uint32
 
+	clipboardSerial string
+	clipboardText   string
+
 	err error
 }
 
@@ -174,5 +216,16 @@ func (b *controlBackend) Swipe(serial string, startX, startY, endX, endY int) er
 func (b *controlBackend) PressKey(serial string, keycode uint32, metaState uint32) error {
 	b.keySerial = serial
 	b.keycode = keycode
+	return b.err
+}
+
+func (b *controlBackend) GetClipboard(serial string) (string, error) {
+	b.clipboardSerial = serial
+	return b.clipboardText, b.err
+}
+
+func (b *controlBackend) SetClipboard(serial string, text string) error {
+	b.clipboardSerial = serial
+	b.clipboardText = text
 	return b.err
 }

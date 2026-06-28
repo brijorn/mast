@@ -33,7 +33,6 @@ type ConfigMapping struct {
 type Program struct {
 	ID             string          `json:"id"`
 	Slug           string          `json:"slug,omitempty"`
-	ReplacedIDs    []string        `json:"replaced_ids,omitempty"`
 	Version        int             `json:"version"`
 	Name           string          `json:"name"`
 	ConfigFile     string          `json:"config_file,omitempty"`
@@ -80,6 +79,7 @@ type UploadFile struct {
 // RegisterUploadOptions describes a program bundle uploaded as individual files.
 type RegisterUploadOptions struct {
 	Name           string
+	Slug           string
 	ConfigFile     string
 	ConfigMappings []ConfigMapping
 	Entry          Entry

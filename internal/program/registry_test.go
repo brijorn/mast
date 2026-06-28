@@ -102,7 +102,4 @@ func TestRegisterUploadDeletesReplacedBundleDirectory(t *testing.T) {
 	if programs[0].Version != 2 {
 		t.Fatalf("registry Version = %d, want 2", programs[0].Version)
 	}
-	if len(programs[0].ReplacedIDs) != 1 || programs[0].ReplacedIDs[0] != first.ID {
-		t.Fatalf("ReplacedIDs = %+v, want [%s]", programs[0].ReplacedIDs, first.ID)
-	}
 }

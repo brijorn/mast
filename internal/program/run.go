@@ -41,7 +41,11 @@ func (s *Store) Start(opts StartOptions) ([]Run, error) {
 	}
 
 	s.mu.Lock()
-	p, ok := s.resolveProgramLocked(opts.ProgramID)
+	p, ok := s.programs[opts.ProgramID]
+	if !ok {
+		// Accept a slug in place of a content-hash ID.
+		p, ok = s.programBySlugLocked(opts.ProgramID)
+	}
 	s.mu.Unlock()
 	if !ok {
 		return nil, errors.New("program not found")
@@ -67,28 +71,6 @@ func (s *Store) Start(opts StartOptions) ([]Run, error) {
 		runs = append(runs, *run)
 	}
 	return runs, nil
-}
-
-func (s *Store) resolveProgramLocked(idOrSlug string) (Program, bool) {
-	if p, ok := s.programs[idOrSlug]; ok {
-		return p, true
-	}
-	if p, ok := s.programBySlugLocked(idOrSlug); ok {
-		return p, true
-	}
-	for _, p := range s.programs {
-		for _, replacedID := range p.ReplacedIDs {
-			if replacedID == idOrSlug {
-				return p, true
-			}
-		}
-	}
-	if strings.HasPrefix(idOrSlug, "sha256-") && len(s.programs) == 1 {
-		for _, p := range s.programs {
-			return p, true
-		}
-	}
-	return Program{}, false
 }
 
 func (s *Store) Stop(id string) (*Run, error) {

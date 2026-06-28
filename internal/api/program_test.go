@@ -75,9 +75,11 @@ func (f *fakeProgramBackend) SetRunAutostart(id string, enabled bool) (*program.
 	return &program.Run{ID: id, Status: "stopped", Autostart: enabled}, nil
 }
 
-func (f *fakeProgramBackend) UpdateProgram(id string, mappings []program.ConfigMapping) (*program.Program, error) {
+func (f *fakeProgramBackend) UpdateProgram(id string, name string, slug string, mappings []program.ConfigMapping) (*program.Program, error) {
 	return &program.Program{
 		ID:             id,
+		Name:           name,
+		Slug:           slug,
 		ConfigMappings: mappings,
 	}, nil
 }

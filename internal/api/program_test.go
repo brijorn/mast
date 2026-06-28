@@ -12,6 +12,7 @@ import (
 
 type fakeProgramBackend struct {
 	started          program.StartOptions
+	resumed          program.ResumeOptions
 	deletedID        string
 	autostartID      string
 	autostartEnabled bool
@@ -63,8 +64,9 @@ func (f *fakeProgramBackend) CleanupRun(id string) (*program.Run, error) {
 	return &program.Run{ID: id, Status: "exited", WorkspaceCleaned: true}, nil
 }
 
-func (f *fakeProgramBackend) Resume(id string) (*program.Run, error) {
-	return &program.Run{ID: id, Status: "running"}, nil
+func (f *fakeProgramBackend) Resume(opts program.ResumeOptions) (*program.Run, error) {
+	f.resumed = opts
+	return &program.Run{ID: opts.ID, Status: "running"}, nil
 }
 
 func (f *fakeProgramBackend) SetRunAutostart(id string, enabled bool) (*program.Run, error) {
@@ -100,6 +102,27 @@ func TestStartRunsCallsBackend(t *testing.T) {
 	}
 	if programs.started.ProgramID != "sha256-test" || programs.started.Serials[0] != "phone-1" {
 		t.Fatalf("started = %+v", programs.started)
+	}
+}
+
+func TestResumeRunPassesVariables(t *testing.T) {
+	programs := &fakeProgramBackend{}
+	server := NewServer(&fakeBackend{}, programs)
+
+	body := []byte(`{"id":"wrong-id","variables":{"MAX_LEVELS":"30","DEVICE_ID":"phone-1"}}`)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/runs/run-1/resume", bytes.NewReader(body))
+
+	server.Handler().ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusOK, res.Body.String())
+	}
+	if programs.resumed.ID != "run-1" {
+		t.Fatalf("resumed ID = %q, want run-1", programs.resumed.ID)
+	}
+	if programs.resumed.Variables["MAX_LEVELS"] != "30" || programs.resumed.Variables["DEVICE_ID"] != "phone-1" {
+		t.Fatalf("variables = %+v", programs.resumed.Variables)
 	}
 }
 

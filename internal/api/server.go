@@ -45,7 +45,7 @@ type programBackend interface {
 	Start(opts program.StartOptions) ([]program.Run, error)
 	ListRuns() []program.Run
 	Stop(id string) (*program.Run, error)
-	Resume(id string) (*program.Run, error)
+	Resume(opts program.ResumeOptions) (*program.Run, error)
 	SetRunAutostart(id string, enabled bool) (*program.Run, error)
 	Logs(id string) (string, string, error)
 	LogsSince(id string, offsets program.LogOffsets) (*program.LogsResult, error)

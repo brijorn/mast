@@ -11,12 +11,16 @@ builds:
       - -X github.com/brijorn/mast/internal/version.Commit={{.Commit}}
       - -X github.com/brijorn/mast/internal/version.Date={{.Date}}
     goos:
+      - android
       - darwin
       - linux
       - windows
     goarch:
       - amd64
       - arm64
+    ignore:
+      - goos: android
+        goarch: amd64
 
 archives:
   - formats: ["tar.gz"]

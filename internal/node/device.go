@@ -1,6 +1,7 @@
 package node
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/brijorn/mast/internal/transport"
@@ -79,11 +81,29 @@ func (a realADB) Reverse(host string, deviceSocket string, localPort int) error 
 	return err
 }
 
+type SafeBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (s *SafeBuffer) Write(p []byte) (n int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *SafeBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
+}
+
 func (a realADB) StartShell(host string, arg ...string) (*exec.Cmd, error) {
 	args := adbArgs(host)
 	args = append(args, "shell")
 	args = append(args, arg...)
 	cmd := exec.Command("adb", args...)
+	cmd.Stderr = &SafeBuffer{}
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}

@@ -42,7 +42,7 @@ func (s *Server) UpdateNodeConfig(w http.ResponseWriter, r *http.Request) {
 	result, err := s.node.UpdateNodeConfig(r.Context(), r.PathValue("id"), values)
 	if err != nil {
 		status := http.StatusInternalServerError
-		if strings.Contains(err.Error(), "invalid config key") || strings.Contains(err.Error(), "invalid runner key") || strings.Contains(err.Error(), "invalid syntax") {
+		if strings.Contains(err.Error(), "invalid config key") || strings.Contains(err.Error(), "invalid runner key") || strings.Contains(err.Error(), "invalid syntax") || strings.Contains(err.Error(), "battery_protection.") {
 			status = http.StatusBadRequest
 		}
 		http.Error(w, err.Error(), status)
@@ -92,22 +92,22 @@ func stringifyConfigValues(values map[string]any) (map[string]string, error) {
 	sort.Strings(keys)
 	for _, key := range keys {
 		value := values[key]
-		if key == "runners" {
-			runners, ok := value.(map[string]any)
+		if key == "runners" || key == "battery_protection" {
+			nested, ok := value.(map[string]any)
 			if !ok {
-				return nil, fmt.Errorf("runners must be an object")
+				return nil, fmt.Errorf("%s must be an object", key)
 			}
-			runnerKeys := make([]string, 0, len(runners))
-			for runnerKey := range runners {
-				runnerKeys = append(runnerKeys, runnerKey)
+			nestedKeys := make([]string, 0, len(nested))
+			for nestedKey := range nested {
+				nestedKeys = append(nestedKeys, nestedKey)
 			}
-			sort.Strings(runnerKeys)
-			for _, runnerKey := range runnerKeys {
-				str, err := stringifyConfigValue(runners[runnerKey])
+			sort.Strings(nestedKeys)
+			for _, nestedKey := range nestedKeys {
+				str, err := stringifyConfigValue(nested[nestedKey])
 				if err != nil {
-					return nil, fmt.Errorf("runners.%s: %w", runnerKey, err)
+					return nil, fmt.Errorf("%s.%s: %w", key, nestedKey, err)
 				}
-				out["runners."+runnerKey] = str
+				out[key+"."+nestedKey] = str
 			}
 			continue
 		}

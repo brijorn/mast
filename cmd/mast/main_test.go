@@ -54,3 +54,19 @@ func TestTrimAndroidExecutableArgUsesInvokedPath(t *testing.T) {
 		t.Fatalf("trimAndroidExecutableArg() = %#v, want %#v", got, want)
 	}
 }
+
+func TestTrimAndroidExecutableArgUsesPathResolvedExecutable(t *testing.T) {
+	args := []string{"version", "/data/data/com.termux/files/usr/bin/mast"}
+	executablePaths := []string{
+		"mast",
+		"/data/data/com.termux/files/home/mast",
+		"/data/data/com.termux/files/usr/bin/mast",
+		"/proc/self/exe",
+	}
+
+	got := trimAndroidExecutableArg(args, executablePaths)
+	want := []string{"version"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("trimAndroidExecutableArg() = %#v, want %#v", got, want)
+	}
+}

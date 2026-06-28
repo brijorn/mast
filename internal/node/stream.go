@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -82,16 +83,29 @@ func (s *StreamSession) Stop() error {
 	return err
 }
 
+func (s *StreamSession) getStderrDiagnostics() string {
+	if s.cmd == nil || s.cmd.Stderr == nil {
+		return ""
+	}
+	if sb, ok := s.cmd.Stderr.(interface{ String() string }); ok {
+		str := sb.String()
+		if str != "" {
+			return "\nscrcpy stderr:\n" + str
+		}
+	}
+	return ""
+}
+
 func (s *StreamSession) acceptScrcpyConnection(opts streamcfg.Options) error {
 	videoConn, err := acceptScrcpySocket(s.streamListener)
 	if err != nil {
-		return err
+		return fmt.Errorf("accept scrcpy video socket: %w%s", err, s.getStderrDiagnostics())
 	}
 
 	deviceName, width, height, err := readScrcpyVideoMetadata(videoConn)
 	if err != nil {
 		_ = videoConn.Close()
-		return err
+		return fmt.Errorf("read scrcpy video metadata: %w%s", err, s.getStderrDiagnostics())
 	}
 
 	s.Width = width
@@ -103,7 +117,7 @@ func (s *StreamSession) acceptScrcpyConnection(opts streamcfg.Options) error {
 		audioConn, err := acceptScrcpySocket(s.streamListener)
 		if err != nil {
 			_ = videoConn.Close()
-			return err
+			return fmt.Errorf("accept scrcpy audio socket: %w%s", err, s.getStderrDiagnostics())
 		}
 		_ = audioConn.Close()
 	}
@@ -112,7 +126,7 @@ func (s *StreamSession) acceptScrcpyConnection(opts streamcfg.Options) error {
 		controlConn, err := acceptScrcpySocket(s.streamListener)
 		if err != nil {
 			_ = videoConn.Close()
-			return err
+			return fmt.Errorf("accept scrcpy control socket: %w%s", err, s.getStderrDiagnostics())
 		}
 		s.controlConn = controlConn
 	}
@@ -254,6 +268,22 @@ func (n *Node) startLocalStream(serial string, opts streamcfg.Options) (*StreamS
 		return nil, err
 	}
 
+	n.configMu.RLock()
+	lockPortrait := n.configReady && n.configState.LockPortrait
+	n.configMu.RUnlock()
+
+	if lockPortrait {
+		if _, err := n.adb.Shell("", serial, "wm", "set-ignore-orientation-request", "-d", "0", "true"); err != nil {
+			log.Printf("failed to set ignore orientation request on %s: %v", serial, err)
+		}
+		if _, err := n.adb.Shell("", serial, "settings", "put", "system", "accelerometer_rotation", "0"); err != nil {
+			log.Printf("failed to disable accelerometer rotation on %s: %v", serial, err)
+		}
+		if _, err := n.adb.Shell("", serial, "settings", "put", "system", "user_rotation", "0"); err != nil {
+			log.Printf("failed to set user rotation on %s: %v", serial, err)
+		}
+	}
+
 	streamHost, err := n.streamHostForNode(n.ID)
 	if err != nil {
 		return nil, err
@@ -299,7 +329,14 @@ func (n *Node) startLocalStream(serial string, opts streamcfg.Options) (*StreamS
 	}
 
 	session.videoBroadcaster = newVideoBroadcaster()
-	go session.broadcastVideo()
+	go session.broadcastVideo(func() {
+		n.streamsMu.Lock()
+		entry, ok := n.streams[serial]
+		if ok && entry.Session == session {
+			delete(n.streams, serial)
+		}
+		n.streamsMu.Unlock()
+	})
 
 	return session, nil
 }

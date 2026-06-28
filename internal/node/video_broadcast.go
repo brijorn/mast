@@ -36,7 +36,6 @@ func (s *StreamSession) readVideoPacket() (*VideoPacket, error) {
 
 	nalTypes := h264NALTypes(data)
 	config = config || containsNALType(nalTypes, 7) || containsNALType(nalTypes, 8)
-	keyFrame = keyFrame && containsNALType(nalTypes, 5)
 	keyFrame = keyFrame || containsNALType(nalTypes, 5)
 
 	return &VideoPacket{
@@ -113,7 +112,7 @@ func (b *videoBroadcaster) replayPackets() []VideoPacket {
 	if b.latestConfig != nil {
 		packets = append(packets, *cloneVideoPacket(*b.latestConfig))
 	}
-	if b.latestKeyframe != nil {
+	if b.latestKeyframe != nil && b.latestKeyframe != b.latestConfig {
 		packets = append(packets, *cloneVideoPacket(*b.latestKeyframe))
 	}
 	return packets
@@ -157,7 +156,12 @@ func containsNALType(types []byte, target byte) bool {
 	return false
 }
 
-func (s *StreamSession) broadcastVideo() {
+func (s *StreamSession) broadcastVideo(cleanup func()) {
+	defer func() {
+		if cleanup != nil {
+			cleanup()
+		}
+	}()
 	for {
 		packet, err := s.readVideoPacket()
 		if err != nil {

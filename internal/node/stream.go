@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/brijorn/mast/internal/scrcpy"
@@ -40,6 +41,7 @@ type StreamSession struct {
 	videoBroadcaster *videoBroadcaster
 
 	controlConn net.Conn
+	controlMu   sync.Mutex
 
 	Width  int
 	Height int

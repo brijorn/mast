@@ -1,7 +1,11 @@
 package node
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"time"
 
 	"github.com/brijorn/mast/internal/scrcpy"
 	"github.com/brijorn/mast/internal/transport"
@@ -36,6 +40,9 @@ func (n *Node) touchLocal(serial string, action string, x int, y int) error {
 		return err
 	}
 
+	session.controlMu.Lock()
+	defer session.controlMu.Unlock()
+
 	return scrcpy.WriteTouch(session.controlConn, touchAction, x, y, session.Width, session.Height)
 }
 
@@ -69,6 +76,9 @@ func (n *Node) tapLocal(serial string, x int, y int) error {
 		return errors.New("stream control connection not available")
 	}
 
+	session.controlMu.Lock()
+	defer session.controlMu.Unlock()
+
 	if err := scrcpy.WriteTap(session.controlConn, x, y, session.Width, session.Height); err != nil {
 		return err
 	}
@@ -85,6 +95,9 @@ func (n *Node) pressKeyLocal(serial string, keycode uint32, metaState uint32) er
 	if session.controlConn == nil {
 		return errors.New("stream control connection not available")
 	}
+
+	session.controlMu.Lock()
+	defer session.controlMu.Unlock()
 
 	return scrcpy.PressKey(session.controlConn, keycode, metaState)
 }
@@ -105,6 +118,117 @@ func (n *Node) PressKey(serial string, keycode uint32, metaState uint32) error {
 	}
 
 	return n.sendPeerRequest(device.NodeID, transport.TypePressKeyRequest, payload)
+}
+
+func (n *Node) getClipboardLocal(serial string) (string, error) {
+	session, err := n.GetStream(serial)
+	if err != nil {
+		return "", err
+	}
+
+	if session.controlConn == nil {
+		return "", errors.New("stream control connection not available")
+	}
+
+	session.controlMu.Lock()
+	defer session.controlMu.Unlock()
+
+	if err := session.controlConn.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		return "", err
+	}
+	defer func() {
+		_ = session.controlConn.SetDeadline(time.Time{})
+	}()
+
+	if err := scrcpy.WriteGetClipboard(session.controlConn, scrcpy.CopyKeyCopy); err != nil {
+		return "", err
+	}
+
+	return scrcpy.ReadClipboardMessage(session.controlConn)
+}
+
+func (n *Node) GetClipboard(serial string) (string, error) {
+	device, err := n.DeviceBySerial(serial)
+	if err != nil {
+		return "", err
+	}
+
+	if device.NodeID == n.ID {
+		return n.getClipboardLocal(serial)
+	}
+
+	return n.getPeerClipboard(n.ctx, device.NodeID, serial)
+}
+
+func (n *Node) getPeerClipboard(ctx context.Context, peerID string, serial string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, peerDeviceRPCTimeout)
+	defer cancel()
+
+	payload := transport.ClipboardGetRequestPayload{Serial: serial}
+	response, err := n.sendPeerRPC(ctx, peerID, transport.TypeClipboardGetRequest, payload)
+	if err != nil {
+		return "", fmt.Errorf("clipboard from peer %s: %w", peerID, err)
+	}
+	if response.messageType != transport.TypeClipboardGetResponse {
+		return "", fmt.Errorf("unexpected response type: %s", response.messageType)
+	}
+
+	var res transport.ClipboardGetResponse
+	if err := json.Unmarshal(response.data, &res); err != nil {
+		return "", err
+	}
+	if res.Payload.Error != "" {
+		return "", fmt.Errorf("clipboard from peer %s: %s", peerID, res.Payload.Error)
+	}
+	return res.Payload.Text, nil
+}
+
+func (n *Node) handleClipboardGetRequest(peer *PeerConn, req transport.ClipboardGetRequest) {
+	text, err := n.getClipboardLocal(req.Payload.Serial)
+	payload := transport.ClipboardGetResponsePayload{}
+	if err != nil {
+		payload.Error = err.Error()
+	} else {
+		payload.Text = text
+	}
+
+	n.writePeerResponse(peer, transport.TypeClipboardGetResponse, req.RawMessage, payload)
+}
+
+func (n *Node) setClipboardLocal(serial string, text string) error {
+	session, err := n.GetStream(serial)
+	if err != nil {
+		return err
+	}
+
+	if session.controlConn == nil {
+		return errors.New("stream control connection not available")
+	}
+
+	session.controlMu.Lock()
+	defer session.controlMu.Unlock()
+
+	return scrcpy.WriteSetClipboard(session.controlConn, uint64(time.Now().UnixNano()), text, true)
+}
+
+func (n *Node) SetClipboard(serial string, text string) error {
+	device, err := n.DeviceBySerial(serial)
+	if err != nil {
+		return err
+	}
+
+	if device.NodeID == n.ID {
+		return n.setClipboardLocal(serial, text)
+	}
+
+	payload := transport.ClipboardSetRequestPayload{
+		Serial: serial,
+		Text:   text,
+	}
+	return n.sendPeerRequest(device.NodeID, transport.TypeClipboardSetRequest, payload)
 }
 
 func (n *Node) Tap(serial string, x int, y int) error {
@@ -135,6 +259,9 @@ func (n *Node) swipeLocal(serial string, startX, startY, endX, endY int) error {
 	if session.controlConn == nil {
 		return errors.New("stream control connection not available")
 	}
+
+	session.controlMu.Lock()
+	defer session.controlMu.Unlock()
 
 	return scrcpy.WriteSwipe(session.controlConn, startX, startY, endX, endY, session.Width, session.Height)
 }

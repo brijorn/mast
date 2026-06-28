@@ -191,6 +191,59 @@ func TestSwipeRemoteSendsPeerRequest(t *testing.T) {
 	}
 }
 
+func TestClipboardLocalUsesScrcpyControl(t *testing.T) {
+	client, server := net.Pipe()
+	defer func() { _ = client.Close() }()
+	defer func() { _ = server.Close() }()
+
+	node := newControlTestNode("local-node", "local-123")
+	node.streams["local-123"] = readyStreamEntry(&StreamSession{
+		DeviceSerial: "local-123",
+		controlConn:  server,
+	})
+
+	messageCh := make(chan []byte, 2)
+	go func() {
+		getMessage := make([]byte, 2)
+		_, _ = client.Read(getMessage)
+		messageCh <- getMessage
+		_, _ = client.Write([]byte{0, 0, 0, 0, 10})
+		_, _ = client.Write([]byte("phone text"))
+
+		setHeader := make([]byte, 14)
+		_, _ = client.Read(setHeader)
+		textLen := int(setHeader[10])<<24 | int(setHeader[11])<<16 | int(setHeader[12])<<8 | int(setHeader[13])
+		setText := make([]byte, textLen)
+		_, _ = client.Read(setText)
+		messageCh <- setHeader
+	}()
+
+	text, err := node.GetClipboard("local-123")
+	if err != nil {
+		t.Fatalf("GetClipboard returned error: %v", err)
+	}
+	if text != "phone text" {
+		t.Fatalf("clipboard text = %q", text)
+	}
+
+	getMessage := receiveControlMessage(t, messageCh)
+	if getMessage[0] != scrcpy.GetClipboard || getMessage[1] != scrcpy.CopyKeyCopy {
+		t.Fatalf("get clipboard message = %v", getMessage)
+	}
+
+	if err := node.SetClipboard("local-123", "desktop text"); err != nil {
+		t.Fatalf("SetClipboard returned error: %v", err)
+	}
+
+	setHeader := receiveControlMessage(t, messageCh)
+	if setHeader[0] != scrcpy.SetClipboard {
+		t.Fatalf("set clipboard type = %d", setHeader[0])
+	}
+	if setHeader[9] != 1 {
+		t.Fatalf("set clipboard paste flag = %d, want 1", setHeader[9])
+	}
+}
+
 func newControlTestNode(nodeID string, localSerial string) *Node {
 	output := []byte("List of devices attached\n")
 	if localSerial != "" {

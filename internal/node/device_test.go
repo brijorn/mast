@@ -549,6 +549,7 @@ func TestStreamOptionsFormat(t *testing.T) {
 		"audio=false",
 		"control=false",
 		"stay_awake=true",
+		"clipboard_autosync=false",
 		"video_bit_rate=8000000",
 		"max_size=1080",
 	}
@@ -628,6 +629,7 @@ func TestStartStreamSetsUpLocalDeviceStream(t *testing.T) {
 				"audio=false",
 				"control=false",
 				"stay_awake=true",
+				"clipboard_autosync=false",
 				"video_bit_rate=8000000",
 				"max_size=1080",
 			},

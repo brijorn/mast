@@ -34,6 +34,15 @@ type PressKeyRequest struct {
 	MetaState uint32 `json:"meta_state,omitempty"`
 }
 
+type clipboardRequest struct {
+	Serial string `json:"serial"`
+	Text   string `json:"text"`
+}
+
+type clipboardResponse struct {
+	Text string `json:"text"`
+}
+
 func (s *Server) Touch(w http.ResponseWriter, r *http.Request) {
 	var req touchRequest
 
@@ -58,6 +67,48 @@ func (s *Server) Touch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.node.Touch(req.Serial, req.Action, req.X, req.Y); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) GetClipboard(w http.ResponseWriter, r *http.Request) {
+	var req clipboardRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.Serial == "" {
+		http.Error(w, "serial required", http.StatusBadRequest)
+		return
+	}
+
+	text, err := s.node.GetClipboard(req.Serial)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(clipboardResponse{Text: text})
+}
+
+func (s *Server) SetClipboard(w http.ResponseWriter, r *http.Request) {
+	var req clipboardRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.Serial == "" {
+		http.Error(w, "serial required", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.node.SetClipboard(req.Serial, req.Text); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

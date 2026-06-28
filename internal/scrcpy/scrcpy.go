@@ -3,14 +3,28 @@ package scrcpy
 import (
 	_ "embed"
 	"encoding/binary"
+	"errors"
 	"io"
 	"time"
+	"unicode/utf8"
 )
 
 // Message types
 const (
 	InjectTouchEvent = 2
 	InjectKeycode    = 0
+	GetClipboard     = 8
+	SetClipboard     = 9
+)
+const (
+	DeviceMessageClipboard    = 0
+	DeviceMessageAckClipboard = 1
+	DeviceMessageUhidOutput   = 2
+)
+const (
+	CopyKeyNone = 0
+	CopyKeyCopy = 1
+	CopyKeyCut  = 2
 )
 const (
 	ActionDown      = 0
@@ -24,12 +38,16 @@ const (
 	KeycodeBack      = 4
 	KeycodeHome      = 3
 	KeycodeAppSwitch = 187
+	KeycodeCopy      = 278
+	KeycodePaste     = 279
 )
 
 var ValidKeycodes = map[int]bool{
 	KeycodeBack:      true,
 	KeycodeHome:      true,
 	KeycodeAppSwitch: true,
+	KeycodeCopy:      true,
+	KeycodePaste:     true,
 
 	// Numbers 0-9, *, #
 	7:  true, // 0
@@ -178,7 +196,7 @@ func writeKeycode(w io.Writer, action byte, keycode uint32, metaState uint32) er
 	buf[0] = InjectKeycode
 	buf[1] = action
 	binary.BigEndian.PutUint32(buf[2:6], keycode)
-	binary.BigEndian.PutUint32(buf[6:10], 0)  // repeat
+	binary.BigEndian.PutUint32(buf[6:10], 0)          // repeat
 	binary.BigEndian.PutUint32(buf[10:14], metaState) // meta state
 
 	return writeFull(w, buf)
@@ -189,4 +207,77 @@ func PressKey(w io.Writer, keycode uint32, metaState uint32) error {
 		return err
 	}
 	return writeKeycode(w, ActionUp, keycode, metaState)
+}
+
+func WriteGetClipboard(w io.Writer, copyKey byte) error {
+	return writeFull(w, []byte{GetClipboard, copyKey})
+}
+
+func WriteSetClipboard(w io.Writer, sequence uint64, text string, paste bool) error {
+	text = truncateUTF8(text, (1<<18)-14)
+	rawText := []byte(text)
+
+	buf := make([]byte, 14+len(rawText))
+	buf[0] = SetClipboard
+	binary.BigEndian.PutUint64(buf[1:9], sequence)
+	if paste {
+		buf[9] = 1
+	}
+	binary.BigEndian.PutUint32(buf[10:14], uint32(len(rawText)))
+	copy(buf[14:], rawText)
+
+	return writeFull(w, buf)
+}
+
+func ReadClipboardMessage(r io.Reader) (string, error) {
+	for {
+		header := make([]byte, 1)
+		if _, err := io.ReadFull(r, header); err != nil {
+			return "", err
+		}
+
+		switch header[0] {
+		case DeviceMessageClipboard:
+			sizeBuf := make([]byte, 4)
+			if _, err := io.ReadFull(r, sizeBuf); err != nil {
+				return "", err
+			}
+			size := binary.BigEndian.Uint32(sizeBuf)
+			textBuf := make([]byte, size)
+			if _, err := io.ReadFull(r, textBuf); err != nil {
+				return "", err
+			}
+			return string(textBuf), nil
+
+		case DeviceMessageAckClipboard:
+			if _, err := io.CopyN(io.Discard, r, 8); err != nil {
+				return "", err
+			}
+
+		case DeviceMessageUhidOutput:
+			meta := make([]byte, 4)
+			if _, err := io.ReadFull(r, meta); err != nil {
+				return "", err
+			}
+			size := binary.BigEndian.Uint16(meta[2:4])
+			if _, err := io.CopyN(io.Discard, r, int64(size)); err != nil {
+				return "", err
+			}
+
+		default:
+			return "", errors.New("unknown scrcpy device message")
+		}
+	}
+}
+
+func truncateUTF8(value string, maxBytes int) string {
+	if len(value) <= maxBytes {
+		return value
+	}
+
+	value = value[:maxBytes]
+	for !utf8.ValidString(value) {
+		value = value[:len(value)-1]
+	}
+	return value
 }

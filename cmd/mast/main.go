@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 
@@ -43,6 +44,12 @@ func commandArgs() []string {
 	paths := []string{os.Args[0]}
 	if abs, err := filepath.Abs(os.Args[0]); err == nil {
 		paths = append(paths, abs)
+	}
+	if resolved, err := exec.LookPath(os.Args[0]); err == nil {
+		paths = append(paths, resolved)
+		if abs, err := filepath.Abs(resolved); err == nil {
+			paths = append(paths, abs)
+		}
 	}
 	if executable, err := os.Executable(); err == nil {
 		paths = append(paths, executable)

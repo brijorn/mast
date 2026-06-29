@@ -37,6 +37,7 @@ Sent when a node introduces itself to a peer.
   "timestamp": "2026-06-22T17:00:00Z",
   "payload": {
     "android_enabled": true,
+    "ios_enabled": false,
     "proxy_enabled": true,
     "version": "0.1.0",
     "commit": "abc123",
@@ -46,7 +47,8 @@ Sent when a node introduces itself to a peer.
 ```
 
 `android_enabled` tells the peer whether this node should be queried for Android
-devices. `proxy_enabled` tells the peer whether this node has its proxy server enabled.
+devices. `ios_enabled` is reserved for iOS device support. `proxy_enabled`
+tells the peer whether this node has its proxy server enabled.
 The version fields describe the Mast binary running on that node.
 
 ## start_stream_request

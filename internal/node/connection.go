@@ -45,6 +45,13 @@ func (n *Node) Connect(addr string) error {
 	return nil
 }
 
+func (n *Node) ConnectPersistent(addr string) {
+	if err := n.Connect(addr); err != nil {
+		log.Println("connect saved peer:", err)
+		go n.reconnect(addr)
+	}
+}
+
 func (n *Node) reconnect(addr string) {
 	backoff := time.Second
 	for {
@@ -57,8 +64,7 @@ func (n *Node) reconnect(addr string) {
 				log.Println("reconnect failed:", err)
 				backoff *= 2
 				if backoff > 60*time.Second {
-					log.Println("failed to reconnect to ", addr)
-					return
+					backoff = 60 * time.Second
 				}
 				continue
 			}
@@ -120,6 +126,7 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 			},
 			Payload: transport.ConnectionRequestPayload{
 				AndroidEnabled: n.AndroidEnabled,
+				IOSEnabled:     n.IOSEnabled,
 				ProxyEnabled:   n.ProxyEnabled,
 				ADBPort:        n.ADBPort,
 				Version:        version.Version,
@@ -195,6 +202,7 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				}
 			}
 			peer.AndroidEnabled = req.Payload.AndroidEnabled
+			peer.IOSEnabled = req.Payload.IOSEnabled
 			peer.ProxyEnabled = req.Payload.ProxyEnabled
 			peer.ADBPort = req.Payload.ADBPort
 			peer.Version = req.Payload.Version
@@ -216,6 +224,7 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 						},
 						Payload: transport.ConnectionRequestPayload{
 							AndroidEnabled: n.AndroidEnabled,
+							IOSEnabled:     n.IOSEnabled,
 							ProxyEnabled:   n.ProxyEnabled,
 							ADBPort:        n.ADBPort,
 							Version:        version.Version,

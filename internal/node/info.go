@@ -7,6 +7,7 @@ type NodeInfo struct {
 	Addr           string `json:"addr,omitempty"`
 	Local          bool   `json:"local"`
 	AndroidEnabled bool   `json:"android_enabled"`
+	IOSEnabled     bool   `json:"ios_enabled"`
 	ProxyEnabled   bool   `json:"proxy_enabled"`
 	ADBPort        int    `json:"adb_port,omitempty"`
 	Version        string `json:"version"`
@@ -21,6 +22,7 @@ func (n *Node) ListNodes() []NodeInfo {
 			Addr:           n.AdvertiseHost,
 			Local:          true,
 			AndroidEnabled: n.AndroidEnabled,
+			IOSEnabled:     n.IOSEnabled,
 			ProxyEnabled:   n.ProxyEnabled,
 			ADBPort:        n.ADBPort,
 			Version:        version.Version,
@@ -37,6 +39,7 @@ func (n *Node) ListNodes() []NodeInfo {
 			Addr:           peer.Addr,
 			Local:          false,
 			AndroidEnabled: peer.AndroidEnabled,
+			IOSEnabled:     peer.IOSEnabled,
 			ProxyEnabled:   peer.ProxyEnabled,
 			ADBPort:        peer.ADBPort,
 			Version:        peer.Version,

@@ -60,6 +60,7 @@ type Heartbeat struct {
 
 type ConnectionRequestPayload struct {
 	AndroidEnabled bool   `json:"android_enabled"`
+	IOSEnabled     bool   `json:"ios_enabled"`
 	ProxyEnabled   bool   `json:"proxy_enabled"`
 	ADBPort        int    `json:"adb_port,omitempty"`
 	Version        string `json:"version"`

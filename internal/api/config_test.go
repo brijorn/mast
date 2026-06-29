@@ -13,7 +13,7 @@ import (
 )
 
 func TestGetNodeConfigReturnsConfig(t *testing.T) {
-	backend := &configNodeBackend{config: &mastconfig.Config{AndroidEnabled: true, ADBPort: 5038}}
+	backend := &configNodeBackend{config: &mastconfig.Config{AndroidEnabled: true, IOSEnabled: true, ADBPort: 5038}}
 	server := NewServer(backend)
 
 	res := httptest.NewRecorder()
@@ -31,7 +31,7 @@ func TestGetNodeConfigReturnsConfig(t *testing.T) {
 	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if !got.AndroidEnabled || got.ADBPort != 5038 {
+	if !got.AndroidEnabled || !got.IOSEnabled || got.ADBPort != 5038 {
 		t.Fatalf("config = %+v", got)
 	}
 }
@@ -39,15 +39,15 @@ func TestGetNodeConfigReturnsConfig(t *testing.T) {
 func TestUpdateNodeConfigForwardsValues(t *testing.T) {
 	backend := &configNodeBackend{
 		result: &mastconfig.UpdateResult{
-			Config:              mastconfig.Config{AndroidEnabled: true, APIAddr: ":7001"},
-			ChangedKeys:         []string{"android_enabled", "api_addr"},
+			Config:              mastconfig.Config{AndroidEnabled: true, IOSEnabled: true, APIAddr: ":7001"},
+			ChangedKeys:         []string{"android_enabled", "ios_enabled", "api_addr"},
 			RestartRequired:     true,
 			RestartRequiredKeys: []string{"api_addr"},
 		},
 	}
 	server := NewServer(backend)
 
-	body := []byte(`{"values":{"android_enabled":true,"api_addr":":7001","runners":{".py":"python3"},"battery_protection":{"enabled":true,"min_percent":25}}}`)
+	body := []byte(`{"values":{"android_enabled":true,"ios_enabled":true,"api_addr":":7001","runners":{".py":"python3"},"battery_protection":{"enabled":true,"min_percent":25}}}`)
 	res := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPut, "/api/nodes/remote-node/config", bytes.NewReader(body))
 
@@ -59,7 +59,7 @@ func TestUpdateNodeConfigForwardsValues(t *testing.T) {
 	if backend.nodeID != "remote-node" {
 		t.Fatalf("nodeID = %q, want remote-node", backend.nodeID)
 	}
-	if backend.values["android_enabled"] != "true" || backend.values["api_addr"] != ":7001" || backend.values["runners..py"] != "python3" || backend.values["battery_protection.enabled"] != "true" || backend.values["battery_protection.min_percent"] != "25" {
+	if backend.values["android_enabled"] != "true" || backend.values["ios_enabled"] != "true" || backend.values["api_addr"] != ":7001" || backend.values["runners..py"] != "python3" || backend.values["battery_protection.enabled"] != "true" || backend.values["battery_protection.min_percent"] != "25" {
 		t.Fatalf("values = %+v", backend.values)
 	}
 

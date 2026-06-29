@@ -126,6 +126,7 @@ func (n *Node) applyNodeConfig(cfg mastconfig.Config) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.AndroidEnabled = cfg.AndroidEnabled
+	n.IOSEnabled = cfg.IOSEnabled
 	n.ProxyEnabled = cfg.ProxyEnabled
 	n.ADBPort = cfg.ADBPort
 	n.AdvertiseHost = cfg.AdvertiseHost

@@ -12,6 +12,7 @@ func TestApplyValuesUpdatesBatteryProtection(t *testing.T) {
 		"battery_protection.stop_program":   "true",
 		"battery_protection.stop_stream":    "false",
 		"battery_protection.send_home":      "true",
+		"ios_enabled":                       "true",
 	})
 	if err != nil {
 		t.Fatalf("ApplyValues returned error: %v", err)
@@ -25,8 +26,11 @@ func TestApplyValuesUpdatesBatteryProtection(t *testing.T) {
 	if len(restartKeys) != 0 {
 		t.Fatalf("restartKeys = %+v, want none", restartKeys)
 	}
-	if len(changed) != 4 {
-		t.Fatalf("changed = %+v, want four changed keys", changed)
+	if !got.IOSEnabled {
+		t.Fatalf("IOSEnabled = false, want true")
+	}
+	if len(changed) != 5 {
+		t.Fatalf("changed = %+v, want five changed keys", changed)
 	}
 }
 

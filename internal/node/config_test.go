@@ -27,12 +27,12 @@ func TestUpdateNodeConfigRoutesToPeerAndPersists(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	result, err := nodeA.UpdateNodeConfig(ctx, "b", map[string]string{"android_enabled": "true", "api_addr": ":7001"})
+	result, err := nodeA.UpdateNodeConfig(ctx, "b", map[string]string{"android_enabled": "true", "ios_enabled": "true", "api_addr": ":7001"})
 	if err != nil {
 		t.Fatalf("UpdateNodeConfig returned error: %v", err)
 	}
 
-	if !result.Config.AndroidEnabled || result.Config.APIAddr != ":7001" {
+	if !result.Config.AndroidEnabled || !result.Config.IOSEnabled || result.Config.APIAddr != ":7001" {
 		t.Fatalf("result config = %+v", result.Config)
 	}
 	if !result.RestartRequired || len(result.RestartRequiredKeys) != 1 || result.RestartRequiredKeys[0] != "api_addr" {
@@ -41,12 +41,15 @@ func TestUpdateNodeConfigRoutesToPeerAndPersists(t *testing.T) {
 	if !nodeB.AndroidEnabled {
 		t.Fatal("peer runtime AndroidEnabled was not updated")
 	}
+	if !nodeB.IOSEnabled {
+		t.Fatal("peer runtime IOSEnabled was not updated")
+	}
 
 	persisted, err := mastconfig.Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !persisted.AndroidEnabled || persisted.APIAddr != ":7001" {
+	if !persisted.AndroidEnabled || !persisted.IOSEnabled || persisted.APIAddr != ":7001" {
 		t.Fatalf("persisted config = %+v", persisted)
 	}
 }
@@ -73,7 +76,7 @@ func TestGetNodeConfigRoutesToPeer(t *testing.T) {
 }
 
 func TestUpdateNodeConfigValidationDoesNotRewriteConfig(t *testing.T) {
-	node, err := NewNode("a", ":0", "", false, false)
+	node, err := NewNode("a", ":0", "", false, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}

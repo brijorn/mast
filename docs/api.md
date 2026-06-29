@@ -36,6 +36,7 @@ Returns the local Mast node and all connected peer nodes known to it.
     "id": "node-a",
     "local": true,
     "android_enabled": true,
+    "ios_enabled": false,
     "proxy_enabled": true,
     "version": "0.1.0",
     "commit": "abc123",
@@ -46,6 +47,7 @@ Returns the local Mast node and all connected peer nodes known to it.
     "addr": "100.64.0.2",
     "local": false,
     "android_enabled": false,
+    "ios_enabled": false,
     "proxy_enabled": false,
     "version": "0.1.0",
     "commit": "def456",
@@ -72,6 +74,7 @@ Returns the selected local or peer node's persisted runtime config.
   "adb_port": 5037,
   "programs_dir": "/home/user/.mast/programs",
   "android_enabled": true,
+  "ios_enabled": false,
   "proxy_enabled": false,
   "runners": {
     ".py": "python3"
@@ -95,6 +98,7 @@ as a `runners` object or as `runners.<extension>` keys.
   "values": {
     "node_id": "pixel-proxy",
     "android_enabled": true,
+    "ios_enabled": false,
     "adb_port": 5038,
     "api_addr": ":7001",
     "runners": {
@@ -117,6 +121,7 @@ Response body:
     "adb_port": 5038,
     "programs_dir": "/home/user/.mast/programs",
     "android_enabled": true,
+    "ios_enabled": false,
     "proxy_enabled": false,
     "runners": {
       ".py": "python3"

@@ -43,7 +43,7 @@ func (s *StartCmd) Run() error {
 		return err
 	}
 
-	mastNode, err := node.NewNode(id, cfg.BindAddr, cfg.AdvertiseHost, cfg.AndroidEnabled, cfg.ProxyEnabled)
+	mastNode, err := node.NewNode(id, cfg.BindAddr, cfg.AdvertiseHost, cfg.AndroidEnabled, cfg.IOSEnabled, cfg.ProxyEnabled)
 	if err != nil {
 		return err
 	}

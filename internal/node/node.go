@@ -16,6 +16,7 @@ type PeerConn struct {
 	conn           *websocket.Conn
 	mu             sync.Mutex
 	AndroidEnabled bool
+	IOSEnabled     bool
 	ProxyEnabled   bool
 	Addr           string
 	ADBPort        int
@@ -42,6 +43,7 @@ type Node struct {
 	cancel         context.CancelFunc
 	PingInterval   time.Duration
 	AndroidEnabled bool
+	IOSEnabled     bool
 	ProxyEnabled   bool
 	ADBPort        int
 	adb            adbRunner
@@ -60,7 +62,7 @@ type Node struct {
 	configApplier  RuntimeConfigApplier
 }
 
-func NewNode(id string, addr string, advertiseHost string, androidEnabled bool, proxyEnabled bool) (*Node, error) {
+func NewNode(id string, addr string, advertiseHost string, androidEnabled bool, iosEnabled bool, proxyEnabled bool) (*Node, error) {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, err
@@ -79,6 +81,7 @@ func NewNode(id string, addr string, advertiseHost string, androidEnabled bool, 
 		batteryCache:   make(map[string]batterySnapshot),
 		PingInterval:   30 * time.Second,
 		AndroidEnabled: androidEnabled,
+		IOSEnabled:     iosEnabled,
 		ProxyEnabled:   proxyEnabled,
 		ADBPort:        5037,
 		adb:            realADB{},

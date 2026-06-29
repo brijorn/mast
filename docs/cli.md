@@ -35,6 +35,7 @@ Default configuration:
   "api_addr": ":6271",
   "advertise_host": "127.0.0.1",
   "android_enabled": false,
+  "ios_enabled": false,
   "proxy_enabled": false
 }
 ```
@@ -48,6 +49,7 @@ command creates it first.
 mast config set node_id pixel-proxy
 mast config set advertise_host 100.64.0.10
 mast config set android_enabled true
+mast config set ios_enabled true
 mast config set proxy_enabled true
 mast config set runners.windows wine
 mast config set runners..py "python3 -u"
@@ -62,6 +64,7 @@ proxy_addr
 api_addr
 advertise_host
 android_enabled
+ios_enabled
 proxy_enabled
 runners.<platform>
 runners.<file_extension>

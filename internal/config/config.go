@@ -37,6 +37,7 @@ type Config struct {
 	ADBPort           int               `json:"adb_port"`
 	ProgramsDir       string            `json:"programs_dir"`
 	AndroidEnabled    bool              `json:"android_enabled"`
+	IOSEnabled        bool              `json:"ios_enabled"`
 	ProxyEnabled      bool              `json:"proxy_enabled"`
 	LockPortrait      bool              `json:"lock_portrait"`
 	BatteryProtection BatteryProtection `json:"battery_protection"`
@@ -114,6 +115,12 @@ func (c *Config) Set(key string, value string) error {
 			return err
 		}
 		c.AndroidEnabled = parsed
+	case "ios_enabled":
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return err
+		}
+		c.IOSEnabled = parsed
 	case "proxy_enabled":
 		parsed, err := strconv.ParseBool(value)
 		if err != nil {
@@ -384,6 +391,10 @@ func changedKeys(before Config, after Config, requested []string) []string {
 			}
 		case "android_enabled":
 			if before.AndroidEnabled != after.AndroidEnabled {
+				changed = append(changed, key)
+			}
+		case "ios_enabled":
+			if before.IOSEnabled != after.IOSEnabled {
 				changed = append(changed, key)
 			}
 		case "proxy_enabled":

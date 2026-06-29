@@ -237,7 +237,8 @@ Request body:
     "turn_screen_off": false,
     "stay_awake": true,
     "max_size": 1080,
-    "video_bitrate": 8000000
+    "video_bitrate": 8000000,
+    "video_codec_options": "i-frame-interval=1"
   }
 }
 ```
@@ -331,6 +332,49 @@ Successful response:
 
 ```http
 204 No Content
+```
+
+## Live Control WebSocket
+
+```http
+GET /api/control/ws?serial=local-123
+```
+
+Opens a low-latency control channel for live interaction. The stream for that
+serial must already be started so Mast has a scrcpy control socket. Mast sends
+websocket ping frames to keep the connection alive, validates each JSON message,
+and applies accepted control messages in receive order.
+
+Touch message:
+
+```json
+{
+  "type": "touch",
+  "action": "move",
+  "x": 320,
+  "y": 640
+}
+```
+
+Swipe message:
+
+```json
+{
+  "type": "swipe",
+  "start_x": 320,
+  "start_y": 900,
+  "end_x": 320,
+  "end_y": 200
+}
+```
+
+Error message:
+
+```json
+{
+  "type": "error",
+  "message": "action must be down, move, or up"
+}
 ```
 
 ## Coordinate Space

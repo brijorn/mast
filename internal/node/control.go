@@ -47,6 +47,10 @@ func (n *Node) touchLocal(serial string, action string, x int, y int) error {
 }
 
 func (n *Node) Touch(serial string, action string, x int, y int) error {
+	if session, err := n.GetStream(serial); err == nil && session.controlConn != nil {
+		return n.touchLocal(serial, action, x, y)
+	}
+
 	device, err := n.DeviceBySerial(serial)
 	if err != nil {
 		return err
@@ -267,6 +271,10 @@ func (n *Node) swipeLocal(serial string, startX, startY, endX, endY int) error {
 }
 
 func (n *Node) Swipe(serial string, startX, startY, endX, endY int) error {
+	if session, err := n.GetStream(serial); err == nil && session.controlConn != nil {
+		return n.swipeLocal(serial, startX, startY, endX, endY)
+	}
+
 	device, err := n.DeviceBySerial(serial)
 	if err != nil {
 		return err

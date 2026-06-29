@@ -98,6 +98,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/runs/{id}/logs", s.RunLogs)
 	mux.HandleFunc("POST /api/runs/{id}/cleanup", s.CleanupRun)
 
+	mux.HandleFunc("GET /api/control/ws", s.ControlWebSocket)
 	mux.HandleFunc("POST /api/control/touch", s.Touch)
 	mux.HandleFunc("POST /api/control/tap", s.Tap)
 	mux.HandleFunc("POST /api/control/swipe", s.Swipe)

@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -17,6 +18,7 @@ type fakeProgramBackend struct {
 	autostartID      string
 	autostartEnabled bool
 	logOffsets       program.LogOffsets
+	uploaded         program.RegisterUploadOptions
 }
 
 func (f *fakeProgramBackend) ListPrograms() []program.Program {
@@ -33,6 +35,7 @@ func (f *fakeProgramBackend) ListRuns() []program.Run {
 }
 
 func (f *fakeProgramBackend) RegisterUpload(opts program.RegisterUploadOptions) (*program.Program, error) {
+	f.uploaded = opts
 	return &program.Program{
 		ID:    "sha256-upload",
 		Name:  opts.Name,
@@ -104,6 +107,53 @@ func TestStartRunsCallsBackend(t *testing.T) {
 	}
 	if programs.started.ProgramID != "sha256-test" || programs.started.Serials[0] != "phone-1" {
 		t.Fatalf("started = %+v", programs.started)
+	}
+}
+
+func TestUploadProgramPreservesNestedFilePaths(t *testing.T) {
+	programs := &fakeProgramBackend{}
+	server := NewServer(&fakeBackend{}, programs)
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("name", "Farkle Dice Roll"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.WriteField("entry", `{"command":"FarkleBrig.py"}`); err != nil {
+		t.Fatal(err)
+	}
+	mainPart, err := writer.CreateFormFile("files", "FarkleBrig.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mainPart.Write([]byte("print('run')\n")); err != nil {
+		t.Fatal(err)
+	}
+	templatePart, err := writer.CreateFormFile("files", "templates/die_1.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := templatePart.Write([]byte("png")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/programs/upload", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	server.Handler().ServeHTTP(res, req)
+
+	if res.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusCreated, res.Body.String())
+	}
+	if len(programs.uploaded.Files) != 2 {
+		t.Fatalf("uploaded files = %d, want 2", len(programs.uploaded.Files))
+	}
+	if got := programs.uploaded.Files[1].Path; got != "templates/die_1.png" {
+		t.Fatalf("uploaded nested path = %q, want templates/die_1.png", got)
 	}
 }
 

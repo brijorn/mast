@@ -3,7 +3,8 @@ version: 2
 project_name: mast
 
 builds:
-  - main: ./cmd/mast
+  - id: mast
+    main: ./cmd/mast
     binary: mast
     ldflags:
       - -s -w
@@ -11,16 +12,27 @@ builds:
       - -X github.com/brijorn/mast/internal/version.Commit={{.Commit}}
       - -X github.com/brijorn/mast/internal/version.Date={{.Date}}
     goos:
-      - android
       - darwin
       - linux
       - windows
     goarch:
       - amd64
       - arm64
-    ignore:
-      - goos: android
-        goarch: amd64
+  - id: mast-android
+    main: ./cmd/mast
+    binary: mast
+    env:
+      - CGO_ENABLED=1
+      - CC={{ .Env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+    ldflags:
+      - -s -w
+      - -X github.com/brijorn/mast/internal/version.Version={{.Version}}
+      - -X github.com/brijorn/mast/internal/version.Commit={{.Commit}}
+      - -X github.com/brijorn/mast/internal/version.Date={{.Date}}
+    goos:
+      - android
+    goarch:
+      - arm64
 
 archives:
   - formats: ["tar.gz"]

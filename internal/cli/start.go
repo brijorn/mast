@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -25,11 +26,6 @@ type StartCmd struct {
 
 func (s *StartCmd) Run() error {
 
-	id, err := os.Hostname()
-	if err != nil {
-		return err
-	}
-
 	cfg, err := LoadConfig(s.ConfigPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -39,6 +35,11 @@ func (s *StartCmd) Run() error {
 			}
 			return fmt.Errorf("config not found at %s; run `mast config init`", path)
 		}
+		return err
+	}
+
+	id, err := resolveNodeID(*cfg)
+	if err != nil {
 		return err
 	}
 
@@ -109,6 +110,13 @@ func (s *StartCmd) Run() error {
 		return err
 	}
 	return nil
+}
+
+func resolveNodeID(cfg Config) (string, error) {
+	if id := strings.TrimSpace(cfg.NodeID); id != "" {
+		return id, nil
+	}
+	return os.Hostname()
 }
 
 type runtimeConfigApplier struct {

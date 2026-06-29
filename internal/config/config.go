@@ -29,6 +29,7 @@ type BatteryProtection struct {
 }
 
 type Config struct {
+	NodeID            string            `json:"node_id"`
 	BindAddr          string            `json:"bind_addr"`
 	ProxyAddr         string            `json:"proxy_addr"`
 	APIAddr           string            `json:"api_addr"`
@@ -89,6 +90,8 @@ func (c *Config) Set(key string, value string) error {
 	}
 
 	switch key {
+	case "node_id":
+		c.NodeID = strings.TrimSpace(value)
 	case "bind_addr":
 		c.BindAddr = value
 	case "proxy_addr":
@@ -351,6 +354,10 @@ func changedKeys(before Config, after Config, requested []string) []string {
 			continue
 		}
 		switch key {
+		case "node_id":
+			if before.NodeID != after.NodeID {
+				changed = append(changed, key)
+			}
 		case "bind_addr":
 			if before.BindAddr != after.BindAddr {
 				changed = append(changed, key)
@@ -420,7 +427,7 @@ func restartRequiredKeys(changed []string) []string {
 	restartKeys := make([]string, 0, len(changed))
 	for _, key := range changed {
 		switch key {
-		case "bind_addr", "api_addr", "proxy_addr", "programs_dir":
+		case "node_id", "bind_addr", "api_addr", "proxy_addr", "programs_dir":
 			restartKeys = append(restartKeys, key)
 		}
 	}

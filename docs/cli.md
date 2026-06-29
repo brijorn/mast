@@ -29,6 +29,7 @@ Default configuration:
 
 ```json
 {
+  "node_id": "",
   "bind_addr": ":6270",
   "proxy_addr": ":6272",
   "api_addr": ":6271",
@@ -44,6 +45,7 @@ Updates a single configuration value. If the config file does not exist, this
 command creates it first.
 
 ```sh
+mast config set node_id pixel-proxy
 mast config set advertise_host 100.64.0.10
 mast config set android_enabled true
 mast config set proxy_enabled true
@@ -54,6 +56,7 @@ mast config set runners..py "python3 -u"
 Supported keys:
 
 ```text
+node_id
 bind_addr
 proxy_addr
 api_addr
@@ -101,7 +104,8 @@ Use `--config` to start from a non-default config path:
 mast start --config ./mast.dev.json
 ```
 
-When started, the node ID is the host name returned by the operating system.
+When started, the node ID uses `node_id` when configured. If `node_id` is
+blank, Mast falls back to the host name returned by the operating system.
 
 ## peer add
 

@@ -64,6 +64,7 @@ Returns the selected local or peer node's persisted runtime config.
 
 ```json
 {
+  "node_id": "pixel-proxy",
   "bind_addr": ":6270",
   "proxy_addr": ":6272",
   "api_addr": ":6271",
@@ -92,6 +93,7 @@ as a `runners` object or as `runners.<extension>` keys.
 ```json
 {
   "values": {
+    "node_id": "pixel-proxy",
     "android_enabled": true,
     "adb_port": 5038,
     "api_addr": ":7001",
@@ -107,6 +109,7 @@ Response body:
 ```json
 {
   "config": {
+    "node_id": "pixel-proxy",
     "bind_addr": ":6270",
     "proxy_addr": ":6272",
     "api_addr": ":7001",
@@ -119,15 +122,16 @@ Response body:
       ".py": "python3"
     }
   },
-  "changed_keys": ["adb_port", "android_enabled", "api_addr", "runners..py"],
+  "changed_keys": ["adb_port", "android_enabled", "api_addr", "node_id", "runners..py"],
   "restart_required": true,
-  "restart_required_keys": ["api_addr"]
+  "restart_required_keys": ["api_addr", "node_id"]
 }
 ```
 
 Listener and directory fields such as `bind_addr`, `api_addr`, `proxy_addr`, and
 `programs_dir` are persisted immediately but require a restart to fully take
-effect.
+effect. Changing `node_id` also requires a restart because it changes the
+peer identity advertised by the running node.
 
 ## Add Peer
 

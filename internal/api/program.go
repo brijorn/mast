@@ -3,6 +3,8 @@ package api
 import (
 	"encoding/json"
 	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
 	"strconv"
 	"strings"
@@ -88,7 +90,7 @@ func (s *Server) UploadProgram(w http.ResponseWriter, r *http.Request) {
 		}
 		closers = append(closers, f)
 		uploadFiles = append(uploadFiles, program.UploadFile{
-			Path:    fh.Filename,
+			Path:    uploadFilePath(fh),
 			Content: f,
 		})
 	}
@@ -111,6 +113,16 @@ func (s *Server) UploadProgram(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(registered); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+func uploadFilePath(fh *multipart.FileHeader) string {
+	path := fh.Filename
+	if _, params, err := mime.ParseMediaType(fh.Header.Get("Content-Disposition")); err == nil {
+		if raw := strings.TrimSpace(params["filename"]); raw != "" {
+			path = raw
+		}
+	}
+	return strings.ReplaceAll(path, "\\", "/")
 }
 
 func (s *Server) DeleteProgram(w http.ResponseWriter, r *http.Request) {

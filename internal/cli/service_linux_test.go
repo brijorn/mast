@@ -14,6 +14,9 @@ func TestServiceFileContentUsesInstalledBinary(t *testing.T) {
 	if !strings.Contains(content, "ExecStart="+installPath+" start") {
 		t.Fatalf("service content does not reference installed binary:\n%s", content)
 	}
+	if !strings.Contains(content, `Environment="PATH=/home/user/.mast/bin:/home/user/.local/bin:/home/user/bin:`) {
+		t.Fatalf("service content does not add user bin dirs to PATH:\n%s", content)
+	}
 }
 
 func TestServiceLoadEnablesAndRestartsSystemdService(t *testing.T) {

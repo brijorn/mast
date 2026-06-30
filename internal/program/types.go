@@ -33,7 +33,6 @@ type ConfigMapping struct {
 type Program struct {
 	ID             string          `json:"id"`
 	Slug           string          `json:"slug,omitempty"`
-	Version        int             `json:"version"`
 	Name           string          `json:"name"`
 	ConfigFile     string          `json:"config_file,omitempty"`
 	ConfigMappings []ConfigMapping `json:"config_mappings,omitempty"`
@@ -42,18 +41,16 @@ type Program struct {
 }
 
 type Run struct {
-	ID             string            `json:"id"`
-	ProgramID      string            `json:"program_id"`
-	ProgramSlug    string            `json:"program_slug,omitempty"`
-	ProgramVersion int               `json:"program_version,omitempty"`
-	Serial         string            `json:"serial"`
-	NodeID         string            `json:"node_id"`
-	Workspace      string            `json:"workspace"`
-	Status         string            `json:"status"`
-	Autostart      bool              `json:"autostart,omitempty"`
-	ExitCode       *int              `json:"exit_code,omitempty"`
-	Error          string            `json:"error,omitempty"`
-	Env            map[string]string `json:"env,omitempty"`
+	ID        string            `json:"id"`
+	ProgramID string            `json:"program_id"`
+	Serial    string            `json:"serial"`
+	NodeID    string            `json:"node_id"`
+	Workspace string            `json:"workspace"`
+	Status    string            `json:"status"`
+	Autostart bool              `json:"autostart,omitempty"`
+	ExitCode  *int              `json:"exit_code,omitempty"`
+	Error     string            `json:"error,omitempty"`
+	Env       map[string]string `json:"env,omitempty"`
 	// Cmd and CmdArgs are the resolved command and arguments used to start this
 	// run. They are persisted so that Resume can re-execute the same process.
 	Cmd         string     `json:"cmd,omitempty"`

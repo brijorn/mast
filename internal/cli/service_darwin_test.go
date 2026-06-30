@@ -14,6 +14,10 @@ func TestServiceFileContentUsesInstalledBinary(t *testing.T) {
 	if !strings.Contains(content, "<string>"+installPath+"</string>") {
 		t.Fatalf("service content does not reference installed binary:\n%s", content)
 	}
+	if !strings.Contains(content, "<key>PATH</key>") ||
+		!strings.Contains(content, "<string>/Users/user/.mast/bin:/Users/user/.local/bin:/Users/user/bin:") {
+		t.Fatalf("service content does not add user bin dirs to PATH:\n%s", content)
+	}
 }
 
 func TestServiceLoadReloadsLaunchAgent(t *testing.T) {

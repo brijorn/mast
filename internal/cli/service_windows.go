@@ -5,6 +5,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 )
 
 const (
@@ -13,6 +14,9 @@ const (
 )
 
 func serviceFileContent(execPath string) string {
+	path := serviceEnvironmentPath(execPath)
+	arguments := fmt.Sprintf(`/d /c "set "PATH=%s" && "%s" start"`, path, execPath)
+	workingDir := filepath.Dir(execPath)
 	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <Triggers>
@@ -28,11 +32,12 @@ func serviceFileContent(execPath string) string {
   </Settings>
   <Actions>
     <Exec>
-      <Command>%s</Command>
-      <Arguments>start</Arguments>
+      <Command>cmd.exe</Command>
+      <Arguments>%s</Arguments>
+      <WorkingDirectory>%s</WorkingDirectory>
     </Exec>
   </Actions>
-</Task>`, execPath)
+</Task>`, xmlEscape(arguments), xmlEscape(workingDir))
 }
 
 func serviceLoad(path string) error {

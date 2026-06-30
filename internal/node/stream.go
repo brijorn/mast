@@ -12,7 +12,6 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"slices"
 	"sync"
 	"time"
 
@@ -215,19 +214,11 @@ func writeScrcpyServerTempFile() (string, func(), error) {
 }
 
 func (n *Node) deviceBySerial(serial string) (DeviceInfo, error) {
-	devices, err := n.ListDevices()
+	device, err := n.DeviceBySerial(serial)
 	if err != nil {
 		return DeviceInfo{}, err
 	}
-
-	index := slices.IndexFunc(devices, func(d DeviceInfo) bool {
-		return d.Serial == serial
-	})
-	if index == -1 {
-		return DeviceInfo{}, errors.New("device not found: " + serial)
-	}
-
-	return devices[index], nil
+	return *device, nil
 }
 
 func (n *Node) pushScrcpyServer(host string) error {
@@ -282,18 +273,28 @@ func (n *Node) StartStream(serial string, opts streamcfg.Options) (*StreamSessio
 		return n.startPeerStream(n.ctx, device.NodeID, serial, opts)
 	}
 
-	return n.startLocalStream(serial, opts)
+	return n.startLocalStreamAfterLookup(serial, opts)
 }
 
 func (n *Node) startLocalStream(serial string, opts streamcfg.Options) (*StreamSession, error) {
+	return n.startLocalStreamWithDeviceCheck(serial, opts, true)
+}
+
+func (n *Node) startLocalStreamAfterLookup(serial string, opts streamcfg.Options) (*StreamSession, error) {
+	return n.startLocalStreamWithDeviceCheck(serial, opts, false)
+}
+
+func (n *Node) startLocalStreamWithDeviceCheck(serial string, opts streamcfg.Options, checkDevice bool) (*StreamSession, error) {
 	opts = opts.WithDefaults()
 
 	if opts.TurnScreenOff && opts.NoControl {
 		return nil, errors.New("turn_screen_off requires control")
 	}
 
-	if _, err := n.localDeviceBySerial(serial); err != nil {
-		return nil, err
+	if checkDevice {
+		if _, err := n.localDeviceBySerial(serial); err != nil {
+			return nil, err
+		}
 	}
 
 	n.configMu.RLock()
@@ -452,7 +453,7 @@ func (n *Node) EnsureStream(serial string, opts streamcfg.Options) (*StreamSessi
 		return n.startPeerStream(n.ctx, device.NodeID, serial, opts)
 	}
 
-	return n.ensureStream(serial, opts, n.StartStream)
+	return n.ensureStream(serial, opts, n.startLocalStreamAfterLookup)
 }
 
 func (n *Node) ensureLocalStream(serial string, opts streamcfg.Options) (*StreamSession, error) {

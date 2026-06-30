@@ -19,29 +19,19 @@ const (
 	DefaultProxyAddr = ":6272"
 )
 
-type BatteryProtection struct {
-	Enabled       bool `json:"enabled"`
-	MinPercent    int  `json:"min_percent"`
-	ResumePercent int  `json:"resume_percent"`
-	StopProgram   bool `json:"stop_program"`
-	StopStream    bool `json:"stop_stream"`
-	SendHome      bool `json:"send_home"`
-}
-
 type Config struct {
-	NodeID            string            `json:"node_id"`
-	BindAddr          string            `json:"bind_addr"`
-	ProxyAddr         string            `json:"proxy_addr"`
-	APIAddr           string            `json:"api_addr"`
-	AdvertiseHost     string            `json:"advertise_host"`
-	ADBPort           int               `json:"adb_port"`
-	ProgramsDir       string            `json:"programs_dir"`
-	AndroidEnabled    bool              `json:"android_enabled"`
-	IOSEnabled        bool              `json:"ios_enabled"`
-	ProxyEnabled      bool              `json:"proxy_enabled"`
-	LockPortrait      bool              `json:"lock_portrait"`
-	BatteryProtection BatteryProtection `json:"battery_protection"`
-	Runners           map[string]string `json:"runners,omitempty"`
+	NodeID         string            `json:"node_id"`
+	BindAddr       string            `json:"bind_addr"`
+	ProxyAddr      string            `json:"proxy_addr"`
+	APIAddr        string            `json:"api_addr"`
+	AdvertiseHost  string            `json:"advertise_host"`
+	ADBPort        int               `json:"adb_port"`
+	ProgramsDir    string            `json:"programs_dir"`
+	AndroidEnabled bool              `json:"android_enabled"`
+	IOSEnabled     bool              `json:"ios_enabled"`
+	ProxyEnabled   bool              `json:"proxy_enabled"`
+	LockPortrait   bool              `json:"lock_portrait"`
+	Runners        map[string]string `json:"runners,omitempty"`
 }
 
 type UpdateResult struct {
@@ -49,28 +39,6 @@ type UpdateResult struct {
 	ChangedKeys         []string `json:"changed_keys"`
 	RestartRequired     bool     `json:"restart_required"`
 	RestartRequiredKeys []string `json:"restart_required_keys"`
-}
-
-func DefaultBatteryProtection() BatteryProtection {
-	return BatteryProtection{
-		Enabled:       false,
-		MinPercent:    20,
-		ResumePercent: 50,
-		StopProgram:   true,
-		StopStream:    true,
-		SendHome:      true,
-	}
-}
-
-func normalizeBatteryProtection(cfg BatteryProtection) BatteryProtection {
-	defaults := DefaultBatteryProtection()
-	if cfg.MinPercent == 0 {
-		cfg.MinPercent = defaults.MinPercent
-	}
-	if cfg.ResumePercent == 0 {
-		cfg.ResumePercent = defaults.ResumePercent
-	}
-	return cfg
 }
 
 func (c *Config) Set(key string, value string) error {
@@ -133,48 +101,6 @@ func (c *Config) Set(key string, value string) error {
 			return err
 		}
 		c.LockPortrait = parsed
-	case "battery_protection.enabled":
-		parsed, err := strconv.ParseBool(value)
-		if err != nil {
-			return err
-		}
-		c.BatteryProtection.Enabled = parsed
-	case "battery_protection.min_percent":
-		parsed, err := strconv.Atoi(value)
-		if err != nil {
-			return err
-		}
-		if parsed < 1 || parsed > 100 {
-			return fmt.Errorf("battery_protection.min_percent must be between 1 and 100")
-		}
-		c.BatteryProtection.MinPercent = parsed
-	case "battery_protection.resume_percent":
-		parsed, err := strconv.Atoi(value)
-		if err != nil {
-			return err
-		}
-		if parsed < 1 || parsed > 100 {
-			return fmt.Errorf("battery_protection.resume_percent must be between 1 and 100")
-		}
-		c.BatteryProtection.ResumePercent = parsed
-	case "battery_protection.stop_program":
-		parsed, err := strconv.ParseBool(value)
-		if err != nil {
-			return err
-		}
-		c.BatteryProtection.StopProgram = parsed
-	case "battery_protection.stop_stream":
-		parsed, err := strconv.ParseBool(value)
-		if err != nil {
-			return err
-		}
-		c.BatteryProtection.StopStream = parsed
-	case "battery_protection.send_home":
-		parsed, err := strconv.ParseBool(value)
-		if err != nil {
-			return err
-		}
-		c.BatteryProtection.SendHome = parsed
 	default:
 		return fmt.Errorf("invalid config key: %s", key)
 	}
@@ -183,7 +109,6 @@ func (c *Config) Set(key string, value string) error {
 }
 
 func (c Config) Clone() Config {
-	c.BatteryProtection = normalizeBatteryProtection(c.BatteryProtection)
 	clone := c
 	if c.Runners != nil {
 		clone.Runners = make(map[string]string, len(c.Runners))
@@ -293,15 +218,14 @@ func Default() Config {
 		programsDir = filepath.Join(FileDir, ProgramsFileDir)
 	}
 	return Config{
-		BindAddr:          DefaultBindAddr,
-		ProxyAddr:         DefaultProxyAddr,
-		APIAddr:           DefaultAPIAddr,
-		AdvertiseHost:     "127.0.0.1",
-		ADBPort:           5037,
-		ProgramsDir:       programsDir,
-		AndroidEnabled:    false,
-		ProxyEnabled:      false,
-		BatteryProtection: DefaultBatteryProtection(),
+		BindAddr:       DefaultBindAddr,
+		ProxyAddr:      DefaultProxyAddr,
+		APIAddr:        DefaultAPIAddr,
+		AdvertiseHost:  "127.0.0.1",
+		ADBPort:        5037,
+		ProgramsDir:    programsDir,
+		AndroidEnabled: false,
+		ProxyEnabled:   false,
 	}
 }
 
@@ -403,30 +327,6 @@ func changedKeys(before Config, after Config, requested []string) []string {
 			}
 		case "lock_portrait":
 			if before.LockPortrait != after.LockPortrait {
-				changed = append(changed, key)
-			}
-		case "battery_protection.enabled":
-			if before.BatteryProtection.Enabled != after.BatteryProtection.Enabled {
-				changed = append(changed, key)
-			}
-		case "battery_protection.min_percent":
-			if before.BatteryProtection.MinPercent != after.BatteryProtection.MinPercent {
-				changed = append(changed, key)
-			}
-		case "battery_protection.resume_percent":
-			if before.BatteryProtection.ResumePercent != after.BatteryProtection.ResumePercent {
-				changed = append(changed, key)
-			}
-		case "battery_protection.stop_program":
-			if before.BatteryProtection.StopProgram != after.BatteryProtection.StopProgram {
-				changed = append(changed, key)
-			}
-		case "battery_protection.stop_stream":
-			if before.BatteryProtection.StopStream != after.BatteryProtection.StopStream {
-				changed = append(changed, key)
-			}
-		case "battery_protection.send_home":
-			if before.BatteryProtection.SendHome != after.BatteryProtection.SendHome {
 				changed = append(changed, key)
 			}
 		}

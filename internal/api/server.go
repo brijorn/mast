@@ -23,6 +23,7 @@ type nodeBackend interface {
 	UpdateNodeConfig(ctx context.Context, nodeID string, values map[string]string) (*mastconfig.UpdateResult, error)
 	GetStream(serial string) (*node.StreamSession, error)
 	EnsureStream(serial string, opts streamcfg.Options) (*node.StreamSession, error)
+	StopStream(serial string) error
 	Touch(serial string, action string, x, y int) error
 	Tap(serial string, x, y int) error
 	Swipe(serial string, startX, startY, endX, endY int) error
@@ -84,6 +85,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/update", s.ApplyUpdate)
 
 	mux.HandleFunc("POST /api/streams", s.StartStream)
+	mux.HandleFunc("DELETE /api/streams/{serial}", s.StopStream)
 	mux.HandleFunc("GET /api/streams/video", s.StreamVideo)
 
 	mux.HandleFunc("GET /api/programs", s.ListPrograms)

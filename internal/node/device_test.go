@@ -3,11 +3,13 @@ package node
 import (
 	"encoding/binary"
 	"errors"
+	"io"
 	"net"
 	"os/exec"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brijorn/mast/internal/scrcpy"
 	streamcfg "github.com/brijorn/mast/internal/stream"
@@ -44,6 +46,7 @@ type fakeADB struct {
 	reverseCalls     []reverseCall
 	shellCalls       []shellCall
 	shellOutputCalls []shellCall
+	controlMessages  chan []byte
 }
 
 func (a *fakeADB) Devices(host string) ([]byte, error) {
@@ -79,7 +82,8 @@ func (a *fakeADB) StartShell(host string, arg ...string) (*exec.Cmd, error) {
 	})
 	if len(a.reverseCalls) > 0 {
 		port := a.reverseCalls[len(a.reverseCalls)-1].LocalPort
-		go writeFakeScrcpyVideoMetadata(port)
+		audio, control := fakeScrcpySocketOptions(arg)
+		go writeFakeScrcpySockets(port, audio, control, a.controlMessages)
 	}
 	return nil, nil
 }
@@ -106,6 +110,44 @@ func (a *fakeADB) ExecOut(host string, serial string, arg ...string) ([]byte, er
 		return nil, err
 	}
 	return a.execOutOutputs[serial], nil
+}
+
+func fakeScrcpySocketOptions(args []string) (bool, bool) {
+	audio := true
+	control := true
+	for _, arg := range args {
+		switch arg {
+		case "audio=false":
+			audio = false
+		case "control=false":
+			control = false
+		}
+	}
+	return audio, control
+}
+
+func writeFakeScrcpySockets(port int, audio bool, control bool, controlMessages chan<- []byte) {
+	writeFakeScrcpyVideoMetadata(port)
+	if audio {
+		conn, err := net.Dial("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+		if err == nil {
+			_ = conn.Close()
+		}
+	}
+	if control {
+		conn, err := net.Dial("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		if controlMessages == nil {
+			return
+		}
+		message := make([]byte, 2)
+		if _, err := io.ReadFull(conn, message); err == nil {
+			controlMessages <- message
+		}
+	}
 }
 
 func writeFakeScrcpyVideoMetadata(port int) {
@@ -559,6 +601,25 @@ func TestStreamOptionsFormat(t *testing.T) {
 	}
 }
 
+func TestStreamOptionsFormatIncludesExplicitVideoCodecOptions(t *testing.T) {
+	opts := streamcfg.Options{
+		VideoCodecOptions: "i-frame-interval=1",
+	}
+
+	got := opts.Format()
+	expected := []string{
+		"audio=true",
+		"control=true",
+		"stay_awake=false",
+		"clipboard_autosync=false",
+		"video_codec_options=i-frame-interval=1",
+	}
+
+	if diff := cmp.Diff(expected, got); diff != "" {
+		t.Fatalf("stream options mismatch (-want +got):\n%s", diff)
+	}
+}
+
 // Verifies StartStream pushes scrcpy, creates a reverse tunnel, and starts the server.
 func TestStartStreamSetsUpLocalDeviceStream(t *testing.T) {
 	localADBOutput := []byte("List of devices attached\nlocal-123\tdevice\n")
@@ -637,6 +698,53 @@ func TestStartStreamSetsUpLocalDeviceStream(t *testing.T) {
 	}
 	if diff := cmp.Diff(expectedShellCalls, fake.shellCalls); diff != "" {
 		t.Fatalf("shell calls mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestStartStreamTurnsScreenOffAfterControlConnects(t *testing.T) {
+	localADBOutput := []byte("List of devices attached\nlocal-123\tdevice\n")
+	controlMessages := make(chan []byte, 1)
+	fake := &fakeADB{
+		outputs: map[string][]byte{
+			"": localADBOutput,
+		},
+		controlMessages: controlMessages,
+	}
+	node := &Node{
+		ID:            "local-node",
+		AdvertiseHost: "100.64.0.1",
+		Peers:         map[string]*PeerConn{},
+		adb:           fake,
+	}
+
+	session, err := node.StartStream("local-123", streamcfg.Options{
+		NoAudio:       true,
+		TurnScreenOff: true,
+	})
+	if err != nil {
+		t.Fatalf("StartStream returned error: %v", err)
+	}
+	defer func() { _ = session.Stop() }()
+
+	select {
+	case got := <-controlMessages:
+		if want := []byte{scrcpy.SetDisplayPower, 0}; !cmp.Equal(got, want) {
+			t.Fatalf("control message mismatch (-want +got):\n%s", cmp.Diff(want, got))
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for display power control message")
+	}
+}
+
+func TestStartStreamRejectsTurnScreenOffWithoutControl(t *testing.T) {
+	node := &Node{}
+
+	_, err := node.startLocalStream("local-123", streamcfg.Options{
+		NoControl:     true,
+		TurnScreenOff: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "turn_screen_off requires control") {
+		t.Fatalf("startLocalStream error = %v, want turn_screen_off requires control", err)
 	}
 }
 

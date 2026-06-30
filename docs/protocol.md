@@ -39,6 +39,7 @@ Sent when a node introduces itself to a peer.
     "android_enabled": true,
     "ios_enabled": false,
     "proxy_enabled": true,
+    "adb_port": 5037,
     "version": "0.1.0",
     "commit": "abc123",
     "build_date": "2026-06-25T17:00:00Z"
@@ -48,8 +49,87 @@ Sent when a node introduces itself to a peer.
 
 `android_enabled` tells the peer whether this node should be queried for Android
 devices. `ios_enabled` is reserved for iOS device support. `proxy_enabled`
-tells the peer whether this node has its proxy server enabled.
-The version fields describe the Mast binary running on that node.
+tells the peer whether this node has its proxy server enabled. `adb_port` is
+advertised so remote program runs can point ADB-backed tools at the correct peer
+ADB server. The version fields describe the Mast binary running on that node.
+
+## list_devices_request
+
+Requests the destination node's local Android devices.
+
+```json
+{
+  "type": "list_devices_request",
+  "id": "message-id",
+  "from": "node-a",
+  "to": "node-b",
+  "timestamp": "2026-06-22T17:00:00Z",
+  "payload": null
+}
+```
+
+The response uses the same message ID:
+
+```json
+{
+  "type": "list_devices_response",
+  "id": "message-id",
+  "from": "node-b",
+  "to": "node-a",
+  "timestamp": "2026-06-22T17:00:01Z",
+  "payload": {
+    "result": [
+      {
+        "serial": "remote-123",
+        "state": "device",
+        "node_id": "node-b",
+        "battery_percent": 81,
+        "power_connected": true,
+        "power_source": "usb",
+        "battery_status": "charging",
+        "power_health": "charging"
+      }
+    ]
+  }
+}
+```
+
+If the listing fails, `payload.error` contains the error string.
+
+## screenshot_request
+
+Requests a PNG screenshot from a device owned by the destination node.
+
+```json
+{
+  "type": "screenshot_request",
+  "id": "message-id",
+  "from": "node-a",
+  "to": "node-b",
+  "timestamp": "2026-06-22T17:00:00Z",
+  "payload": {
+    "serial": "remote-123"
+  }
+}
+```
+
+The response uses the same message ID. The `png` field is base64-encoded by
+JSON because it carries raw bytes:
+
+```json
+{
+  "type": "screenshot_response",
+  "id": "message-id",
+  "from": "node-b",
+  "to": "node-a",
+  "timestamp": "2026-06-22T17:00:01Z",
+  "payload": {
+    "png": "iVBORw0KGgo..."
+  }
+}
+```
+
+If capture fails, `payload.error` contains the error string.
 
 ## start_stream_request
 
@@ -67,7 +147,7 @@ Requests that the device owner start a scrcpy stream.
     "options": {
       "no_audio": true,
       "no_control": false,
-      "turn_screen_off": false,
+      "turn_screen_off": true,
       "stay_awake": true,
       "max_size": 1080,
       "video_bitrate": 8000000
@@ -75,6 +155,28 @@ Requests that the device owner start a scrcpy stream.
   }
 }
 ```
+
+The response uses the same message ID:
+
+```json
+{
+  "type": "start_stream_response",
+  "id": "message-id",
+  "from": "node-b",
+  "to": "node-a",
+  "timestamp": "2026-06-22T17:00:01Z",
+  "payload": {
+    "result": {
+      "id": "stream-session-id",
+      "serial": "remote-123",
+      "host": "100.64.0.2",
+      "local_port": 12345
+    }
+  }
+}
+```
+
+If startup fails, `payload.error` contains the error string.
 
 ## stop_stream_request
 
@@ -92,6 +194,8 @@ Requests that the device owner stop a scrcpy stream.
   }
 }
 ```
+
+This is a fire-and-forget message. Errors are logged on the receiving node.
 
 ## tap_request
 
@@ -112,6 +216,8 @@ socket.
   }
 }
 ```
+
+This is a fire-and-forget message. Errors are logged on the receiving node.
 
 ## touch_request
 
@@ -137,6 +243,8 @@ messages, then `up`.
 
 `action` must be `down`, `move`, or `up`.
 
+This is a fire-and-forget message. Errors are logged on the receiving node.
+
 ## swipe_request
 
 Requests that the device owner send a swipe through the active scrcpy control
@@ -158,6 +266,188 @@ socket.
   }
 }
 ```
+
+This is a fire-and-forget message. Errors are logged on the receiving node.
+
+## press_key_request
+
+Requests that the device owner send an Android keycode through the active
+scrcpy control socket.
+
+```json
+{
+  "type": "press_key_request",
+  "id": "message-id",
+  "from": "node-a",
+  "to": "node-b",
+  "timestamp": "2026-06-22T17:00:00Z",
+  "payload": {
+    "serial": "remote-123",
+    "keycode": 3,
+    "meta_state": 0
+  }
+}
+```
+
+This is a fire-and-forget message. Errors are logged on the receiving node.
+
+## clipboard_get_request
+
+Requests clipboard text from a device owned by the destination node.
+
+```json
+{
+  "type": "clipboard_get_request",
+  "id": "message-id",
+  "from": "node-a",
+  "to": "node-b",
+  "timestamp": "2026-06-22T17:00:00Z",
+  "payload": {
+    "serial": "remote-123"
+  }
+}
+```
+
+The response uses the same message ID:
+
+```json
+{
+  "type": "clipboard_get_response",
+  "id": "message-id",
+  "from": "node-b",
+  "to": "node-a",
+  "timestamp": "2026-06-22T17:00:01Z",
+  "payload": {
+    "text": "clipboard text"
+  }
+}
+```
+
+If reading fails, `payload.error` contains the error string.
+
+## clipboard_set_request
+
+Requests that the device owner set clipboard text through the active scrcpy
+control socket.
+
+```json
+{
+  "type": "clipboard_set_request",
+  "id": "message-id",
+  "from": "node-a",
+  "to": "node-b",
+  "timestamp": "2026-06-22T17:00:00Z",
+  "payload": {
+    "serial": "remote-123",
+    "text": "new clipboard text"
+  }
+}
+```
+
+This is a fire-and-forget message. Errors are logged on the receiving node.
+
+## config_get_request
+
+Requests the destination node's persisted runtime config.
+
+```json
+{
+  "type": "config_get_request",
+  "id": "message-id",
+  "from": "node-a",
+  "to": "node-b",
+  "timestamp": "2026-06-22T17:00:00Z",
+  "payload": null
+}
+```
+
+The response uses the same message ID:
+
+```json
+{
+  "type": "config_get_response",
+  "id": "message-id",
+  "from": "node-b",
+  "to": "node-a",
+  "timestamp": "2026-06-22T17:00:01Z",
+  "payload": {
+    "config": {
+      "node_id": "node-b",
+      "bind_addr": ":6270",
+      "proxy_addr": ":6272",
+      "api_addr": ":6271",
+      "advertise_host": "100.64.0.2",
+      "adb_port": 5037,
+      "programs_dir": "/home/user/.mast/programs",
+      "android_enabled": true,
+      "ios_enabled": false,
+      "proxy_enabled": false,
+      "lock_portrait": false
+    }
+  }
+}
+```
+
+If reading config fails, `payload.error` contains the error string.
+
+## config_update_request
+
+Requests that the destination node apply config key/value updates and persist
+them to its config file.
+
+```json
+{
+  "type": "config_update_request",
+  "id": "message-id",
+  "from": "node-a",
+  "to": "node-b",
+  "timestamp": "2026-06-22T17:00:00Z",
+  "payload": {
+    "values": {
+      "android_enabled": "true",
+      "adb_port": "5038",
+      "runners..py": "python3 -u"
+    }
+  }
+}
+```
+
+The response uses the same message ID:
+
+```json
+{
+  "type": "config_update_response",
+  "id": "message-id",
+  "from": "node-b",
+  "to": "node-a",
+  "timestamp": "2026-06-22T17:00:01Z",
+  "payload": {
+    "result": {
+      "config": {
+        "node_id": "node-b",
+        "bind_addr": ":6270",
+        "proxy_addr": ":6272",
+        "api_addr": ":6271",
+        "advertise_host": "100.64.0.2",
+        "adb_port": 5038,
+        "programs_dir": "/home/user/.mast/programs",
+        "android_enabled": true,
+        "ios_enabled": false,
+        "proxy_enabled": false,
+        "lock_portrait": false,
+        "runners": {
+          ".py": "python3 -u"
+        }
+      },
+      "changed_keys": ["adb_port", "runners..py"],
+      "restart_required": false,
+      "restart_required_keys": []
+    }
+  }
+}
+```
+
+If the update fails, `payload.error` contains the error string.
 
 ## update_check_request
 

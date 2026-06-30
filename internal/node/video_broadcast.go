@@ -5,13 +5,18 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"time"
 )
 
+const videoReplayKeyframeMaxAge = time.Minute
+
 type VideoPacket struct {
-	PTS      uint64
-	Config   bool
-	Keyframe bool
-	Data     []byte
+	PTS        uint64
+	Config     bool
+	Keyframe   bool
+	Data       []byte
+	sequence   uint64
+	receivedAt time.Time
 }
 
 func (s *StreamSession) readVideoPacket() (*VideoPacket, error) {
@@ -53,6 +58,7 @@ type videoBroadcaster struct {
 	subscribers    map[videoSubscriber]struct{}
 	latestConfig   *VideoPacket
 	latestKeyframe *VideoPacket
+	nextSequence   uint64
 	done           chan struct{}
 }
 
@@ -67,13 +73,11 @@ func (b *videoBroadcaster) Subscribe() (<-chan VideoPacket, func()) {
 	ch := make(chan VideoPacket, 256)
 
 	b.mu.Lock()
-	b.subscribers[ch] = struct{}{}
-	replayPackets := b.replayPackets()
-	b.mu.Unlock()
-
-	for _, packet := range replayPackets {
+	for _, packet := range b.replayPackets(time.Now()) {
 		ch <- packet
 	}
+	b.subscribers[ch] = struct{}{}
+	b.mu.Unlock()
 
 	unsubscribe := func() {
 		b.mu.Lock()
@@ -89,8 +93,12 @@ func (b *videoBroadcaster) broadcast(packet VideoPacket) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	b.nextSequence++
+	packet.sequence = b.nextSequence
+	packet.receivedAt = time.Now()
+
 	if packet.Config {
-		b.latestConfig = cloneVideoPacket(packet)
+		b.latestConfig = cloneVideoPacketForConfigReplay(packet)
 	}
 	if packet.Keyframe {
 		b.latestKeyframe = cloneVideoPacket(packet)
@@ -107,15 +115,21 @@ func (b *videoBroadcaster) broadcast(packet VideoPacket) {
 	}
 }
 
-func (b *videoBroadcaster) replayPackets() []VideoPacket {
+func (b *videoBroadcaster) replayPackets(now time.Time) []VideoPacket {
 	var packets []VideoPacket
-	if b.latestConfig != nil {
+	if b.latestConfig != nil && (!b.latestConfig.Keyframe || isFreshVideoPacket(*b.latestConfig, now)) {
 		packets = append(packets, *cloneVideoPacket(*b.latestConfig))
 	}
-	if b.latestKeyframe != nil && b.latestKeyframe != b.latestConfig {
+	if b.latestKeyframe != nil &&
+		isFreshVideoPacket(*b.latestKeyframe, now) &&
+		(b.latestConfig == nil || b.latestKeyframe.sequence != b.latestConfig.sequence || !b.latestConfig.Keyframe) {
 		packets = append(packets, *cloneVideoPacket(*b.latestKeyframe))
 	}
 	return packets
+}
+
+func isFreshVideoPacket(packet VideoPacket, now time.Time) bool {
+	return packet.receivedAt.IsZero() || now.Sub(packet.receivedAt) <= videoReplayKeyframeMaxAge
 }
 
 func cloneVideoPacket(packet VideoPacket) *VideoPacket {
@@ -125,26 +139,86 @@ func cloneVideoPacket(packet VideoPacket) *VideoPacket {
 	return &packet
 }
 
+func cloneVideoPacketForConfigReplay(packet VideoPacket) *VideoPacket {
+	cloned := cloneVideoPacket(packet)
+	if configData := h264ConfigData(cloned.Data); len(configData) > 0 {
+		cloned.Data = configData
+		cloned.Config = true
+		cloned.Keyframe = false
+	}
+	return cloned
+}
+
 func h264NALTypes(data []byte) []byte {
 	var types []byte
-	for i := 0; i+3 < len(data); i++ {
-		startCodeLen := 0
-		if data[i] == 0 && data[i+1] == 0 && data[i+2] == 1 {
-			startCodeLen = 3
-		} else if i+4 < len(data) && data[i] == 0 && data[i+1] == 0 && data[i+2] == 0 && data[i+3] == 1 {
-			startCodeLen = 4
+	for _, nal := range h264NALRanges(data) {
+		types = append(types, nal.typ)
+	}
+	return types
+}
+
+func h264ConfigData(data []byte) []byte {
+	var config []byte
+	for _, nal := range h264NALRanges(data) {
+		if nal.typ != 7 && nal.typ != 8 {
+			continue
 		}
+		config = append(config, data[nal.start:nal.end]...)
+	}
+	return config
+}
+
+type h264NALRange struct {
+	start int
+	end   int
+	typ   byte
+}
+
+func h264NALRanges(data []byte) []h264NALRange {
+	var ranges []h264NALRange
+	for i := 0; i+3 < len(data); i++ {
+		startCodeLen := h264StartCodeLen(data, i)
 		if startCodeLen == 0 {
 			continue
 		}
 
 		nalOffset := i + startCodeLen
-		if nalOffset < len(data) {
-			types = append(types, data[nalOffset]&0x1f)
+		if nalOffset >= len(data) {
+			break
 		}
+
+		ranges = append(ranges, h264NALRange{
+			start: i,
+			typ:   data[nalOffset] & 0x1f,
+		})
 		i = nalOffset
 	}
-	return types
+
+	for i := range ranges {
+		if i+1 < len(ranges) {
+			ranges[i].end = ranges[i+1].start
+		} else {
+			ranges[i].end = len(data)
+		}
+	}
+	return ranges
+}
+
+func h264StartCodeLen(data []byte, offset int) int {
+	if offset+3 <= len(data) &&
+		data[offset] == 0 &&
+		data[offset+1] == 0 &&
+		data[offset+2] == 1 {
+		return 3
+	}
+	if offset+4 <= len(data) &&
+		data[offset] == 0 &&
+		data[offset+1] == 0 &&
+		data[offset+2] == 0 &&
+		data[offset+3] == 1 {
+		return 4
+	}
+	return 0
 }
 
 func containsNALType(types []byte, target byte) bool {

@@ -74,10 +74,6 @@ func (s *Store) Start(opts StartOptions) ([]Run, error) {
 }
 
 func (s *Store) Stop(id string) (*Run, error) {
-	return s.stopRun(id, "")
-}
-
-func (s *Store) stopRun(id string, reason string) (*Run, error) {
 	s.mu.Lock()
 	state := s.runs[id]
 	if state == nil {
@@ -85,7 +81,6 @@ func (s *Store) stopRun(id string, reason string) (*Run, error) {
 		return nil, errors.New("run not found")
 	}
 	state.run.Autostart = false
-	state.run.StoppedReason = reason
 	if state.cmd == nil || state.cmd.Process == nil {
 		if state.run.Status == RunStatusRunning || state.run.Status == RunStatusStarting {
 			now := time.Now().UTC()
@@ -100,7 +95,6 @@ func (s *Store) stopRun(id string, reason string) (*Run, error) {
 		return &run, nil
 	}
 	state.stopping = true
-	state.stopReason = reason
 	if state.run.PID == 0 {
 		state.run.PID = state.cmd.Process.Pid
 	}
@@ -141,9 +135,6 @@ func (s *Store) SetRunAutostart(id string, enabled bool) (*Run, error) {
 }
 
 func (s *Store) Shutdown() {
-	s.batteryMonitorOnce.Do(func() {
-		close(s.batteryMonitorStop)
-	})
 	s.mu.Lock()
 	states := make([]*runState, 0, len(s.runs))
 	for _, state := range s.runs {
@@ -330,7 +321,6 @@ func (s *Store) Resume(opts ResumeOptions) (*Run, error) {
 	run.PID = 0
 	run.StartedAt = time.Now().UTC()
 	state.stopping = false
-	state.stopReason = ""
 	s.mu.Unlock()
 
 	_ = writeJSON(filepath.Join(run.Workspace, "run.json"), run)
@@ -389,36 +379,7 @@ func (s *Store) CleanupRun(id string) (*Run, error) {
 	return run, nil
 }
 
-// cleanupCompletedRunsForSerial removes workspace directories for all
-// completed or failed runs belonging to the given device serial. It is called
-// automatically before a new run is started on that serial so that disk space
-// from prior runs is reclaimed when the phone switches programs.
-func (s *Store) cleanupCompletedRunsForSerial(serial string) {
-	s.mu.Lock()
-	var toClean []*runState
-	for _, state := range s.runs {
-		if state.run.Serial == serial &&
-			(state.run.Status == RunStatusExited || state.run.Status == RunStatusFailed || state.run.Status == RunStatusStopped) &&
-			!state.run.WorkspaceCleaned {
-			toClean = append(toClean, state)
-		}
-	}
-	s.mu.Unlock()
-
-	for _, state := range toClean {
-		if err := os.RemoveAll(state.run.Workspace); err == nil || os.IsNotExist(err) {
-			s.mu.Lock()
-			state.run.WorkspaceCleaned = true
-			s.mu.Unlock()
-		}
-	}
-}
-
 func (s *Store) startOne(p Program, device node.DeviceInfo, nodes []node.NodeInfo, variables map[string]string) (*Run, error) {
-	// Reclaim disk space from prior completed/failed runs on this serial
-	// before creating the new workspace.
-	s.cleanupCompletedRunsForSerial(device.Serial)
-
 	id := uuid.NewString()
 	workspace := filepath.Join(s.instanceDir(), id)
 	if err := copyDir(s.bundlePath(p.ID), workspace); err != nil {
@@ -527,7 +488,6 @@ func (s *Store) waitRun(state *runState, stdout, stderr io.Closer) {
 		state.run.ExitCode = nil
 		state.run.Status = RunStatusStopped
 		state.run.Error = ""
-		state.run.StoppedReason = state.stopReason
 	} else if err == nil {
 		code := 0
 		state.run.ExitCode = &code

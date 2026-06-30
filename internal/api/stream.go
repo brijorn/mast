@@ -42,7 +42,17 @@ func (s *Server) StartStream(w http.ResponseWriter, r *http.Request) {
 	writeStartStreamResponse(w, req.Serial, stream)
 }
 
-func (s *Server) StopStream() {
+func (s *Server) StopStream(w http.ResponseWriter, r *http.Request) {
+	serial := r.PathValue("serial")
+	if serial == "" {
+		http.Error(w, "serial required", http.StatusBadRequest)
+		return
+	}
+	if err := s.node.StopStream(serial); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 func writeStartStreamResponse(w http.ResponseWriter, serial string, stream *node.StreamSession) {
 	w.Header().Set("Content-Type", "application/json")

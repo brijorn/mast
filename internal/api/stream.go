@@ -32,6 +32,7 @@ func (s *Server) StartStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "serial required", http.StatusBadRequest)
 		return
 	}
+	req.Options = req.Options.WithDefaults()
 
 	stream, err := s.node.EnsureStream(req.Serial, req.Options)
 	if err != nil {

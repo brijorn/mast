@@ -364,7 +364,8 @@ POST /api/streams
 
 Starts a scrcpy stream for a device serial. Only one stream start is allowed per
 serial at a time; concurrent requests for the same serial wait for the same
-startup result.
+startup result. If `no_control` is false or omitted, `turn_screen_off` defaults
+to true.
 
 Request body:
 

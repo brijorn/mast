@@ -12,6 +12,13 @@ type Options struct {
 	VideoCodecOptions string `json:"video_codec_options"`
 }
 
+func (s Options) WithDefaults() Options {
+	if !s.NoControl {
+		s.TurnScreenOff = true
+	}
+	return s
+}
+
 func (s *Options) Format() []string {
 	var formatted []string
 	formatted = append(formatted,

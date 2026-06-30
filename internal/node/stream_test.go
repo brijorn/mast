@@ -3,12 +3,32 @@ package node
 import (
 	"encoding/binary"
 	"net"
+	"os"
+	"os/exec"
 	"testing"
 	"time"
 
+	"github.com/brijorn/mast/internal/scrcpy"
 	streamcfg "github.com/brijorn/mast/internal/stream"
 	"github.com/google/go-cmp/cmp"
 )
+
+func TestStreamSessionStopIgnoresKilledProcessExit(t *testing.T) {
+	if os.Getenv("MAST_STOP_HELPER_PROCESS") == "1" {
+		select {}
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=TestStreamSessionStopIgnoresKilledProcessExit")
+	cmd.Env = append(os.Environ(), "MAST_STOP_HELPER_PROCESS=1")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start helper process: %v", err)
+	}
+
+	session := &StreamSession{cmd: cmd}
+	if err := session.Stop(); err != nil {
+		t.Fatalf("Stop returned error: %v", err)
+	}
+}
 
 func TestReadScrcpyVideoMetadata(t *testing.T) {
 	client, server := net.Pipe()
@@ -229,5 +249,58 @@ func TestEnsureStreamReusesExistingStreamWithStaleReplayKeyframe(t *testing.T) {
 	}
 	if startCalls != 0 {
 		t.Fatalf("start calls = %d, want 0", startCalls)
+	}
+}
+
+func TestEnsureStreamTurnsScreenOffWhenReusingExistingStream(t *testing.T) {
+	done := make(chan struct{})
+	close(done)
+
+	controlConn := &recordingConn{}
+	fake := &fakeADB{
+		outputs: map[string][]byte{
+			"": []byte("List of devices attached\nlocal-123\tdevice\n"),
+		},
+	}
+	existing := &StreamSession{
+		ID:           "existing-stream",
+		DeviceSerial: "local-123",
+		controlConn:  controlConn,
+	}
+	node := &Node{
+		ID:             "local-node",
+		AndroidEnabled: true,
+		adb:            fake,
+		streams: map[string]*streamEntry{
+			"local-123": {
+				Session: existing,
+				Done:    done,
+			},
+		},
+	}
+
+	got, err := node.EnsureStream("local-123", streamcfg.Options{})
+	if err != nil {
+		t.Fatalf("EnsureStream returned error: %v", err)
+	}
+	if got != existing {
+		t.Fatalf("EnsureStream returned %p, want existing %p", got, existing)
+	}
+
+	if want := []byte{scrcpy.SetDisplayPower, 0}; !cmp.Equal(controlConn.data, want) {
+		t.Fatalf("control message mismatch (-want +got):\n%s", cmp.Diff(want, controlConn.data))
+	}
+
+	if len(fake.shellOutputCalls) == 0 {
+		t.Fatal("display power shell call was not recorded")
+	}
+	gotShellCall := fake.shellOutputCalls[len(fake.shellOutputCalls)-1]
+	expectedShellCall := shellCall{
+		Host:   "",
+		Serial: "local-123",
+		Args:   []string{"cmd", "display", "power-off", "0"},
+	}
+	if diff := cmp.Diff(expectedShellCall, gotShellCall); diff != "" {
+		t.Fatalf("display power shell call mismatch (-want +got):\n%s", diff)
 	}
 }

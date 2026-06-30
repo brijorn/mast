@@ -14,7 +14,6 @@ import (
 	"syscall"
 
 	"github.com/brijorn/mast/internal/api"
-	mastconfig "github.com/brijorn/mast/internal/config"
 	"github.com/brijorn/mast/internal/node"
 	"github.com/brijorn/mast/internal/program"
 	"github.com/brijorn/mast/internal/proxy"
@@ -70,7 +69,6 @@ func (s *StartCmd) Run() error {
 		return err
 	}
 	programStore.SetRunners(cfg.Runners)
-	programStore.SetBatteryProtection(cfg.BatteryProtection)
 	mastNode.SetConfig(s.ConfigPath, *cfg, &runtimeConfigApplier{programs: programStore, proxy: proxyRuntime})
 	apiServer := api.NewServer(mastNode, programStore)
 	var shuttingDown atomic.Bool
@@ -122,7 +120,6 @@ func resolveNodeID(cfg Config) (string, error) {
 type runtimeConfigApplier struct {
 	programs interface {
 		SetRunners(map[string]string)
-		SetBatteryProtection(mastconfig.BatteryProtection)
 	}
 	proxy *runtimeProxy
 }
@@ -130,7 +127,6 @@ type runtimeConfigApplier struct {
 func (a *runtimeConfigApplier) ApplyRuntimeConfig(cfg Config, changedKeys []string) error {
 	if a.programs != nil {
 		a.programs.SetRunners(cfg.Runners)
-		a.programs.SetBatteryProtection(cfg.BatteryProtection)
 	}
 	if a.proxy != nil {
 		return a.proxy.SetEnabled(cfg.ProxyEnabled, cfg.ProxyAddr)

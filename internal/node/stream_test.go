@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"net"
 	"testing"
+	"time"
 
 	streamcfg "github.com/brijorn/mast/internal/stream"
 	"github.com/google/go-cmp/cmp"
@@ -156,5 +157,77 @@ func TestEnsureStreamRestartsRemoteStreamAfterPeerLosesState(t *testing.T) {
 	}
 	if second.ID == first.ID {
 		t.Fatalf("second stream ID = first stream ID %q, want fresh peer stream", second.ID)
+	}
+}
+
+func TestStopStreamRoutesRemoteDeviceToPeer(t *testing.T) {
+	nodeA, nodeB := createNodePair(t)
+	defer func() { _ = nodeA.Close() }()
+	defer func() { _ = nodeB.Close() }()
+
+	nodeA.AndroidEnabled = true
+	nodeB.AndroidEnabled = true
+	nodeA.adb = &fakeADB{
+		outputs: map[string][]byte{
+			"": []byte("List of devices attached\n"),
+		},
+	}
+	nodeB.adb = &fakeADB{
+		outputs: map[string][]byte{
+			"": []byte("List of devices attached\nremote-123\tdevice\n"),
+		},
+	}
+	nodeB.streams["remote-123"] = readyStreamEntry(&StreamSession{
+		DeviceSerial: "remote-123",
+	})
+
+	connectNodePair(t, nodeA, nodeB)
+
+	if err := nodeA.StopStream("remote-123"); err != nil {
+		t.Fatalf("StopStream returned error: %v", err)
+	}
+
+	waitFor(t, time.Second, func() bool {
+		nodeB.streamsMu.RLock()
+		defer nodeB.streamsMu.RUnlock()
+		_, ok := nodeB.streams["remote-123"]
+		return !ok
+	})
+}
+
+func TestEnsureStreamReusesExistingStreamWithStaleReplayKeyframe(t *testing.T) {
+	node := &Node{
+		streams: make(map[string]*streamEntry),
+	}
+	done := make(chan struct{})
+	close(done)
+
+	broadcaster := newVideoBroadcaster()
+	broadcaster.broadcast(VideoPacket{PTS: 1, Keyframe: true, Data: []byte{1}})
+	broadcaster.latestKeyframe.receivedAt = time.Now().Add(-videoReplayKeyframeMaxAge - time.Second)
+
+	existing := &StreamSession{
+		ID:               "existing-stream",
+		DeviceSerial:     "local-123",
+		videoBroadcaster: broadcaster,
+	}
+	node.streams["local-123"] = &streamEntry{
+		Session: existing,
+		Done:    done,
+	}
+
+	startCalls := 0
+	got, err := node.ensureStream("local-123", streamcfg.Options{}, func(string, streamcfg.Options) (*StreamSession, error) {
+		startCalls++
+		return &StreamSession{ID: "new-stream"}, nil
+	})
+	if err != nil {
+		t.Fatalf("ensureStream returned error: %v", err)
+	}
+	if got != existing {
+		t.Fatalf("ensureStream returned %p, want existing %p", got, existing)
+	}
+	if startCalls != 0 {
+		t.Fatalf("start calls = %d, want 0", startCalls)
 	}
 }

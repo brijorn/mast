@@ -266,6 +266,10 @@ func (n *Node) StartStream(serial string, opts streamcfg.Options) (*StreamSessio
 }
 
 func (n *Node) startLocalStream(serial string, opts streamcfg.Options) (*StreamSession, error) {
+	if opts.TurnScreenOff && opts.NoControl {
+		return nil, errors.New("turn_screen_off requires control")
+	}
+
 	if _, err := n.localDeviceBySerial(serial); err != nil {
 		return nil, err
 	}
@@ -328,6 +332,15 @@ func (n *Node) startLocalStream(serial string, opts streamcfg.Options) (*StreamS
 	if err := session.acceptScrcpyConnection(opts); err != nil {
 		_ = session.Stop()
 		return nil, err
+	}
+	if opts.TurnScreenOff {
+		session.controlMu.Lock()
+		err := scrcpy.WriteSetDisplayPower(session.controlConn, false)
+		session.controlMu.Unlock()
+		if err != nil {
+			_ = session.Stop()
+			return nil, err
+		}
 	}
 
 	session.videoBroadcaster = newVideoBroadcaster()
@@ -426,49 +439,51 @@ func (n *Node) ensureLocalStream(serial string, opts streamcfg.Options) (*Stream
 }
 
 func (n *Node) ensureStream(serial string, opts streamcfg.Options, start func(string, streamcfg.Options) (*StreamSession, error)) (*StreamSession, error) {
-	n.streamsMu.Lock()
-	entry, ok := n.streams[serial]
-	if ok {
+	for {
+		n.streamsMu.Lock()
+		entry, ok := n.streams[serial]
+		if ok {
+			n.streamsMu.Unlock()
+
+			<-entry.Done
+			if entry.Error != nil {
+				return nil, entry.Error
+			}
+
+			if entry.Session == nil {
+				return nil, errors.New("internal error: stream session is nil")
+			}
+
+			return entry.Session, nil
+		}
+
+		entry = &streamEntry{
+			Done: make(chan struct{}),
+		}
+		n.streams[serial] = entry
 		n.streamsMu.Unlock()
 
-		<-entry.Done
-		if entry.Error != nil {
-			return nil, entry.Error
+		streamSession, err := start(serial, opts)
+
+		n.streamsMu.Lock()
+		if err != nil {
+			entry.Error = err
+			delete(n.streams, serial)
+		} else if streamSession == nil {
+			err = errors.New("internal error: stream starter returned nil session")
+			entry.Error = err
+			delete(n.streams, serial)
+		} else {
+			entry.Session = streamSession
 		}
+		n.streamsMu.Unlock()
+		close(entry.Done)
 
-		if entry.Session == nil {
-			return nil, errors.New("internal error: stream session is nil")
+		if err != nil {
+			return nil, err
 		}
-
-		return entry.Session, nil
+		return streamSession, nil
 	}
-
-	entry = &streamEntry{
-		Done: make(chan struct{}),
-	}
-	n.streams[serial] = entry
-	n.streamsMu.Unlock()
-
-	streamSession, err := start(serial, opts)
-
-	n.streamsMu.Lock()
-	if err != nil {
-		entry.Error = err
-		delete(n.streams, serial)
-	} else if streamSession == nil {
-		err = errors.New("internal error: stream starter returned nil session")
-		entry.Error = err
-		delete(n.streams, serial)
-	} else {
-		entry.Session = streamSession
-	}
-	n.streamsMu.Unlock()
-	close(entry.Done)
-
-	if err != nil {
-		return nil, err
-	}
-	return streamSession, nil
 }
 
 func (n *Node) GetStream(serial string) (*StreamSession, error) {
@@ -490,6 +505,19 @@ func (n *Node) GetStream(serial string) (*StreamSession, error) {
 }
 
 func (n *Node) StopStream(serial string) error {
+	device, err := n.deviceBySerial(serial)
+	if err == nil && device.NodeID != n.ID {
+		return n.stopPeerStream(device.NodeID, serial)
+	}
+	return n.stopLocalStream(serial)
+}
+
+func (n *Node) stopPeerStream(nodeID string, serial string) error {
+	payload := transport.StopStreamRequestPayload{Serial: serial}
+	return n.sendPeerRequest(nodeID, transport.TypeStopStreamRequest, payload)
+}
+
+func (n *Node) stopLocalStream(serial string) error {
 	n.streamsMu.Lock()
 	entry, ok := n.streams[serial]
 

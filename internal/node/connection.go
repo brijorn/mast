@@ -301,7 +301,7 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				break
 			}
 
-			if err := n.StopStream(req.Payload.Serial); err != nil {
+			if err := n.stopLocalStream(req.Payload.Serial); err != nil {
 				log.Println("stop stream:", err)
 				break
 			}

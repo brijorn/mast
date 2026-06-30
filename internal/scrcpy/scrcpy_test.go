@@ -49,6 +49,24 @@ func TestWriteSwipeWritesDownMoveAndUpTouchEvents(t *testing.T) {
 	assertTouchEvent(t, up, ActionUp, 56, 78, 944, 1080, 0)
 }
 
+func TestWriteSetDisplayPowerWritesControlMessage(t *testing.T) {
+	var off bytes.Buffer
+	if err := WriteSetDisplayPower(&off, false); err != nil {
+		t.Fatalf("WriteSetDisplayPower(false) returned error: %v", err)
+	}
+	if got, want := off.Bytes(), []byte{SetDisplayPower, 0}; !bytes.Equal(got, want) {
+		t.Fatalf("off message = %v, want %v", got, want)
+	}
+
+	var on bytes.Buffer
+	if err := WriteSetDisplayPower(&on, true); err != nil {
+		t.Fatalf("WriteSetDisplayPower(true) returned error: %v", err)
+	}
+	if got, want := on.Bytes(), []byte{SetDisplayPower, 1}; !bytes.Equal(got, want) {
+		t.Fatalf("on message = %v, want %v", got, want)
+	}
+}
+
 func assertTouchEvent(t *testing.T, msg []byte, action byte, x, y, width, height int, pressure uint16) {
 	t.Helper()
 

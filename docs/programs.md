@@ -40,12 +40,47 @@ Content-Type: multipart/form-data
 | Field | Type | Description |
 |---|---|---|
 | `name` | string | Human-readable program name (optional; defaults to `"unnamed"`) |
-| `platform` | string | `windows`, `linux`, `darwin`, or `any` (optional; inferred from command) |
+| `slug` | string | Stable program slug (optional; derived from `name` when omitted) |
 | `entry` | JSON string | `{"command":"run.sh","args":[]}` |
-| `ini_values` | JSON string | `[{"section":"Settings","key":"DEVICE_ID","value":"{{phone.serial}}"}]` |
+| `config_file` | string | Path to the config file inside the bundle (optional) |
+| `config_mappings` | JSON string | `[{"section":"Settings","key":"DEVICE_ID","value":"{{phone.serial}}"}]` |
 | `files` | file (multiple) | Each file part's filename is its relative path in the bundle |
 
 Response: `201 Created` with the `Program` JSON object.
+
+### Updating program metadata
+
+```http
+PUT /api/programs/{id}
+```
+
+Updates the current program record's `name`, `slug`, and `config_mappings`
+without changing the stored bundle files:
+
+```json
+{
+  "name": "My App",
+  "slug": "my-app",
+  "config_mappings": [
+    {
+      "section": "Settings",
+      "key": "DEVICE_ID",
+      "value": "{{phone.serial}}",
+      "comment": "Device serial used by the script"
+    }
+  ]
+}
+```
+
+### Deleting a program
+
+```http
+DELETE /api/programs/{id}
+```
+
+Deletes the current program record and its bundle directory. The path value may
+be the content-hash ID or the slug. Existing run instances keep their copied
+workspace.
 
 ## Versioning
 
@@ -53,7 +88,7 @@ Mast uses a **latest-only** versioning model:
 
 - Each program has a **slug** derived from its name.
 - `registry.json` stores one current program entry per slug.
-- Re-uploading the same program name replaces the current bundle entry and
+- Re-uploading the same slug replaces the current bundle entry and
   increments that program's `version`.
 - Replacing a bundle deletes the previous bundle directory. Existing runs keep
   their own copied instance workspace.
@@ -84,20 +119,11 @@ copy of the bundle files in their instance workspace.
 
 ## Instance cleanup
 
-Instance workspaces can grow large for long-running programs. Mast manages
-cleanup at two levels.
+Instance workspaces can grow large for long-running programs. Mast does not
+automatically remove previous workspaces when a new run starts; callers decide
+which completed run, if any, should be cleaned up.
 
-### Automatic cleanup on new start
-
-When a new run is started for a device serial, Mast automatically removes the
-workspace directories of previous `exited`, `failed`, or `stopped` runs for
-that serial before creating the new instance. Runs that are still `running`,
-`starting`, or `lost` are never touched.
-
-This policy reclaims disk naturally when a phone switches programs or re-runs
-the same program, without interfering with active 20–30 day sessions.
-
-### Manual cleanup via API
+### Cleanup via API
 
 To free the workspace of a specific completed run immediately:
 
@@ -191,9 +217,12 @@ is removed.
 
 ## Custom Program Runners
 
-When Mast starts a program, it normally runs the program command directly. However, if a program uses standard file formats (such as a `.py` script or `.jar` binary), the host machine can configure a wrapper/runner command to execute them.
+When Mast starts a program, it normally runs the entry command directly. If the
+entrypoint is a script or non-native executable, the host machine can configure
+a wrapper command keyed by file extension.
 
-This configuration is stored in the local host's `~/.mast/config.json` configuration file, which means it is specific to the machine running the program and does not need to be committed to the public repository.
+This configuration is stored in the local host's `~/.mast/config.json`
+configuration file, so it is specific to the machine running the program.
 
 ### Matching Order
 When looking up a runner for a program, Mast evaluates the following:
@@ -226,18 +255,34 @@ different setting.
 
 ## Configuration Variables & Templates
 
-Programs can contain dynamic placeholders in their configuration files (like `.ini`, `.toml`, `.cfg`, `.conf`) or program arguments.
+Programs can contain dynamic placeholders in their configured `config_file` or
+program arguments.
 
 ### Template Placeholders
 Placeholders are defined using `{{placeholder}}` token notation.
 
 #### 1. Built-in Tokens
-Built-in tokens are automatically populated by Mast depending on the executing phone. There are exactly two supported built-in tokens:
+
+Built-in tokens are automatically populated by Mast depending on the executing
+phone. There are exactly two supported built-in tokens:
+
 - `{{phone.serial}}` - Replaced with the target phone's serial number.
 - `{{phone.node_id}}` - Replaced with the node ID of the host.
 
 #### 2. Custom Tokens
-Any other token (e.g. `{{license_key}}`, `{{resolution}}`) represents a custom variable.
-- In the Runway UI, these are presented as editable input fields when starting a program run.
-- For config-backed fields, the mapping value is the default value used for runs unless the run provides an override.
-- Config mappings may include an optional comment for help text.
+
+Any other token, such as `{{license_key}}` or `{{resolution}}`, represents a
+custom variable. Clients can collect those values before starting or resuming a
+run and pass them in the `variables` object.
+
+For config-backed fields, the mapping value is the default value used for runs
+unless the run provides an override. Config mappings may include an optional
+`comment` for help text.
+
+Mast also exposes mapped values as process environment variables. A mapping with
+`"key": "DEVICE_ID"` becomes `DEVICE_ID=<resolved value>` in the program
+environment.
+
+For `.ini` config files, Mast also supports structured replacement by
+`section` and `key`; for other config files, Mast performs placeholder
+replacement on matching `{{key}}` tokens.

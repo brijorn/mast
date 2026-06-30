@@ -42,7 +42,7 @@ func (s *Server) UpdateNodeConfig(w http.ResponseWriter, r *http.Request) {
 	result, err := s.node.UpdateNodeConfig(r.Context(), r.PathValue("id"), values)
 	if err != nil {
 		status := http.StatusInternalServerError
-		if strings.Contains(err.Error(), "invalid config key") || strings.Contains(err.Error(), "invalid runner key") || strings.Contains(err.Error(), "invalid syntax") || strings.Contains(err.Error(), "battery_protection.") {
+		if strings.Contains(err.Error(), "invalid config key") || strings.Contains(err.Error(), "invalid runner key") || strings.Contains(err.Error(), "invalid syntax") {
 			status = http.StatusBadRequest
 		}
 		http.Error(w, err.Error(), status)
@@ -92,7 +92,7 @@ func stringifyConfigValues(values map[string]any) (map[string]string, error) {
 	sort.Strings(keys)
 	for _, key := range keys {
 		value := values[key]
-		if key == "runners" || key == "battery_protection" {
+		if key == "runners" {
 			nested, ok := value.(map[string]any)
 			if !ok {
 				return nil, fmt.Errorf("%s must be an object", key)

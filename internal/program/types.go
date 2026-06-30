@@ -53,7 +53,6 @@ type Run struct {
 	Autostart      bool              `json:"autostart,omitempty"`
 	ExitCode       *int              `json:"exit_code,omitempty"`
 	Error          string            `json:"error,omitempty"`
-	StoppedReason  string            `json:"stopped_reason,omitempty"`
 	Env            map[string]string `json:"env,omitempty"`
 	// Cmd and CmdArgs are the resolved command and arguments used to start this
 	// run. They are persisted so that Resume can re-execute the same process.
@@ -63,7 +62,7 @@ type Run struct {
 	StartedAt   time.Time  `json:"started_at"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
 	// WorkspaceCleaned is true after the run's workspace directory has been
-	// removed. Set by CleanupRun or auto-cleanup on next start for the serial.
+	// removed by CleanupRun.
 	WorkspaceCleaned bool  `json:"workspace_cleaned,omitempty"`
 	StdoutLogStart   int64 `json:"stdout_log_start,omitempty"`
 	StderrLogStart   int64 `json:"stderr_log_start,omitempty"`

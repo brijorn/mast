@@ -15,6 +15,7 @@ const (
 	InjectKeycode    = 0
 	GetClipboard     = 8
 	SetClipboard     = 9
+	SetDisplayPower  = 10
 )
 const (
 	DeviceMessageClipboard    = 0
@@ -227,6 +228,14 @@ func WriteSetClipboard(w io.Writer, sequence uint64, text string, paste bool) er
 	copy(buf[14:], rawText)
 
 	return writeFull(w, buf)
+}
+
+func WriteSetDisplayPower(w io.Writer, on bool) error {
+	value := byte(0)
+	if on {
+		value = 1
+	}
+	return writeFull(w, []byte{SetDisplayPower, value})
 }
 
 func ReadClipboardMessage(r io.Reader) (string, error) {

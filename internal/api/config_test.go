@@ -47,7 +47,7 @@ func TestUpdateNodeConfigForwardsValues(t *testing.T) {
 	}
 	server := NewServer(backend)
 
-	body := []byte(`{"values":{"android_enabled":true,"ios_enabled":true,"api_addr":":7001","runners":{".py":"python3"},"battery_protection":{"enabled":true,"min_percent":25}}}`)
+	body := []byte(`{"values":{"android_enabled":true,"ios_enabled":true,"api_addr":":7001","runners":{".py":"python3"}}}`)
 	res := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPut, "/api/nodes/remote-node/config", bytes.NewReader(body))
 
@@ -59,7 +59,7 @@ func TestUpdateNodeConfigForwardsValues(t *testing.T) {
 	if backend.nodeID != "remote-node" {
 		t.Fatalf("nodeID = %q, want remote-node", backend.nodeID)
 	}
-	if backend.values["android_enabled"] != "true" || backend.values["ios_enabled"] != "true" || backend.values["api_addr"] != ":7001" || backend.values["runners..py"] != "python3" || backend.values["battery_protection.enabled"] != "true" || backend.values["battery_protection.min_percent"] != "25" {
+	if backend.values["android_enabled"] != "true" || backend.values["ios_enabled"] != "true" || backend.values["api_addr"] != ":7001" || backend.values["runners..py"] != "python3" {
 		t.Fatalf("values = %+v", backend.values)
 	}
 
@@ -69,6 +69,19 @@ func TestUpdateNodeConfigForwardsValues(t *testing.T) {
 	}
 	if !got.RestartRequired || len(got.RestartRequiredKeys) != 1 || got.RestartRequiredKeys[0] != "api_addr" {
 		t.Fatalf("result = %+v", got)
+	}
+}
+
+func TestUpdateNodeConfigRejectsBatteryProtectionObject(t *testing.T) {
+	server := NewServer(&configNodeBackend{})
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/api/nodes/local-node/config", bytes.NewReader([]byte(`{"values":{"battery_protection":{"enabled":true}}}`)))
+
+	server.Handler().ServeHTTP(res, req)
+
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusBadRequest, res.Body.String())
 	}
 }
 

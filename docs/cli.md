@@ -34,9 +34,12 @@ Default configuration:
   "proxy_addr": ":6272",
   "api_addr": ":6271",
   "advertise_host": "127.0.0.1",
+  "adb_port": 5037,
+  "programs_dir": "/home/user/.mast/programs",
   "android_enabled": false,
   "ios_enabled": false,
-  "proxy_enabled": false
+  "proxy_enabled": false,
+  "lock_portrait": false
 }
 ```
 
@@ -48,10 +51,12 @@ command creates it first.
 ```sh
 mast config set node_id pixel-proxy
 mast config set advertise_host 100.64.0.10
+mast config set adb_port 5038
+mast config set programs_dir /home/user/.mast/programs
 mast config set android_enabled true
 mast config set ios_enabled true
 mast config set proxy_enabled true
-mast config set runners.windows wine
+mast config set lock_portrait true
 mast config set runners..py "python3 -u"
 ```
 
@@ -63,10 +68,12 @@ bind_addr
 proxy_addr
 api_addr
 advertise_host
+adb_port
+programs_dir
 android_enabled
 ios_enabled
 proxy_enabled
-runners.<platform>
+lock_portrait
 runners.<file_extension>
 ```
 

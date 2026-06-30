@@ -1,6 +1,7 @@
 package node
 
 import (
+	"context"
 	"net"
 	"strings"
 	"testing"
@@ -241,6 +242,47 @@ func TestClipboardLocalUsesScrcpyControl(t *testing.T) {
 	}
 	if setHeader[9] != 1 {
 		t.Fatalf("set clipboard paste flag = %d, want 1", setHeader[9])
+	}
+}
+
+func TestClipboardGetFromPeerReturnsRPCResponse(t *testing.T) {
+	nodeA, nodeB := createNodePair(t)
+	defer func() { _ = nodeA.Close() }()
+	defer func() { _ = nodeB.Close() }()
+
+	client, server := net.Pipe()
+	defer func() { _ = client.Close() }()
+	defer func() { _ = server.Close() }()
+
+	nodeB.streams["remote-123"] = readyStreamEntry(&StreamSession{
+		DeviceSerial: "remote-123",
+		controlConn:  server,
+	})
+
+	connectNodePair(t, nodeA, nodeB)
+
+	messageCh := make(chan []byte, 1)
+	go func() {
+		getMessage := make([]byte, 2)
+		_, _ = client.Read(getMessage)
+		messageCh <- getMessage
+		_, _ = client.Write([]byte{0, 0, 0, 0, 11})
+		_, _ = client.Write([]byte("remote text"))
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	text, err := nodeA.getPeerClipboard(ctx, "b", "remote-123")
+	if err != nil {
+		t.Fatalf("getPeerClipboard returned error: %v", err)
+	}
+	if text != "remote text" {
+		t.Fatalf("clipboard text = %q, want remote text", text)
+	}
+
+	getMessage := receiveControlMessage(t, messageCh)
+	if getMessage[0] != scrcpy.GetClipboard || getMessage[1] != scrcpy.CopyKeyCopy {
+		t.Fatalf("get clipboard message = %v", getMessage)
 	}
 }
 

@@ -118,6 +118,64 @@ printf 'ARGS=%s\n' "$*"
 	}
 }
 
+func TestStartDoesNotCleanupPreviousWorkspaceForSerial(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("/bin/sh is not available on Windows")
+	}
+
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "run.sh"), []byte("#!/bin/sh\necho done\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := NewStore(filepath.Join(root, "programs"), fakeDevices{
+		devices: []node.DeviceInfo{{Serial: "phone-1", State: "device", NodeID: "node-1"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	firstProgram, err := registerTestProgram(t, store, source, RegisterUploadOptions{
+		Name:  "first runner",
+		Entry: Entry{Command: "/bin/sh", Args: []string{"run.sh"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondProgram, err := registerTestProgram(t, store, source, RegisterUploadOptions{
+		Name:  "second runner",
+		Entry: Entry{Command: "/bin/sh", Args: []string{"run.sh"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	firstStarted, err := store.Start(StartOptions{ProgramID: firstProgram.ID, Serials: []string{"phone-1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, store, firstStarted[0].ID)
+	firstRun := findRun(t, store, firstStarted[0].ID)
+
+	secondStarted, err := store.Start(StartOptions{ProgramID: secondProgram.ID, Serials: []string{"phone-1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, store, secondStarted[0].ID)
+
+	if _, err := os.Stat(firstRun.Workspace); err != nil {
+		t.Fatalf("previous workspace was cleaned on new start: %v", err)
+	}
+	after := findRun(t, store, firstRun.ID)
+	if after.WorkspaceCleaned {
+		t.Fatal("previous run WorkspaceCleaned = true, want false")
+	}
+}
+
 func TestCustomRunners(t *testing.T) {
 	s := &Store{
 		runners: map[string]string{

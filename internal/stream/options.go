@@ -3,12 +3,13 @@ package stream
 import "strconv"
 
 type Options struct {
-	NoAudio       bool `json:"no_audio"`
-	NoControl     bool `json:"no_control"`
-	TurnScreenOff bool `json:"turn_screen_off"`
-	StayAwake     bool `json:"stay_awake"`
-	MaxSize       int  `json:"max_size"`
-	VideoBitrate  int  `json:"video_bitrate"`
+	NoAudio           bool   `json:"no_audio"`
+	NoControl         bool   `json:"no_control"`
+	TurnScreenOff     bool   `json:"turn_screen_off"`
+	StayAwake         bool   `json:"stay_awake"`
+	MaxSize           int    `json:"max_size"`
+	VideoBitrate      int    `json:"video_bitrate"`
+	VideoCodecOptions string `json:"video_codec_options"`
 }
 
 func (s *Options) Format() []string {
@@ -19,6 +20,9 @@ func (s *Options) Format() []string {
 		"stay_awake="+strconv.FormatBool(s.StayAwake),
 		"clipboard_autosync=false",
 	)
+	if s.VideoCodecOptions != "" {
+		formatted = append(formatted, "video_codec_options="+s.VideoCodecOptions)
+	}
 	if s.VideoBitrate > 0 {
 		formatted = append(formatted, "video_bit_rate="+strconv.Itoa(s.VideoBitrate))
 	}

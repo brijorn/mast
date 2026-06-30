@@ -25,6 +25,7 @@ type fakeBackend struct {
 	calls   int
 	serials []string
 	options []streamcfg.Options
+	stopped []string
 
 	started chan struct{}
 	release chan struct{}
@@ -81,6 +82,13 @@ func (f *fakeBackend) EnsureStream(serial string, opts streamcfg.Options) (*node
 
 func (f *fakeBackend) GetStream(_ string) (*node.StreamSession, error) {
 	return f.session, f.err
+}
+
+func (f *fakeBackend) StopStream(serial string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.stopped = append(f.stopped, serial)
+	return f.err
 }
 
 func (f *fakeBackend) Touch(_ string, _ string, _, _ int) error {
@@ -154,6 +162,23 @@ func TestStartStreamStartsStream(t *testing.T) {
 	}
 	if got := backend.options[0]; !got.NoAudio || got.MaxSize != 1080 {
 		t.Fatalf("options = %+v, want no_audio=true and max_size=1080", got)
+	}
+}
+
+func TestStopStreamStopsSerial(t *testing.T) {
+	backend := &fakeBackend{}
+	server := NewServer(backend)
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/api/streams/local-123", nil)
+
+	server.Handler().ServeHTTP(res, req)
+
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusNoContent, res.Body.String())
+	}
+	if len(backend.stopped) != 1 || backend.stopped[0] != "local-123" {
+		t.Fatalf("stopped = %#v, want local-123", backend.stopped)
 	}
 }
 

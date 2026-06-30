@@ -58,10 +58,22 @@ func (s *Store) RegisterUpload(opts RegisterUploadOptions) (*Program, error) {
 		if err != nil {
 			return nil, err
 		}
-		_, copyErr := io.Copy(out, f.Content)
-		_ = out.Close()
+		in, err := f.open()
+		if err != nil {
+			_ = out.Close()
+			return nil, err
+		}
+		_, copyErr := io.Copy(out, in)
+		inErr := in.Close()
+		outErr := out.Close()
 		if copyErr != nil {
 			return nil, copyErr
+		}
+		if inErr != nil {
+			return nil, inErr
+		}
+		if outErr != nil {
+			return nil, outErr
 		}
 	}
 
@@ -121,6 +133,16 @@ func (s *Store) RegisterUpload(opts RegisterUploadOptions) (*Program, error) {
 	}
 
 	return &program, nil
+}
+
+func (f UploadFile) open() (io.ReadCloser, error) {
+	if f.Open != nil {
+		return f.Open()
+	}
+	if f.Content == nil {
+		return nil, fmt.Errorf("file content required: %s", f.Path)
+	}
+	return io.NopCloser(f.Content), nil
 }
 
 func (s *Store) UpdateProgram(id string, name string, slug string, mappings []ConfigMapping) (*Program, error) {

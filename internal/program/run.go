@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/brijorn/mast/internal/node"
@@ -576,15 +575,18 @@ func (s *Store) runnerCommand(command string, args []string) (string, []string, 
 	s.mu.Unlock()
 
 	var runner string
+	ext := filepath.Ext(command)
 	if runners != nil {
-		ext := filepath.Ext(command)
 		if r, ok := runners[ext]; ok && r != "" {
 			runner = r
 		}
 	}
 
 	if runner != "" {
-		parts := strings.Fields(runner)
+		parts, err := splitRunnerCommand(runner)
+		if err != nil {
+			return "", nil, fmt.Errorf("invalid runner for %s: %w", ext, err)
+		}
 		if len(parts) > 0 {
 			return parts[0], append(append(parts[1:], command), args...), nil
 		}

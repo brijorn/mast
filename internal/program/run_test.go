@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/brijorn/mast/internal/node"
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestStartCopiesBundleRendersConfigAndSetsRemoteADBEnv(t *testing.T) {
@@ -177,46 +178,91 @@ func TestStartDoesNotCleanupPreviousWorkspaceForSerial(t *testing.T) {
 }
 
 func TestCustomRunners(t *testing.T) {
-	s := &Store{
-		runners: map[string]string{
-			".exe": "wine",
-			".py":  "python3 -u",
+	tests := []struct {
+		name     string
+		runner   string
+		command  string
+		args     []string
+		wantCmd  string
+		wantArgs []string
+	}{
+		{
+			name:     "exe runner on linux",
+			runner:   "/path/to/winerun",
+			command:  "test.exe",
+			args:     []string{"arg1", "arg2"},
+			wantCmd:  "/path/to/winerun",
+			wantArgs: []string{"test.exe", "arg1", "arg2"},
+		},
+		{
+			name:     "runner path with spaces",
+			runner:   `"/opt/Wine Runner/winerun"`,
+			command:  "test.exe",
+			args:     []string{"arg1"},
+			wantCmd:  "/opt/Wine Runner/winerun",
+			wantArgs: []string{"test.exe", "arg1"},
+		},
+		{
+			name:     "runner with arguments",
+			runner:   "python3 -u",
+			command:  "test.py",
+			args:     []string{"arg1"},
+			wantCmd:  "python3",
+			wantArgs: []string{"-u", "test.py", "arg1"},
+		},
+		{
+			name:     "quoted runner argument",
+			runner:   `python3 -u --label "Dice Yatzy"`,
+			command:  "test.py",
+			args:     []string{"arg1"},
+			wantCmd:  "python3",
+			wantArgs: []string{"-u", "--label", "Dice Yatzy", "test.py", "arg1"},
 		},
 	}
 
-	// 1. Match by .exe extension
-	cmd, args, err := s.runnerCommand("test.exe", []string{"arg1", "arg2"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cmd != "wine" {
-		t.Errorf("expected cmd to be 'wine', got %q", cmd)
-	}
-	expectedArgs := []string{"test.exe", "arg1", "arg2"}
-	if len(args) != len(expectedArgs) || args[0] != "test.exe" || args[1] != "arg1" || args[2] != "arg2" {
-		t.Errorf("expected args to be %v, got %v", expectedArgs, args)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &Store{
+				runners: map[string]string{
+					filepath.Ext(tc.command): tc.runner,
+				},
+			}
+
+			cmd, args, err := s.runnerCommand(tc.command, tc.args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cmd != tc.wantCmd {
+				t.Fatalf("cmd = %q, want %q", cmd, tc.wantCmd)
+			}
+			if diff := cmp.Diff(tc.wantArgs, args); diff != "" {
+				t.Fatalf("args mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 
-	// 2. Match by .py file extension
-	cmd, args, err = s.runnerCommand("test.py", []string{"arg1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cmd != "python3" {
-		t.Errorf("expected cmd to be 'python3', got %q", cmd)
-	}
-	expectedArgs = []string{"-u", "test.py", "arg1"}
-	if len(args) != len(expectedArgs) || args[0] != "-u" || args[1] != "test.py" || args[2] != "arg1" {
-		t.Errorf("expected args to be %v, got %v", expectedArgs, args)
-	}
-
-	// 3. Non-native executables require an explicit runner.
-	s.SetRunners(nil)
+	s := &Store{}
 	if runtime.GOOS != "windows" {
-		_, _, err = s.runnerCommand("test.exe", []string{"arg1"})
+		_, _, err := s.runnerCommand("test.exe", []string{"arg1"})
 		if err == nil {
 			t.Fatal("expected no-runner error")
 		}
+	}
+}
+
+func TestRunnerCommandRejectsMalformedRunner(t *testing.T) {
+	s := &Store{
+		runners: map[string]string{
+			".py": `python3 "unterminated`,
+		},
+	}
+
+	_, _, err := s.runnerCommand("test.py", nil)
+	if err == nil {
+		t.Fatal("runnerCommand returned nil error, want parse error")
+	}
+	if !strings.Contains(err.Error(), "unterminated") {
+		t.Fatalf("error = %q, want unterminated quote", err)
 	}
 }
 

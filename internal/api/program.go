@@ -73,25 +73,14 @@ func (s *Server) UploadProgram(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Open all file parts; close them all after RegisterUpload returns.
-	var closers []io.Closer
-	defer func() {
-		for _, c := range closers {
-			_ = c.Close()
-		}
-	}()
-
 	uploadFiles := make([]program.UploadFile, 0, len(fileHeaders))
 	for _, fh := range fileHeaders {
-		f, err := fh.Open()
-		if err != nil {
-			http.Error(w, "opening upload part: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		closers = append(closers, f)
+		fh := fh
 		uploadFiles = append(uploadFiles, program.UploadFile{
-			Path:    uploadFilePath(fh),
-			Content: f,
+			Path: uploadFilePath(fh),
+			Open: func() (io.ReadCloser, error) {
+				return fh.Open()
+			},
 		})
 	}
 

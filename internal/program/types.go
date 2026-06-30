@@ -70,6 +70,7 @@ type Run struct {
 type UploadFile struct {
 	Path    string
 	Content io.Reader
+	Open    func() (io.ReadCloser, error)
 }
 
 // RegisterUploadOptions describes a program bundle uploaded as individual files.

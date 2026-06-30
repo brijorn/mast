@@ -110,6 +110,9 @@ func TestReplaceExecutablePreservesMode(t *testing.T) {
 	if err := os.WriteFile(path, []byte("old binary"), 0755); err != nil {
 		t.Fatalf("write current executable: %v", err)
 	}
+	if err := os.Chmod(path, 0755); err != nil {
+		t.Fatalf("chmod current executable: %v", err)
+	}
 
 	if err := replaceExecutable(path, []byte("new binary")); err != nil {
 		t.Fatalf("replaceExecutable returned error: %v", err)

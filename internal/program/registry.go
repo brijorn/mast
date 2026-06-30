@@ -15,9 +15,8 @@ import (
 // written directly into a temporary directory inside the bundle store, then
 // atomically moved to the final content-addressed path.
 //
-// Re-uploading a program with the same slug replaces the current bundle and
-// increments the program version. Running instances are not affected because
-// they execute from a copied workspace.
+// Re-uploading a program with the same slug replaces the current bundle.
+// Running instances are not affected because they execute from a copied workspace.
 func (s *Store) RegisterUpload(opts RegisterUploadOptions) (*Program, error) {
 	if opts.Entry.Command == "" {
 		return nil, errors.New("entry command required")
@@ -82,14 +81,9 @@ func (s *Store) RegisterUpload(opts RegisterUploadOptions) (*Program, error) {
 	s.mu.Lock()
 	previous, hasPrevious := s.programBySlugLocked(slug)
 	s.mu.Unlock()
-	version := 1
-	if hasPrevious {
-		version = previous.Version + 1
-	}
 	program := Program{
 		ID:             id,
 		Slug:           slug,
-		Version:        version,
 		Name:           name,
 		ConfigFile:     opts.ConfigFile,
 		ConfigMappings: opts.ConfigMappings,

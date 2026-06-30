@@ -11,7 +11,12 @@ func TestServiceFileContentUsesInstalledBinary(t *testing.T) {
 	installPath := `C:\Users\user\.mast\bin\mast.exe`
 	content := serviceFileContent(installPath)
 
-	if !strings.Contains(content, "<Command>"+installPath+"</Command>") {
+	if !strings.Contains(content, "<Command>cmd.exe</Command>") {
+		t.Fatalf("service content does not use command wrapper:\n%s", content)
+	}
+	if !strings.Contains(content, `C:\Users\user\.mast\bin`) ||
+		!strings.Contains(content, `%PATH%`) ||
+		!strings.Contains(content, xmlEscape(`"`+installPath+`" start`)) {
 		t.Fatalf("service content does not reference installed binary:\n%s", content)
 	}
 }

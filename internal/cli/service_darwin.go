@@ -13,12 +13,19 @@ const (
 )
 
 func serviceFileContent(execPath string) string {
+	path := xmlEscape(serviceEnvironmentPath(execPath))
+	execPath = xmlEscape(execPath)
 	return fmt.Sprintf(`<?xml version="1.0"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "...">
 <plist version="1.0">
 <dict>
     <key>Label</key>
     <string>com.brijorn.mast</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>%s</string>
+    </dict>
     <key>ProgramArguments</key>
     <array>
         <string>%s</string>
@@ -27,7 +34,7 @@ func serviceFileContent(execPath string) string {
     <key>RunAtLoad</key>
     <true/>
 </dict>
-</plist>`, execPath)
+</plist>`, path, execPath)
 }
 
 func serviceLoad(path string) error {

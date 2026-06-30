@@ -76,6 +76,42 @@ func TestServiceInstallPathForOS(t *testing.T) {
 	}
 }
 
+func TestServiceEnvironmentPathIncludesMastAndUserBins(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	execPath := serviceInstallPathForOS(home, "linux")
+	basePath := strings.Join([]string{
+		"/usr/bin",
+		filepath.Join(home, ConfigFileDir, serviceBinDir),
+	}, ":")
+
+	got := serviceEnvironmentPathForOS(execPath, "linux", basePath)
+	entries := strings.Split(got, ":")
+	want := []string{
+		filepath.Join(home, ConfigFileDir, serviceBinDir),
+		filepath.Join(home, ".local", "bin"),
+		filepath.Join(home, "bin"),
+		"/usr/bin",
+	}
+
+	if !reflect.DeepEqual(entries, want) {
+		t.Fatalf("service PATH entries = %#v, want %#v", entries, want)
+	}
+}
+
+func TestServiceEnvironmentPathForWindowsKeepsDynamicPath(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	execPath := serviceInstallPathForOS(home, "windows")
+
+	got := serviceEnvironmentPathForOS(execPath, "windows", "")
+	entries := strings.Split(got, ";")
+	if entries[len(entries)-1] != "%PATH%" {
+		t.Fatalf("last Windows PATH entry = %q, want %%PATH%%", entries[len(entries)-1])
+	}
+	if !strings.Contains(got, filepath.Join(home, ConfigFileDir, serviceBinDir)) {
+		t.Fatalf("Windows service PATH %q does not include Mast bin dir", got)
+	}
+}
+
 func TestInstallServiceBinaryCopiesExecutable(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "source-mast")

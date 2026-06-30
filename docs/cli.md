@@ -235,6 +235,10 @@ Platform behavior:
 Stop any manually started `mast start` process before installing the service, or
 the service may fail to bind its configured ports.
 
+The installed service runs with a PATH that starts with `~/.mast/bin`,
+`~/.local/bin`, and `~/bin`. This lets the service and program runs resolve the
+installed `mast` binary and user helper commands such as `winerun`.
+
 ## service restart
 
 Restarts the installed service.

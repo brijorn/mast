@@ -5,6 +5,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"strings"
 )
 
 const (
@@ -13,14 +14,21 @@ const (
 )
 
 func serviceFileContent(execPath string) string {
+	path := systemdEscape(serviceEnvironmentPath(execPath))
 	return fmt.Sprintf(`[Unit]
 Description=Mast node
 
 [Service]
+Environment="PATH=%s"
 ExecStart=%s start
 
 [Install]
-WantedBy=default.target`, execPath)
+WantedBy=default.target`, path, execPath)
+}
+
+func systemdEscape(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	return strings.ReplaceAll(value, `"`, `\"`)
 }
 
 func serviceLoad(_ string) error {

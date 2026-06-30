@@ -422,18 +422,16 @@ func (s *Store) startOne(p Program, device node.DeviceInfo, nodes []node.NodeInf
 	}
 
 	run := &Run{
-		ID:             id,
-		ProgramID:      p.ID,
-		ProgramSlug:    p.Slug,
-		ProgramVersion: p.Version,
-		Serial:         device.Serial,
-		NodeID:         device.NodeID,
-		Workspace:      workspace,
-		Status:         RunStatusStarting,
-		Env:            env,
-		Cmd:            command,
-		CmdArgs:        args,
-		StartedAt:      time.Now().UTC(),
+		ID:        id,
+		ProgramID: p.ID,
+		Serial:    device.Serial,
+		NodeID:    device.NodeID,
+		Workspace: workspace,
+		Status:    RunStatusStarting,
+		Env:       env,
+		Cmd:       command,
+		CmdArgs:   args,
+		StartedAt: time.Now().UTC(),
 	}
 	stdout, err := s.newRunLogWriter(run, filepath.Join(workspace, "stdout.log"), "stdout")
 	if err != nil {

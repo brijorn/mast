@@ -65,9 +65,6 @@ func TestRegisterUploadDeletesReplacedBundleDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.Version != 1 {
-		t.Fatalf("first Version = %d, want 1", first.Version)
-	}
 	firstPath := store.bundlePath(first.ID)
 	if _, err := os.Stat(firstPath); err != nil {
 		t.Fatal(err)
@@ -83,9 +80,6 @@ func TestRegisterUploadDeletesReplacedBundleDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if second.Version != 2 {
-		t.Fatalf("second Version = %d, want 2", second.Version)
-	}
 	if first.ID == second.ID {
 		t.Fatal("test setup produced identical bundle IDs")
 	}
@@ -98,8 +92,5 @@ func TestRegisterUploadDeletesReplacedBundleDirectory(t *testing.T) {
 	programs := store.ListPrograms()
 	if len(programs) != 1 || programs[0].ID != second.ID {
 		t.Fatalf("programs = %+v, want only replacement bundle %s", programs, second.ID)
-	}
-	if programs[0].Version != 2 {
-		t.Fatalf("registry Version = %d, want 2", programs[0].Version)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 type ServiceCmd struct {
@@ -107,6 +108,87 @@ func serviceBinaryName(goos string) string {
 		return "mast.exe"
 	}
 	return "mast"
+}
+
+func serviceEnvironmentPath(execPath string) string {
+	return serviceEnvironmentPathForOS(execPath, runtime.GOOS, "")
+}
+
+func serviceEnvironmentPathForOS(execPath string, goos string, basePath string) string {
+	separator := string(os.PathListSeparator)
+	if goos == "windows" {
+		separator = ";"
+	}
+
+	entries := []string{filepath.Dir(execPath)}
+	if home := serviceHomeFromInstallPath(execPath); home != "" {
+		entries = append(entries,
+			filepath.Join(home, ".local", "bin"),
+			filepath.Join(home, "bin"),
+		)
+	}
+	if basePath != "" {
+		entries = append(entries, strings.Split(basePath, separator)...)
+	} else {
+		entries = append(entries, defaultServicePathEntries(goos)...)
+	}
+	if goos == "windows" {
+		entries = append(entries, "%PATH%")
+	}
+
+	return strings.Join(uniquePathEntries(entries, goos), separator)
+}
+
+func serviceHomeFromInstallPath(execPath string) string {
+	binDir := filepath.Dir(execPath)
+	configDir := filepath.Dir(binDir)
+	if filepath.Base(configDir) != ConfigFileDir {
+		return ""
+	}
+	return filepath.Dir(configDir)
+}
+
+func defaultServicePathEntries(goos string) []string {
+	switch goos {
+	case "darwin":
+		return []string{"/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"}
+	case "windows":
+		return nil
+	default:
+		return []string{"/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin", "/usr/games", "/usr/local/games", "/snap/bin"}
+	}
+}
+
+func uniquePathEntries(entries []string, goos string) []string {
+	seen := make(map[string]bool, len(entries))
+	var unique []string
+	for _, entry := range entries {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		key := entry
+		if goos == "windows" {
+			key = strings.ToLower(key)
+		}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		unique = append(unique, entry)
+	}
+	return unique
+}
+
+func xmlEscape(value string) string {
+	replacer := strings.NewReplacer(
+		"&", "&amp;",
+		"<", "&lt;",
+		">", "&gt;",
+		`"`, "&quot;",
+		"'", "&apos;",
+	)
+	return replacer.Replace(value)
 }
 
 func installServiceBinary(source string, destination string) error {

@@ -5,7 +5,6 @@ package cli
 import (
 	"fmt"
 	"os"
-	"os/exec"
 )
 
 const (
@@ -25,19 +24,27 @@ WantedBy=default.target`, execPath)
 }
 
 func serviceLoad(_ string) error {
-	if err := exec.Command("systemctl", "--user", "daemon-reload").Run(); err != nil {
+	if err := runServiceCommand("systemctl", "--user", "daemon-reload"); err != nil {
 		return err
 	}
 
-	return exec.Command("systemctl", "--user", "enable", "--now", serviceName).Run()
+	if err := runServiceCommand("systemctl", "--user", "enable", serviceName); err != nil {
+		return err
+	}
+
+	return serviceRestart("")
 }
 
 func serviceStop(_ string) error {
-	return exec.Command("systemctl", "--user", "stop", serviceName).Run()
+	return runServiceCommand("systemctl", "--user", "stop", serviceName)
+}
+
+func serviceRestart(_ string) error {
+	return runServiceCommand("systemctl", "--user", "restart", serviceName)
 }
 
 func serviceUninstall(path string) error {
-	if err := exec.Command("systemctl", "--user", "disable", "--now", serviceName).Run(); err != nil {
+	if err := runServiceCommand("systemctl", "--user", "disable", "--now", serviceName); err != nil {
 		return err
 	}
 	return os.Remove(path)

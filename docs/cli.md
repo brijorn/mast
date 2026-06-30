@@ -208,7 +208,19 @@ mast update apply --force --restart node-b
 
 ## service install
 
-Installs Mast as an OS user service that runs `mast start`.
+Installs Mast as an OS user service. The command copies the current executable
+to Mast's stable service binary path, then configures the service to run that
+installed binary:
+
+```text
+~/.mast/bin/mast
+```
+
+On Windows, the installed binary is:
+
+```text
+~/.mast/bin/mast.exe
+```
 
 ```sh
 mast service install
@@ -216,9 +228,42 @@ mast service install
 
 Platform behavior:
 
-- macOS: writes `~/Library/LaunchAgents/com.brijorn.mast.plist` and loads it with `launchctl`.
-- Linux: writes `~/.config/systemd/user/mast.service` and enables it with `systemctl --user enable --now mast.service`.
-- Windows: writes a scheduled task XML file under the user's Startup programs directory and creates a `mast` scheduled task with `schtasks`.
+- macOS: writes `~/Library/LaunchAgents/com.brijorn.mast.plist` and reloads it with `launchctl`.
+- Linux: writes `~/.config/systemd/user/mast.service`, reloads systemd, enables `mast.service`, and restarts it.
+- Windows: writes a scheduled task XML file under the user's Startup programs directory, recreates the `mast` scheduled task, and runs it.
+
+Stop any manually started `mast start` process before installing the service, or
+the service may fail to bind its configured ports.
+
+## service restart
+
+Restarts the installed service.
+
+```sh
+mast service restart
+```
+
+For local development on Linux and macOS, rebuild Mast into a temporary file
+inside the stable service binary directory, then atomically replace the service
+binary and restart:
+
+```sh
+go build -o ~/.mast/bin/.mast-next ./cmd/mast
+mv ~/.mast/bin/.mast-next ~/.mast/bin/mast
+mast service restart
+```
+
+On Windows, stop the scheduled task first, replace `~/.mast/bin/mast.exe`, then
+run the service again:
+
+```powershell
+mast service stop
+go build -o $env:USERPROFILE\.mast\bin\mast.exe ./cmd/mast
+mast service restart
+```
+
+GitHub Release updates remain the normal path for updating peer nodes during
+development.
 
 ## service stop
 

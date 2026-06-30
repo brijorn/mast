@@ -753,6 +753,19 @@ func TestStartStreamTurnsScreenOffAfterControlConnects(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for display power control message")
 	}
+
+	if len(fake.shellOutputCalls) == 0 {
+		t.Fatal("display power shell call was not recorded")
+	}
+	gotShellCall := fake.shellOutputCalls[len(fake.shellOutputCalls)-1]
+	expectedShellCall := shellCall{
+		Host:   "",
+		Serial: "local-123",
+		Args:   []string{"cmd", "display", "power-off", "0"},
+	}
+	if diff := cmp.Diff(expectedShellCall, gotShellCall); diff != "" {
+		t.Fatalf("display power shell call mismatch (-want +got):\n%s", diff)
+	}
 }
 
 func TestStartStreamRejectsTurnScreenOffWithoutControl(t *testing.T) {

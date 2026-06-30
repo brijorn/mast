@@ -175,8 +175,8 @@ func TestStartStreamStartsStream(t *testing.T) {
 	if backend.callCount() != 1 {
 		t.Fatalf("EnsureStream calls = %d, want 1", backend.callCount())
 	}
-	if got := backend.options[0]; !got.NoAudio || got.MaxSize != 1080 {
-		t.Fatalf("options = %+v, want no_audio=true and max_size=1080", got)
+	if got := backend.options[0]; !got.NoAudio || got.MaxSize != 1080 || !got.TurnScreenOff {
+		t.Fatalf("options = %+v, want no_audio=true, max_size=1080, and turn_screen_off=true", got)
 	}
 }
 
@@ -218,6 +218,33 @@ func TestStartStreamReturnsEnsuredStream(t *testing.T) {
 	}
 	if backend.callCount() != 1 {
 		t.Fatalf("EnsureStream calls = %d, want 1", backend.callCount())
+	}
+	if got := backend.options[0]; !got.TurnScreenOff {
+		t.Fatalf("TurnScreenOff = false, want true by default")
+	}
+}
+
+func TestStartStreamDoesNotDefaultScreenOffWithoutControl(t *testing.T) {
+	backend := &fakeBackend{
+		session: &node.StreamSession{
+			ID:        "stream-no-control",
+			Host:      "100.64.0.2",
+			LocalPort: 23456,
+		},
+	}
+	server := NewServer(backend)
+
+	body := []byte(`{"serial":"local-123","options":{"no_control":true}}`)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/streams", bytes.NewReader(body))
+
+	server.StartStream(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusOK, res.Body.String())
+	}
+	if got := backend.options[0]; got.TurnScreenOff {
+		t.Fatalf("TurnScreenOff = true, want false when no_control=true")
 	}
 }
 

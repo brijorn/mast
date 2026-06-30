@@ -74,10 +74,11 @@ func (s *StreamSession) Stop() error {
 	}
 
 	if s.cmd != nil && s.cmd.Process != nil {
-		if killErr := s.cmd.Process.Kill(); killErr != nil && err == nil {
+		killErr := s.cmd.Process.Kill()
+		if killErr != nil && err == nil {
 			err = killErr
 		}
-		if waitErr := s.cmd.Wait(); waitErr != nil && err == nil {
+		if waitErr := s.cmd.Wait(); waitErr != nil && err == nil && killErr != nil {
 			err = waitErr
 		}
 	}
@@ -134,6 +135,34 @@ func (s *StreamSession) acceptScrcpyConnection(opts streamcfg.Options) error {
 	}
 
 	return nil
+}
+
+func (s *StreamSession) turnScreenOff() error {
+	s.controlMu.Lock()
+	defer s.controlMu.Unlock()
+
+	if s.controlConn == nil {
+		return errors.New("turn_screen_off requires control")
+	}
+	return scrcpy.WriteSetDisplayPower(s.controlConn, false)
+}
+
+func (n *Node) applyStreamOptions(host string, serial string, session *StreamSession, opts streamcfg.Options) error {
+	if !opts.TurnScreenOff {
+		return nil
+	}
+	if err := session.turnScreenOff(); err != nil {
+		return err
+	}
+	n.turnDeviceDisplayOff(host, serial)
+	return nil
+}
+
+func (n *Node) turnDeviceDisplayOff(host string, serial string) {
+	// Android 15+ exposes this display command; older devices may reject it.
+	if _, err := n.adb.Shell(host, serial, "cmd", "display", "power-off", "0"); err != nil {
+		log.Printf("failed to power off display on %s: %v", serial, err)
+	}
 }
 
 func acceptScrcpySocket(ln net.Listener) (net.Conn, error) {
@@ -253,6 +282,8 @@ func scrcpyServerArgs(opts streamcfg.Options) []string {
 }
 
 func (n *Node) StartStream(serial string, opts streamcfg.Options) (*StreamSession, error) {
+	opts = opts.WithDefaults()
+
 	device, err := n.deviceBySerial(serial)
 	if err != nil {
 		return nil, err
@@ -266,6 +297,8 @@ func (n *Node) StartStream(serial string, opts streamcfg.Options) (*StreamSessio
 }
 
 func (n *Node) startLocalStream(serial string, opts streamcfg.Options) (*StreamSession, error) {
+	opts = opts.WithDefaults()
+
 	if opts.TurnScreenOff && opts.NoControl {
 		return nil, errors.New("turn_screen_off requires control")
 	}
@@ -333,14 +366,9 @@ func (n *Node) startLocalStream(serial string, opts streamcfg.Options) (*StreamS
 		_ = session.Stop()
 		return nil, err
 	}
-	if opts.TurnScreenOff {
-		session.controlMu.Lock()
-		err := scrcpy.WriteSetDisplayPower(session.controlConn, false)
-		session.controlMu.Unlock()
-		if err != nil {
-			_ = session.Stop()
-			return nil, err
-		}
+	if err := n.applyStreamOptions(host, serial, session, opts); err != nil {
+		_ = session.Stop()
+		return nil, err
 	}
 
 	session.videoBroadcaster = newVideoBroadcaster()
@@ -357,6 +385,8 @@ func (n *Node) startLocalStream(serial string, opts streamcfg.Options) (*StreamS
 }
 
 func (n *Node) startPeerStream(ctx context.Context, nodeID string, serial string, opts streamcfg.Options) (*StreamSession, error) {
+	opts = opts.WithDefaults()
+
 	ctx, cancel := context.WithTimeout(ctx, peerStreamRPCTimeout)
 	defer cancel()
 
@@ -423,6 +453,8 @@ func streamSessionFromPayload(payload *transport.StartStreamResultPayload) *Stre
 }
 
 func (n *Node) EnsureStream(serial string, opts streamcfg.Options) (*StreamSession, error) {
+	opts = opts.WithDefaults()
+
 	device, err := n.deviceBySerial(serial)
 	if err != nil {
 		return nil, err
@@ -435,6 +467,8 @@ func (n *Node) EnsureStream(serial string, opts streamcfg.Options) (*StreamSessi
 }
 
 func (n *Node) ensureLocalStream(serial string, opts streamcfg.Options) (*StreamSession, error) {
+	opts = opts.WithDefaults()
+
 	return n.ensureStream(serial, opts, n.startLocalStream)
 }
 
@@ -452,6 +486,13 @@ func (n *Node) ensureStream(serial string, opts streamcfg.Options, start func(st
 
 			if entry.Session == nil {
 				return nil, errors.New("internal error: stream session is nil")
+			}
+			host, err := n.adbHostForNode(n.ID)
+			if err != nil {
+				return nil, err
+			}
+			if err := n.applyStreamOptions(host, serial, entry.Session, opts); err != nil {
+				return nil, err
 			}
 
 			return entry.Session, nil

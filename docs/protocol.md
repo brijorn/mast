@@ -203,7 +203,8 @@ If capture fails, `payload.error` contains the error string.
 
 ## start_stream_request
 
-Requests that the device owner start a scrcpy stream.
+Requests that the device owner start a scrcpy stream. If `no_control` is false
+or omitted, `turn_screen_off` defaults to true.
 
 ```json
 {

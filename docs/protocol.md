@@ -96,6 +96,76 @@ The response uses the same message ID:
 
 If the listing fails, `payload.error` contains the error string.
 
+## device_dns_get_request
+
+Requests Android private DNS state for a local device on the destination node.
+`automatic` is true when Android reports private DNS mode as `opportunistic`.
+
+```json
+{
+  "type": "device_dns_get_request",
+  "id": "message-id",
+  "from": "node-a",
+  "to": "node-b",
+  "timestamp": "2026-06-22T17:00:00Z",
+  "payload": {
+    "serial": "remote-123"
+  }
+}
+```
+
+```json
+{
+  "type": "device_dns_get_response",
+  "id": "message-id",
+  "from": "node-b",
+  "to": "node-a",
+  "timestamp": "2026-06-22T17:00:01Z",
+  "payload": {
+    "result": {
+      "mode": "opportunistic",
+      "automatic": true
+    }
+  }
+}
+```
+
+## device_dns_toggle_request
+
+Toggles Android private DNS for a local device on the destination node. Automatic
+mode changes to `dns.adguard.com`; any non-automatic mode changes back to
+automatic.
+
+```json
+{
+  "type": "device_dns_toggle_request",
+  "id": "message-id",
+  "from": "node-a",
+  "to": "node-b",
+  "timestamp": "2026-06-22T17:00:00Z",
+  "payload": {
+    "serial": "remote-123"
+  }
+}
+```
+
+```json
+{
+  "type": "device_dns_toggle_response",
+  "id": "message-id",
+  "from": "node-b",
+  "to": "node-a",
+  "timestamp": "2026-06-22T17:00:01Z",
+  "payload": {
+    "result": {
+      "mode": "hostname",
+      "hostname": "dns.adguard.com",
+      "automatic": false
+    }
+  }
+}
+```
+
 ## screenshot_request
 
 Requests a PNG screenshot from a device owned by the destination node.

@@ -22,6 +22,7 @@ type fakeBackend struct {
 	session *node.StreamSession
 	err     error
 	devices []node.DeviceInfo
+	dns     *node.DeviceDNSStatus
 	calls   int
 	serials []string
 	options []streamcfg.Options
@@ -37,6 +38,20 @@ func (f *fakeBackend) ListDevices() ([]node.DeviceInfo, error) {
 
 func (f *fakeBackend) Screenshot(_ string) ([]byte, error) {
 	return nil, nil
+}
+
+func (f *fakeBackend) DeviceDNS(serial string) (*node.DeviceDNSStatus, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.serials = append(f.serials, serial)
+	return f.dns, f.err
+}
+
+func (f *fakeBackend) ToggleDeviceDNS(serial string) (*node.DeviceDNSStatus, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.serials = append(f.serials, serial)
+	return f.dns, f.err
 }
 
 func (f *fakeBackend) ListNodes() []node.NodeInfo {

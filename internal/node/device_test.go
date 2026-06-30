@@ -35,18 +35,21 @@ type shellCall struct {
 }
 
 type fakeADB struct {
-	outputs          map[string][]byte
-	errors           map[string]error
-	shellOutputs     map[string][]byte
-	shellErrors      map[string]error
-	execOutOutputs   map[string][]byte
-	execOutErrors    map[string]error
-	calls            []string
-	pushCalls        []pushCall
-	reverseCalls     []reverseCall
-	shellCalls       []shellCall
-	shellOutputCalls []shellCall
-	controlMessages  chan []byte
+	outputs                  map[string][]byte
+	errors                   map[string]error
+	shellOutputs             map[string][]byte
+	shellErrors              map[string]error
+	shellCommandOutputs      map[string][]byte
+	shellCommandOutputQueues map[string][][]byte
+	shellCommandErrors       map[string]error
+	execOutOutputs           map[string][]byte
+	execOutErrors            map[string]error
+	calls                    []string
+	pushCalls                []pushCall
+	reverseCalls             []reverseCall
+	shellCalls               []shellCall
+	shellOutputCalls         []shellCall
+	controlMessages          chan []byte
 }
 
 func (a *fakeADB) Devices(host string) ([]byte, error) {
@@ -94,10 +97,26 @@ func (a *fakeADB) Shell(host string, serial string, arg ...string) ([]byte, erro
 		Serial: serial,
 		Args:   append([]string(nil), arg...),
 	})
+	key := shellCommandKey(serial, arg...)
+	if outputs := a.shellCommandOutputQueues[key]; len(outputs) > 0 {
+		output := outputs[0]
+		a.shellCommandOutputQueues[key] = outputs[1:]
+		return output, nil
+	}
+	if err := a.shellCommandErrors[key]; err != nil {
+		return nil, err
+	}
+	if output, ok := a.shellCommandOutputs[key]; ok {
+		return output, nil
+	}
 	if err := a.shellErrors[serial]; err != nil {
 		return nil, err
 	}
 	return a.shellOutputs[serial], nil
+}
+
+func shellCommandKey(serial string, arg ...string) string {
+	return serial + "\x00" + strings.Join(arg, "\x00")
 }
 
 func (a *fakeADB) ExecOut(host string, serial string, arg ...string) ([]byte, error) {

@@ -79,6 +79,67 @@ func TestScreenshotReturnsPNG(t *testing.T) {
 	}
 }
 
+func TestDeviceDNSReturnsStatus(t *testing.T) {
+	backend := &fakeBackend{
+		dns: &node.DeviceDNSStatus{
+			Mode:      "opportunistic",
+			Automatic: true,
+		},
+	}
+	server := NewServer(backend)
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/devices/phone-1/dns", nil)
+
+	server.Handler().ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusOK, res.Body.String())
+	}
+	if backend.serials[0] != "phone-1" {
+		t.Fatalf("serial = %q, want phone-1", backend.serials[0])
+	}
+
+	var got node.DeviceDNSStatus
+	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.Mode != "opportunistic" || !got.Automatic {
+		t.Fatalf("dns status = %+v, want automatic opportunistic", got)
+	}
+}
+
+func TestToggleDeviceDNSReturnsUpdatedStatus(t *testing.T) {
+	backend := &fakeBackend{
+		dns: &node.DeviceDNSStatus{
+			Mode:      "hostname",
+			Hostname:  "dns.adguard.com",
+			Automatic: false,
+		},
+	}
+	server := NewServer(backend)
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/devices/phone-1/dns/toggle", nil)
+
+	server.Handler().ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusOK, res.Body.String())
+	}
+	if backend.serials[0] != "phone-1" {
+		t.Fatalf("serial = %q, want phone-1", backend.serials[0])
+	}
+
+	var got node.DeviceDNSStatus
+	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.Mode != "hostname" || got.Hostname != "dns.adguard.com" || got.Automatic {
+		t.Fatalf("dns status = %+v, want adguard hostname", got)
+	}
+}
+
 type screenshotBackend struct {
 	fakeBackend
 	serial string

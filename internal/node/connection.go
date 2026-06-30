@@ -280,6 +280,20 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				break
 			}
 			n.handleListDevicesRequest(peer, req)
+		case transport.TypeDeviceDNSGetRequest:
+			var req transport.DeviceDNSGetRequest
+			if err := json.Unmarshal(message, &req); err != nil {
+				log.Println("decode device dns get request:", err)
+				break
+			}
+			n.handleDeviceDNSGetRequest(peer, req)
+		case transport.TypeDeviceDNSToggleRequest:
+			var req transport.DeviceDNSToggleRequest
+			if err := json.Unmarshal(message, &req); err != nil {
+				log.Println("decode device dns toggle request:", err)
+				break
+			}
+			n.handleDeviceDNSToggleRequest(peer, req)
 		case transport.TypeStartStreamRequest:
 			var req transport.StartStreamRequest
 			if err := json.Unmarshal(message, &req); err != nil {

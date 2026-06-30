@@ -10,6 +10,8 @@ network.
 |---|---|---|
 | `GET` | `/api/devices` | List local and peer Android devices. |
 | `GET` | `/api/devices/{serial}/screenshot` | Capture a PNG screenshot from a device. |
+| `GET` | `/api/devices/{serial}/dns` | Read Android private DNS mode for a device. |
+| `POST` | `/api/devices/{serial}/dns/toggle` | Toggle Android private DNS between automatic and AdGuard. |
 | `GET` | `/api/nodes` | List the local node and connected peers. |
 | `GET` | `/api/nodes/{id}/config` | Read local or peer node config. |
 | `PUT` | `/api/nodes/{id}/config` | Update local or peer node config. |
@@ -83,6 +85,37 @@ Successful response:
 200 OK
 Content-Type: image/png
 Cache-Control: no-store
+```
+
+## Device DNS
+
+```http
+GET /api/devices/{serial}/dns
+```
+
+Returns Android private DNS state for a local or peer-owned device.
+
+```json
+{
+  "mode": "opportunistic",
+  "automatic": true
+}
+```
+
+```http
+POST /api/devices/{serial}/dns/toggle
+```
+
+When the device is automatic, Mast sets private DNS to `dns.adguard.com`. When
+the device is not automatic, Mast returns it to automatic mode. The response is
+the device DNS state after the change.
+
+```json
+{
+  "mode": "hostname",
+  "hostname": "dns.adguard.com",
+  "automatic": false
+}
 ```
 
 ## List Nodes

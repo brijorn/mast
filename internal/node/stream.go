@@ -147,22 +147,11 @@ func (s *StreamSession) turnScreenOff() error {
 	return scrcpy.WriteSetDisplayPower(s.controlConn, false)
 }
 
-func (n *Node) applyStreamOptions(host string, serial string, session *StreamSession, opts streamcfg.Options) error {
+func (n *Node) applyStreamOptions(session *StreamSession, opts streamcfg.Options) error {
 	if !opts.TurnScreenOff {
 		return nil
 	}
-	if err := session.turnScreenOff(); err != nil {
-		return err
-	}
-	n.turnDeviceDisplayOff(host, serial)
-	return nil
-}
-
-func (n *Node) turnDeviceDisplayOff(host string, serial string) {
-	// Android 15+ exposes this display command; older devices may reject it.
-	if _, err := n.adb.Shell(host, serial, "cmd", "display", "power-off", "0"); err != nil {
-		log.Printf("failed to power off display on %s: %v", serial, err)
-	}
+	return session.turnScreenOff()
 }
 
 func acceptScrcpySocket(ln net.Listener) (net.Conn, error) {
@@ -366,7 +355,7 @@ func (n *Node) startLocalStream(serial string, opts streamcfg.Options) (*StreamS
 		_ = session.Stop()
 		return nil, err
 	}
-	if err := n.applyStreamOptions(host, serial, session, opts); err != nil {
+	if err := n.applyStreamOptions(session, opts); err != nil {
 		_ = session.Stop()
 		return nil, err
 	}
@@ -487,11 +476,7 @@ func (n *Node) ensureStream(serial string, opts streamcfg.Options, start func(st
 			if entry.Session == nil {
 				return nil, errors.New("internal error: stream session is nil")
 			}
-			host, err := n.adbHostForNode(n.ID)
-			if err != nil {
-				return nil, err
-			}
-			if err := n.applyStreamOptions(host, serial, entry.Session, opts); err != nil {
+			if err := n.applyStreamOptions(entry.Session, opts); err != nil {
 				return nil, err
 			}
 

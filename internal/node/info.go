@@ -13,6 +13,7 @@ type NodeInfo struct {
 	Version        string `json:"version"`
 	Commit         string `json:"commit"`
 	BuildDate      string `json:"build_date"`
+	DeviceError    string `json:"device_error,omitempty"`
 }
 
 func (n *Node) ListNodes() []NodeInfo {
@@ -45,8 +46,17 @@ func (n *Node) ListNodes() []NodeInfo {
 			Version:        peer.Version,
 			Commit:         peer.Commit,
 			BuildDate:      peer.BuildDate,
+			DeviceError:    peer.DeviceError,
 		})
 	}
 
 	return nodes
+}
+
+func (n *Node) setPeerDeviceError(peerID string, message string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if peer, ok := n.Peers[peerID]; ok {
+		peer.DeviceError = message
+	}
 }

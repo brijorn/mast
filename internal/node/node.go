@@ -23,6 +23,7 @@ type PeerConn struct {
 	Version        string
 	Commit         string
 	BuildDate      string
+	DeviceError    string
 }
 
 func (p *PeerConn) WriteMessage(messageType int, data []byte) error {

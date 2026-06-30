@@ -8,29 +8,33 @@ import (
 )
 
 const (
-	TypeConnectionRequest    = "connection_request"
-	TypeListDevicesRequest   = "list_devices_request"
-	TypeListDevicesResponse  = "list_devices_response"
-	TypeScreenshotRequest    = "screenshot_request"
-	TypeScreenshotResponse   = "screenshot_response"
-	TypeStartStreamRequest   = "start_stream_request"
-	TypeStartStreamResponse  = "start_stream_response"
-	TypeStopStreamRequest    = "stop_stream_request"
-	TypeTouchRequest         = "touch_request"
-	TypeTapRequest           = "tap_request"
-	TypeSwipeRequest         = "swipe_request"
-	TypePressKeyRequest      = "press_key_request"
-	TypeClipboardGetRequest  = "clipboard_get_request"
-	TypeClipboardGetResponse = "clipboard_get_response"
-	TypeClipboardSetRequest  = "clipboard_set_request"
-	TypeUpdateCheckRequest   = "update_check_request"
-	TypeUpdateCheckResponse  = "update_check_response"
-	TypeUpdateApplyRequest   = "update_apply_request"
-	TypeUpdateApplyResponse  = "update_apply_response"
-	TypeConfigGetRequest     = "config_get_request"
-	TypeConfigGetResponse    = "config_get_response"
-	TypeConfigUpdateRequest  = "config_update_request"
-	TypeConfigUpdateResponse = "config_update_response"
+	TypeConnectionRequest       = "connection_request"
+	TypeListDevicesRequest      = "list_devices_request"
+	TypeListDevicesResponse     = "list_devices_response"
+	TypeDeviceDNSGetRequest     = "device_dns_get_request"
+	TypeDeviceDNSGetResponse    = "device_dns_get_response"
+	TypeDeviceDNSToggleRequest  = "device_dns_toggle_request"
+	TypeDeviceDNSToggleResponse = "device_dns_toggle_response"
+	TypeScreenshotRequest       = "screenshot_request"
+	TypeScreenshotResponse      = "screenshot_response"
+	TypeStartStreamRequest      = "start_stream_request"
+	TypeStartStreamResponse     = "start_stream_response"
+	TypeStopStreamRequest       = "stop_stream_request"
+	TypeTouchRequest            = "touch_request"
+	TypeTapRequest              = "tap_request"
+	TypeSwipeRequest            = "swipe_request"
+	TypePressKeyRequest         = "press_key_request"
+	TypeClipboardGetRequest     = "clipboard_get_request"
+	TypeClipboardGetResponse    = "clipboard_get_response"
+	TypeClipboardSetRequest     = "clipboard_set_request"
+	TypeUpdateCheckRequest      = "update_check_request"
+	TypeUpdateCheckResponse     = "update_check_response"
+	TypeUpdateApplyRequest      = "update_apply_request"
+	TypeUpdateApplyResponse     = "update_apply_response"
+	TypeConfigGetRequest        = "config_get_request"
+	TypeConfigGetResponse       = "config_get_response"
+	TypeConfigUpdateRequest     = "config_update_request"
+	TypeConfigUpdateResponse    = "config_update_response"
 )
 
 type Message interface {
@@ -99,6 +103,50 @@ type ListDevicesResponsePayload struct {
 type ListDevicesResponse struct {
 	RawMessage
 	Payload ListDevicesResponsePayload `json:"payload"`
+}
+
+type DeviceDNSStatusPayload struct {
+	Mode      string `json:"mode"`
+	Hostname  string `json:"hostname,omitempty"`
+	Automatic bool   `json:"automatic"`
+}
+
+type DeviceDNSGetRequestPayload struct {
+	Serial string `json:"serial"`
+}
+
+type DeviceDNSGetRequest struct {
+	RawMessage
+	Payload DeviceDNSGetRequestPayload `json:"payload"`
+}
+
+type DeviceDNSGetResponsePayload struct {
+	Result *DeviceDNSStatusPayload `json:"result,omitempty"`
+	Error  string                  `json:"error,omitempty"`
+}
+
+type DeviceDNSGetResponse struct {
+	RawMessage
+	Payload DeviceDNSGetResponsePayload `json:"payload"`
+}
+
+type DeviceDNSToggleRequestPayload struct {
+	Serial string `json:"serial"`
+}
+
+type DeviceDNSToggleRequest struct {
+	RawMessage
+	Payload DeviceDNSToggleRequestPayload `json:"payload"`
+}
+
+type DeviceDNSToggleResponsePayload struct {
+	Result *DeviceDNSStatusPayload `json:"result,omitempty"`
+	Error  string                  `json:"error,omitempty"`
+}
+
+type DeviceDNSToggleResponse struct {
+	RawMessage
+	Payload DeviceDNSToggleResponsePayload `json:"payload"`
 }
 
 type ScreenshotRequestPayload struct {

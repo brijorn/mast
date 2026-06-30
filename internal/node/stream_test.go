@@ -121,6 +121,39 @@ func TestStartStreamRoutesRemoteDeviceToPeer(t *testing.T) {
 	}
 }
 
+func TestEnsureStreamLocalUsesLightweightDeviceLookup(t *testing.T) {
+	fake := &fakeADB{
+		outputs: map[string][]byte{
+			"": []byte("List of devices attached\nlocal-123\tdevice\n"),
+		},
+	}
+	node := &Node{
+		ID:            "local-node",
+		AdvertiseHost: "127.0.0.1",
+		Peers:         map[string]*PeerConn{},
+		adb:           fake,
+		streams:       make(map[string]*streamEntry),
+	}
+
+	session, err := node.EnsureStream("local-123", streamcfg.Options{
+		NoAudio:   true,
+		NoControl: true,
+	})
+	if err != nil {
+		t.Fatalf("EnsureStream returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = session.Stop() })
+
+	if diff := cmp.Diff([]string{""}, fake.calls); diff != "" {
+		t.Fatalf("adb devices calls mismatch (-want +got):\n%s", diff)
+	}
+	for _, call := range fake.shellOutputCalls {
+		if len(call.Args) >= 2 && call.Args[0] == "dumpsys" && call.Args[1] == "battery" {
+			t.Fatalf("EnsureStream called battery enrichment: %+v", call)
+		}
+	}
+}
+
 func TestEnsureStreamRestartsRemoteStreamAfterPeerLosesState(t *testing.T) {
 	nodeA, nodeB := createNodePair(t)
 	defer func() { _ = nodeA.Close() }()

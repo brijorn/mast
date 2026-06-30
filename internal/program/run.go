@@ -51,20 +51,16 @@ func (s *Store) Start(opts StartOptions) ([]Run, error) {
 		return nil, errors.New("program not found")
 	}
 
-	devices, err := s.devices.ListDevices()
-	if err != nil {
-		return nil, err
-	}
 	nodes := s.devices.ListNodes()
 
 	var runs []Run
 	for _, serial := range opts.Serials {
-		device, ok := findDevice(devices, serial)
-		if !ok {
-			return nil, fmt.Errorf("device not found: %s", serial)
+		device, err := s.devices.DeviceBySerial(serial)
+		if err != nil {
+			return nil, err
 		}
 
-		run, err := s.startOne(p, device, nodes, opts.Variables)
+		run, err := s.startOne(p, *device, nodes, opts.Variables)
 		if err != nil {
 			return nil, err
 		}

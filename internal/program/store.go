@@ -23,6 +23,7 @@ type Store struct {
 }
 
 type deviceLister interface {
+	DeviceBySerial(serial string) (*node.DeviceInfo, error)
 	ListDevices() ([]node.DeviceInfo, error)
 	ListNodes() []node.NodeInfo
 }

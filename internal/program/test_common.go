@@ -2,6 +2,7 @@ package program
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -17,6 +18,14 @@ type fakeDevices struct {
 
 func (f fakeDevices) ListDevices() ([]node.DeviceInfo, error) {
 	return f.devices, nil
+}
+
+func (f fakeDevices) DeviceBySerial(serial string) (*node.DeviceInfo, error) {
+	device, ok := findDevice(f.devices, serial)
+	if !ok {
+		return nil, errors.New("device not found: " + serial)
+	}
+	return &device, nil
 }
 
 func (f fakeDevices) ListNodes() []node.NodeInfo {

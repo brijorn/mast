@@ -565,7 +565,7 @@ func (n *Node) handleScreenshotRequest(peer *PeerConn, req transport.ScreenshotR
 }
 
 func (n *Node) DeviceBySerial(serial string) (*DeviceInfo, error) {
-	devices, err := n.ListDevices()
+	devices, err := n.listLocalDeviceStates()
 	if err != nil {
 		return nil, err
 	}
@@ -573,11 +573,34 @@ func (n *Node) DeviceBySerial(serial string) (*DeviceInfo, error) {
 	index := slices.IndexFunc(devices, func(d DeviceInfo) bool {
 		return d.Serial == serial
 	})
-	if index == -1 {
-		return nil, errors.New("device not found:" + serial)
+	if index != -1 {
+		return &devices[index], nil
 	}
 
-	return &devices[index], nil
+	var peerErrors []error
+	for _, peerID := range n.androidPeerIDs() {
+		peerDevices, err := n.listPeerDevices(n.ctx, peerID)
+		if err != nil {
+			log.Printf("find device %s from peer %s: %v", serial, peerID, err)
+			n.setPeerDeviceError(peerID, err.Error())
+			peerErrors = append(peerErrors, err)
+			continue
+		}
+		n.setPeerDeviceError(peerID, "")
+
+		index := slices.IndexFunc(peerDevices, func(d DeviceInfo) bool {
+			return d.Serial == serial
+		})
+		if index != -1 {
+			return &peerDevices[index], nil
+		}
+	}
+
+	if len(peerErrors) > 0 {
+		return nil, fmt.Errorf("device not found: %s; peer lookup errors: %w", serial, errors.Join(peerErrors...))
+	}
+
+	return nil, errors.New("device not found: " + serial)
 }
 
 func (n *Node) localDeviceBySerial(serial string) (*DeviceInfo, error) {

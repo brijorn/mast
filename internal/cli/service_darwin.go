@@ -5,7 +5,6 @@ package cli
 import (
 	"fmt"
 	"os"
-	"os/exec"
 )
 
 const (
@@ -32,17 +31,19 @@ func serviceFileContent(execPath string) string {
 }
 
 func serviceLoad(path string) error {
-	if err := exec.Command("launchctl", "load", path).Run(); err != nil {
+	return serviceRestart(path)
+}
+
+func serviceStop(path string) error {
+	if err := runServiceCommand("launchctl", "unload", path); err != nil {
 		return err
 	}
 	return nil
 }
 
-func serviceStop(path string) error {
-	if err := exec.Command("launchctl", "unload", path).Run(); err != nil {
-		return err
-	}
-	return nil
+func serviceRestart(path string) error {
+	_ = runServiceCommand("launchctl", "unload", path)
+	return runServiceCommand("launchctl", "load", path)
 }
 
 func serviceUninstall(path string) error {

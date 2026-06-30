@@ -35,12 +35,12 @@ type DeviceInfo struct {
 const peerDeviceRPCTimeout = 10 * time.Second
 
 type adbRunner interface {
-	Devices(host string) ([]byte, error)
-	Push(host string, localPath string, remotePath string) error
-	Reverse(host string, deviceSocket string, localPort int) error
+	Devices(ctx context.Context, host string) ([]byte, error)
+	Push(ctx context.Context, host string, localPath string, remotePath string) error
+	Reverse(ctx context.Context, host string, deviceSocket string, localPort int) error
 	StartShell(host string, arg ...string) (*exec.Cmd, error)
-	Shell(host string, serial string, arg ...string) ([]byte, error)
-	ExecOut(host string, serial string, arg ...string) ([]byte, error)
+	Shell(ctx context.Context, host string, serial string, arg ...string) ([]byte, error)
+	ExecOut(ctx context.Context, host string, serial string, arg ...string) ([]byte, error)
 }
 
 type realADB struct{}
@@ -58,26 +58,45 @@ type batterySnapshot struct {
 
 var batteryLogLinePattern = regexp.MustCompile(`^(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2}).*level:(\d+).*current_avg:([-+]?\d+)`)
 
-func (a realADB) run(host string, arg ...string) ([]byte, error) {
+var (
+	adbCommandTimeout  = 10 * time.Second
+	adbTransferTimeout = 30 * time.Second
+	execADBCommand     = exec.CommandContext
+)
+
+func adbContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
+func (a realADB) run(ctx context.Context, host string, timeout time.Duration, arg ...string) ([]byte, error) {
+	ctx, cancel := adbContext(ctx, timeout)
+	defer cancel()
+
 	args := adbArgs(host, arg...)
-	output, err := exec.Command("adb", args...).CombinedOutput()
+	output, err := execADBCommand(ctx, "adb", args...).CombinedOutput()
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			err = ctxErr
+		}
 		return output, commandError("adb", args, output, err)
 	}
 	return output, nil
 }
 
-func (a realADB) Devices(host string) ([]byte, error) {
-	return a.run(host, "devices")
+func (a realADB) Devices(ctx context.Context, host string) ([]byte, error) {
+	return a.run(ctx, host, adbCommandTimeout, "devices")
 }
 
-func (a realADB) Push(host string, localPath string, remotePath string) error {
-	_, err := a.run(host, "push", localPath, remotePath)
+func (a realADB) Push(ctx context.Context, host string, localPath string, remotePath string) error {
+	_, err := a.run(ctx, host, adbCommandTimeout, "push", localPath, remotePath)
 	return err
 }
 
-func (a realADB) Reverse(host string, deviceSocket string, localPort int) error {
-	_, err := a.run(host, "reverse", deviceSocket, "tcp:"+strconv.Itoa(localPort))
+func (a realADB) Reverse(ctx context.Context, host string, deviceSocket string, localPort int) error {
+	_, err := a.run(ctx, host, adbCommandTimeout, "reverse", deviceSocket, "tcp:"+strconv.Itoa(localPort))
 	return err
 }
 
@@ -110,24 +129,24 @@ func (a realADB) StartShell(host string, arg ...string) (*exec.Cmd, error) {
 	return cmd, nil
 }
 
-func (a realADB) Shell(host string, serial string, arg ...string) ([]byte, error) {
+func (a realADB) Shell(ctx context.Context, host string, serial string, arg ...string) ([]byte, error) {
 	var args []string
 	if serial != "" {
 		args = append(args, "-s", serial)
 	}
 	args = append(args, "shell")
 	args = append(args, arg...)
-	return a.run(host, args...)
+	return a.run(ctx, host, adbCommandTimeout, args...)
 }
 
-func (a realADB) ExecOut(host string, serial string, arg ...string) ([]byte, error) {
+func (a realADB) ExecOut(ctx context.Context, host string, serial string, arg ...string) ([]byte, error) {
 	var args []string
 	if serial != "" {
 		args = append(args, "-s", serial)
 	}
 	args = append(args, "exec-out")
 	args = append(args, arg...)
-	return a.run(host, args...)
+	return a.run(ctx, host, adbTransferTimeout, args...)
 }
 
 func adbArgs(host string, arg ...string) []string {
@@ -156,8 +175,11 @@ func (n *Node) ListDevices() ([]DeviceInfo, error) {
 	for _, peerID := range n.androidPeerIDs() {
 		peerDevices, err := n.listPeerDevices(n.ctx, peerID)
 		if err != nil {
-			return nil, err
+			log.Printf("list devices from peer %s: %v", peerID, err)
+			n.setPeerDeviceError(peerID, err.Error())
+			continue
 		}
+		n.setPeerDeviceError(peerID, "")
 		devices = append(devices, peerDevices...)
 	}
 
@@ -385,7 +407,7 @@ func (n *Node) cachedBattery(serial string) (batterySnapshot, bool) {
 }
 
 func (n *Node) deviceBattery(serial string) (batterySnapshot, error) {
-	output, err := n.adb.Shell("", serial, "dumpsys", "battery")
+	output, err := n.adb.Shell(n.ctx, "", serial, "dumpsys", "battery")
 	if err != nil {
 		return batterySnapshot{}, err
 	}
@@ -394,7 +416,7 @@ func (n *Node) deviceBattery(serial string) (batterySnapshot, error) {
 }
 
 func (n *Node) listLocalDeviceStates() ([]DeviceInfo, error) {
-	rawOutput, err := n.adb.Devices("")
+	rawOutput, err := n.adb.Devices(n.ctx, "")
 	if err != nil {
 		return nil, err
 	}
@@ -502,7 +524,7 @@ func (n *Node) localScreenshot(serial string) ([]byte, error) {
 	if device.State != "device" {
 		return nil, fmt.Errorf("device %s is %s", serial, device.State)
 	}
-	return n.adb.ExecOut("", serial, "screencap", "-p")
+	return n.adb.ExecOut(n.ctx, "", serial, "screencap", "-p")
 }
 
 func (n *Node) peerScreenshot(ctx context.Context, peerID string, serial string) ([]byte, error) {

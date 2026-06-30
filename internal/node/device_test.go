@@ -1,11 +1,14 @@
 package node
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"io"
 	"net"
+	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -52,7 +55,7 @@ type fakeADB struct {
 	controlMessages          chan []byte
 }
 
-func (a *fakeADB) Devices(host string) ([]byte, error) {
+func (a *fakeADB) Devices(ctx context.Context, host string) ([]byte, error) {
 	a.calls = append(a.calls, host)
 	if err := a.errors[host]; err != nil {
 		return nil, err
@@ -60,7 +63,7 @@ func (a *fakeADB) Devices(host string) ([]byte, error) {
 	return a.outputs[host], nil
 }
 
-func (a *fakeADB) Push(host string, localPath string, remotePath string) error {
+func (a *fakeADB) Push(ctx context.Context, host string, localPath string, remotePath string) error {
 	a.pushCalls = append(a.pushCalls, pushCall{
 		Host:       host,
 		LocalPath:  localPath,
@@ -69,7 +72,7 @@ func (a *fakeADB) Push(host string, localPath string, remotePath string) error {
 	return nil
 }
 
-func (a *fakeADB) Reverse(host string, deviceSocket string, localPort int) error {
+func (a *fakeADB) Reverse(ctx context.Context, host string, deviceSocket string, localPort int) error {
 	a.reverseCalls = append(a.reverseCalls, reverseCall{
 		Host:         host,
 		DeviceSocket: deviceSocket,
@@ -91,7 +94,7 @@ func (a *fakeADB) StartShell(host string, arg ...string) (*exec.Cmd, error) {
 	return nil, nil
 }
 
-func (a *fakeADB) Shell(host string, serial string, arg ...string) ([]byte, error) {
+func (a *fakeADB) Shell(ctx context.Context, host string, serial string, arg ...string) ([]byte, error) {
 	a.shellOutputCalls = append(a.shellOutputCalls, shellCall{
 		Host:   host,
 		Serial: serial,
@@ -119,7 +122,7 @@ func shellCommandKey(serial string, arg ...string) string {
 	return serial + "\x00" + strings.Join(arg, "\x00")
 }
 
-func (a *fakeADB) ExecOut(host string, serial string, arg ...string) ([]byte, error) {
+func (a *fakeADB) ExecOut(ctx context.Context, host string, serial string, arg ...string) ([]byte, error) {
 	a.shellOutputCalls = append(a.shellOutputCalls, shellCall{
 		Host:   host,
 		Serial: serial,
@@ -207,6 +210,45 @@ func TestCommandErrorIncludesCommandAndOutput(t *testing.T) {
 			t.Fatalf("error = %q, want it to contain %q", got, want)
 		}
 	}
+}
+
+func TestRealADBTimeoutErrorIncludesCommandHostAndSerial(t *testing.T) {
+	originalExec := execADBCommand
+	originalTimeout := adbCommandTimeout
+	t.Cleanup(func() {
+		execADBCommand = originalExec
+		adbCommandTimeout = originalTimeout
+	})
+
+	adbCommandTimeout = 10 * time.Millisecond
+	execADBCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		helperArgs := []string{"-test.run=TestADBTimeoutHelperProcess", "--", name}
+		helperArgs = append(helperArgs, args...)
+		cmd := exec.CommandContext(ctx, os.Args[0], helperArgs...)
+		cmd.Env = append(os.Environ(), "MAST_ADB_TIMEOUT_HELPER=1")
+		return cmd
+	}
+
+	_, err := (realADB{}).Shell(context.Background(), "10.0.0.2", "serial-123", "settings", "get", "global", "private_dns_mode")
+	if err == nil {
+		t.Fatal("Shell returned nil error, want timeout")
+	}
+	got := err.Error()
+	for _, want := range []string{
+		"adb -H 10.0.0.2 -P 5037 -s serial-123 shell settings get global private_dns_mode",
+		context.DeadlineExceeded.Error(),
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("error = %q, want it to contain %q", got, want)
+		}
+	}
+}
+
+func TestADBTimeoutHelperProcess(t *testing.T) {
+	if os.Getenv("MAST_ADB_TIMEOUT_HELPER") != "1" {
+		return
+	}
+	time.Sleep(time.Hour)
 }
 
 func TestParseDevicesOutput(t *testing.T) {
@@ -534,6 +576,49 @@ func TestListDevicesIncludesAndroidEnabledPeerDevices(t *testing.T) {
 	}
 	if diff := cmp.Diff([]string{""}, nodeBADB.calls); diff != "" {
 		t.Fatalf("node B adb calls mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestListDevicesReturnsLocalDevicesWhenPeerListingFails(t *testing.T) {
+	nodeA, nodeB := createNodePair(t)
+	defer func() { _ = nodeA.Close() }()
+	defer func() { _ = nodeB.Close() }()
+
+	nodeA.adb = &fakeADB{
+		outputs: map[string][]byte{
+			"": []byte("List of devices attached\nlocal-123\tdevice\n"),
+		},
+	}
+	expectedErr := errors.New("peer adb failed")
+	nodeB.adb = &fakeADB{
+		errors: map[string]error{
+			"": expectedErr,
+		},
+	}
+	nodeB.AndroidEnabled = true
+	connectNodePair(t, nodeA, nodeB)
+
+	got, err := nodeA.ListDevices()
+	if err != nil {
+		t.Fatalf("ListDevices returned error: %v", err)
+	}
+
+	expected := []DeviceInfo{
+		{Serial: "local-123", State: "device", NodeID: "a"},
+	}
+	if diff := cmp.Diff(expected, got); diff != "" {
+		t.Fatalf("devices mismatch (-want +got):\n%s", diff)
+	}
+
+	nodes := nodeA.ListNodes()
+	index := slices.IndexFunc(nodes, func(info NodeInfo) bool {
+		return info.ID == "b"
+	})
+	if index == -1 {
+		t.Fatalf("peer node missing from ListNodes: %+v", nodes)
+	}
+	if !strings.Contains(nodes[index].DeviceError, expectedErr.Error()) {
+		t.Fatalf("DeviceError = %q, want it to contain %q", nodes[index].DeviceError, expectedErr.Error())
 	}
 }
 

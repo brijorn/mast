@@ -237,7 +237,7 @@ func (n *Node) pushScrcpyServer(host string) error {
 	}
 	defer cleanup()
 
-	return n.adb.Push(host, localPath, scrcpy.RemotePath)
+	return n.adb.Push(n.ctx, host, localPath, scrcpy.RemotePath)
 }
 
 func newScrcpyListener() (net.Listener, int, error) {
@@ -251,7 +251,7 @@ func newScrcpyListener() (net.Listener, int, error) {
 }
 
 func (n *Node) createScrcpyReverse(host string, port int) error {
-	return n.adb.Reverse(host, scrcpy.DeviceSocket, port)
+	return n.adb.Reverse(n.ctx, host, scrcpy.DeviceSocket, port)
 }
 
 func (n *Node) startScrcpyProcess(host string, opts streamcfg.Options) (*exec.Cmd, error) {
@@ -301,13 +301,13 @@ func (n *Node) startLocalStream(serial string, opts streamcfg.Options) (*StreamS
 	n.configMu.RUnlock()
 
 	if lockPortrait {
-		if _, err := n.adb.Shell("", serial, "wm", "set-ignore-orientation-request", "-d", "0", "true"); err != nil {
+		if _, err := n.adb.Shell(n.ctx, "", serial, "wm", "set-ignore-orientation-request", "-d", "0", "true"); err != nil {
 			log.Printf("failed to set ignore orientation request on %s: %v", serial, err)
 		}
-		if _, err := n.adb.Shell("", serial, "settings", "put", "system", "accelerometer_rotation", "0"); err != nil {
+		if _, err := n.adb.Shell(n.ctx, "", serial, "settings", "put", "system", "accelerometer_rotation", "0"); err != nil {
 			log.Printf("failed to disable accelerometer rotation on %s: %v", serial, err)
 		}
-		if _, err := n.adb.Shell("", serial, "settings", "put", "system", "user_rotation", "0"); err != nil {
+		if _, err := n.adb.Shell(n.ctx, "", serial, "settings", "put", "system", "user_rotation", "0"); err != nil {
 			log.Printf("failed to set user rotation on %s: %v", serial, err)
 		}
 	}

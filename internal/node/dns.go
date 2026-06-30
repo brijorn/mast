@@ -57,11 +57,11 @@ func (n *Node) localDeviceDNS(serial string) (*DeviceDNSStatus, error) {
 		return nil, err
 	}
 
-	modeOutput, err := n.adb.Shell("", serial, "settings", "get", "global", "private_dns_mode")
+	modeOutput, err := n.adb.Shell(n.ctx, "", serial, "settings", "get", "global", "private_dns_mode")
 	if err != nil {
 		return nil, err
 	}
-	hostnameOutput, err := n.adb.Shell("", serial, "settings", "get", "global", "private_dns_specifier")
+	hostnameOutput, err := n.adb.Shell(n.ctx, "", serial, "settings", "get", "global", "private_dns_specifier")
 	if err != nil {
 		return nil, err
 	}
@@ -76,17 +76,17 @@ func (n *Node) toggleLocalDeviceDNS(serial string) (*DeviceDNSStatus, error) {
 	}
 
 	if status.Automatic {
-		if _, err := n.adb.Shell("", serial, "settings", "put", "global", "private_dns_mode", deviceDNSHostnameMode); err != nil {
+		if _, err := n.adb.Shell(n.ctx, "", serial, "settings", "put", "global", "private_dns_mode", deviceDNSHostnameMode); err != nil {
 			return nil, err
 		}
-		if _, err := n.adb.Shell("", serial, "settings", "put", "global", "private_dns_specifier", deviceDNSAdGuardHost); err != nil {
+		if _, err := n.adb.Shell(n.ctx, "", serial, "settings", "put", "global", "private_dns_specifier", deviceDNSAdGuardHost); err != nil {
 			return nil, err
 		}
 	} else {
-		if _, err := n.adb.Shell("", serial, "settings", "put", "global", "private_dns_mode", deviceDNSAutomaticMode); err != nil {
+		if _, err := n.adb.Shell(n.ctx, "", serial, "settings", "put", "global", "private_dns_mode", deviceDNSAutomaticMode); err != nil {
 			return nil, err
 		}
-		if _, err := n.adb.Shell("", serial, "settings", "delete", "global", "private_dns_specifier"); err != nil {
+		if _, err := n.adb.Shell(n.ctx, "", serial, "settings", "delete", "global", "private_dns_specifier"); err != nil {
 			return nil, err
 		}
 	}

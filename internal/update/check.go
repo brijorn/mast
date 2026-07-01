@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/brijorn/mast/internal/version"
@@ -92,12 +93,71 @@ func findAsset(assets []GitHubAsset, name string) (GitHubAsset, bool) {
 
 func updateAvailable(current string, latest string) bool {
 	current = normalizeVersion(current)
+	latest = normalizeVersion(latest)
 	if current == "" || current == "dev" || current == "unknown" {
 		return false
 	}
-	return current != latest
+	cmp, ok := compareVersions(current, latest)
+	if !ok {
+		return current != latest
+	}
+	return cmp < 0
 }
 
 func normalizeVersion(v string) string {
 	return strings.TrimPrefix(v, "v")
+}
+
+func compareVersions(current string, latest string) (int, bool) {
+	currentParts, ok := parseVersionParts(current)
+	if !ok {
+		return 0, false
+	}
+	latestParts, ok := parseVersionParts(latest)
+	if !ok {
+		return 0, false
+	}
+
+	maxLen := max(len(currentParts), len(latestParts))
+	for i := range maxLen {
+		var currentPart int
+		if i < len(currentParts) {
+			currentPart = currentParts[i]
+		}
+		var latestPart int
+		if i < len(latestParts) {
+			latestPart = latestParts[i]
+		}
+		switch {
+		case currentPart < latestPart:
+			return -1, true
+		case currentPart > latestPart:
+			return 1, true
+		}
+	}
+	return 0, true
+}
+
+func parseVersionParts(version string) ([]int, bool) {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return nil, false
+	}
+	if suffix := strings.IndexAny(version, "-+"); suffix != -1 {
+		version = version[:suffix]
+	}
+
+	segments := strings.Split(version, ".")
+	parts := make([]int, 0, len(segments))
+	for _, segment := range segments {
+		if segment == "" {
+			return nil, false
+		}
+		part, err := strconv.Atoi(segment)
+		if err != nil {
+			return nil, false
+		}
+		parts = append(parts, part)
+	}
+	return parts, true
 }

@@ -94,6 +94,30 @@ func TestCheckReturnsNoUpdateForSameVersion(t *testing.T) {
 	}
 }
 
+func TestUpdateAvailableComparesVersions(t *testing.T) {
+	tests := []struct {
+		name    string
+		current string
+		latest  string
+		want    bool
+	}{
+		{name: "newer latest", current: "0.2.8", latest: "0.2.9", want: true},
+		{name: "same version", current: "0.2.9", latest: "v0.2.9", want: false},
+		{name: "older latest", current: "0.2.9", latest: "0.2.8", want: false},
+		{name: "numeric segments", current: "0.2.9", latest: "0.2.10", want: true},
+		{name: "dev build", current: "dev", latest: "0.2.9", want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := updateAvailable(tc.current, tc.latest)
+			if got != tc.want {
+				t.Fatalf("updateAvailable(%q, %q) = %v, want %v", tc.current, tc.latest, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestCheckUsesZipForWindows(t *testing.T) {
 	server := newReleaseServer(t, `{
 		"tag_name": "v0.2.0",

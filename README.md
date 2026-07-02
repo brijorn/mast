@@ -38,6 +38,7 @@ input, program runs, node config, and updates.
 | `GET` | `/api/nodes/{id}/config` | Read local or peer node config |
 | `PUT` | `/api/nodes/{id}/config` | Update local or peer node config |
 | `POST` | `/api/peers` | Connect to a peer Mast node |
+| `DELETE` | `/api/peers` | Disconnect from a peer Mast node |
 | `POST` | `/api/streams` | Start a scrcpy stream |
 | `DELETE` | `/api/streams/{serial}` | Stop a local or peer-owned scrcpy stream |
 | `GET` | `/api/streams/video?serial=...` | Subscribe to stream video packets |

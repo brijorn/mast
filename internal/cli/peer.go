@@ -14,8 +14,9 @@ import (
 )
 
 type PeerCmd struct {
-	Add PeerAddCmd `cmd:"" help:"Connect the running Mast node to a peer"`
-	Ls  PeerLsCmd  `cmd:"" help:"List saved peers"`
+	Add    PeerAddCmd    `cmd:"" help:"Connect the running Mast node to a peer"`
+	Remove PeerRemoveCmd `cmd:"" help:"Remove a saved peer and disconnect it from the running Mast node"`
+	Ls     PeerLsCmd     `cmd:"" help:"List saved peers"`
 }
 
 type PeerAddCmd struct {
@@ -26,6 +27,12 @@ type PeerAddCmd struct {
 
 type PeerLsCmd struct {
 	ConfigPath string `name:"config" short:"c" type:"path" help:"Path to config file"`
+}
+
+type PeerRemoveCmd struct {
+	ConfigPath string `name:"config" short:"c" type:"path" help:"Path to config file"`
+	APIAddr    string `name:"api" help:"Local Mast API base URL"`
+	Target     string `arg:"" help:"Peer host, host:port, or websocket URL"`
 }
 
 func (p *PeerAddCmd) Run() error {
@@ -86,6 +93,58 @@ func (p *PeerLsCmd) Run() error {
 		}
 	}
 	return nil
+}
+
+func (p *PeerRemoveCmd) Run() error {
+	target, err := peer.NormalizeTarget(p.Target)
+	if err != nil {
+		return err
+	}
+
+	store, err := LoadPeerStore(p.ConfigPath)
+	if err != nil {
+		return err
+	}
+	removed := removeSavedPeer(store, target)
+	if err := SavePeerStore(p.ConfigPath, store); err != nil {
+		return err
+	}
+
+	apiBase, err := apiBaseURL(p.ConfigPath, p.APIAddr)
+	if err != nil {
+		return err
+	}
+
+	body, err := json.Marshal(map[string]string{"target": target})
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, apiBase+"/api/peers", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = res.Body.Close()
+	}()
+
+	if res.StatusCode != http.StatusNoContent {
+		msg, _ := io.ReadAll(res.Body)
+		return fmt.Errorf("remove peer: %s: %s", res.Status, strings.TrimSpace(string(msg)))
+	}
+
+	if !removed {
+		_, err = fmt.Fprintf(os.Stdout, "peer not saved %s\n", target)
+		return err
+	}
+	_, err = fmt.Fprintf(os.Stdout, "removed peer %s\n", target)
+	return err
 }
 
 func apiBaseURL(configPath string, apiAddr string) (string, error) {

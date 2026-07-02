@@ -85,6 +85,37 @@ func TestNodeConnectionStoresPeerVersionMetadata(t *testing.T) {
 	}
 }
 
+func TestNodeDisconnectPeerDropsConnection(t *testing.T) {
+	nodeA, nodeB := createNodePair(t)
+
+	_, port, err := net.SplitHostPort(nodeB.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := "ws://127.0.0.1:" + port + "/ws"
+	if err := nodeA.Connect(target); err != nil {
+		t.Fatal(err)
+	}
+
+	waitFor(t, time.Second, func() bool {
+		nodeA.mu.RLock()
+		defer nodeA.mu.RUnlock()
+		_, ok := nodeA.Peers["b"]
+		return ok
+	})
+
+	if !nodeA.DisconnectPeer(target) {
+		t.Fatal("DisconnectPeer returned false for connected peer")
+	}
+
+	waitFor(t, time.Second, func() bool {
+		nodeA.mu.RLock()
+		defer nodeA.mu.RUnlock()
+		_, ok := nodeA.Peers["b"]
+		return !ok
+	})
+}
+
 func TestNodeReconect(t *testing.T) {
 	nodeA, nodeB := createNodePair(t)
 

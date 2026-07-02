@@ -19,6 +19,7 @@ type nodeBackend interface {
 	DeviceDNS(serial string) (*node.DeviceDNSStatus, error)
 	ToggleDeviceDNS(serial string) (*node.DeviceDNSStatus, error)
 	Connect(addr string) error
+	DisconnectPeer(addr string) bool
 	CheckNodeUpdate(ctx context.Context, nodeID string) (*update.CheckResult, error)
 	ApplyNodeUpdate(ctx context.Context, nodeID string, opts update.ApplyOptions) (*update.ApplyResult, error)
 	GetNodeConfig(ctx context.Context, nodeID string) (*mastconfig.Config, error)
@@ -83,6 +84,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/devices/{serial}/dns/toggle", s.ToggleDeviceDNS)
 	mux.HandleFunc("GET /api/nodes", s.ListNodes)
 	mux.HandleFunc("POST /api/peers", s.AddPeer)
+	mux.HandleFunc("DELETE /api/peers", s.RemovePeer)
 	mux.HandleFunc("GET /api/nodes/{id}/update", s.CheckNodeUpdate)
 	mux.HandleFunc("POST /api/nodes/{id}/update", s.ApplyNodeUpdate)
 	mux.HandleFunc("GET /api/nodes/{id}/config", s.GetNodeConfig)

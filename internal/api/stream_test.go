@@ -62,6 +62,10 @@ func (f *fakeBackend) Connect(_ string) error {
 	return nil
 }
 
+func (f *fakeBackend) DisconnectPeer(_ string) bool {
+	return false
+}
+
 func (f *fakeBackend) CheckNodeUpdate(_ context.Context, _ string) (*update.CheckResult, error) {
 	return nil, nil
 }

@@ -277,6 +277,25 @@ Response body:
 }
 ```
 
+## Remove Peer
+
+```http
+DELETE /api/peers
+```
+
+Disconnects a running Mast peer connection. The request body accepts the same
+target forms as `POST /api/peers`.
+
+Request body:
+
+```json
+{
+  "target": "100.64.0.20:6270"
+}
+```
+
+Returns `204 No Content` whether or not the peer was currently connected.
+
 ## Check Local Update
 
 ```http

@@ -69,3 +69,13 @@ func addSavedPeer(store *PeerStore, target string) bool {
 	store.Peers = append(store.Peers, target)
 	return true
 }
+
+func removeSavedPeer(store *PeerStore, target string) bool {
+	for i, savedPeer := range store.Peers {
+		if savedPeer == target {
+			store.Peers = append(store.Peers[:i], store.Peers[i+1:]...)
+			return true
+		}
+	}
+	return false
+}

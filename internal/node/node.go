@@ -20,6 +20,7 @@ type PeerConn struct {
 	IOSEnabled     bool
 	ProxyEnabled   bool
 	Addr           string
+	Target         string
 	ADBPort        int
 	Version        string
 	Commit         string

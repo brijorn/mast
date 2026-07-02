@@ -41,7 +41,7 @@ func (n *Node) Connect(addr string) error {
 		return err
 	}
 
-	go n.handleConnection(&PeerConn{conn: conn, Addr: u.Hostname()}, addr)
+	go n.handleConnection(&PeerConn{conn: conn, Addr: u.Hostname(), Target: addr}, addr)
 	return nil
 }
 
@@ -118,6 +118,30 @@ func (n *Node) removePeer(peer *PeerConn) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func (n *Node) DisconnectPeer(target string) bool {
+	host := target
+	if u, err := url.Parse(target); err == nil && u.Hostname() != "" {
+		host = u.Hostname()
+	}
+
+	var peer *PeerConn
+	n.mu.Lock()
+	for id, current := range n.Peers {
+		if current.Target == target || current.Addr == host || id == host {
+			delete(n.Peers, id)
+			peer = current
+			break
+		}
+	}
+	n.mu.Unlock()
+
+	if peer == nil {
+		return false
+	}
+	_ = peer.conn.Close()
+	return true
 }
 
 func (n *Node) handleConnection(peer *PeerConn, addr string) {

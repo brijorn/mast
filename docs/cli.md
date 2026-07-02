@@ -141,6 +141,24 @@ mast peer add 100.64.0.20 --api http://127.0.0.1:6271
 Saved peers are written to `peers.json` beside `config.json` and reconnected
 when `mast start` runs.
 
+## peer remove
+
+Removes a peer from `peers.json` and asks the running local Mast node to
+disconnect it.
+
+```sh
+mast peer remove 100.64.0.20
+mast peer remove 100.64.0.20:6270
+mast peer remove ws://100.64.0.20:6270/ws
+```
+
+Use `--api` if the local Mast API is not listening at the configured
+`api_addr`:
+
+```sh
+mast peer remove 100.64.0.20 --api http://127.0.0.1:6271
+```
+
 ## peer ls
 
 Lists peers saved in `peers.json`.

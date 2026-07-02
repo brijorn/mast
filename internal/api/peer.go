@@ -48,3 +48,28 @@ func (s *Server) AddPeer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
+
+func (s *Server) RemovePeer(w http.ResponseWriter, r *http.Request) {
+	var req addPeerRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer func(Body io.ReadCloser) {
+		_ = Body.Close()
+	}(r.Body)
+
+	target := req.Target
+	if target == "" {
+		target = req.URL
+	}
+
+	peerURL, err := peer.NormalizeTarget(target)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	s.node.DisconnectPeer(peerURL)
+	w.WriteHeader(http.StatusNoContent)
+}

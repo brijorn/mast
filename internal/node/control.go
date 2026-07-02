@@ -10,6 +10,7 @@ import (
 
 	"github.com/brijorn/ioslink"
 	"github.com/brijorn/mast/internal/scrcpy"
+	streamcfg "github.com/brijorn/mast/internal/stream"
 	"github.com/brijorn/mast/internal/transport"
 )
 
@@ -30,7 +31,7 @@ type SwipeCommand struct {
 const iosTouchMinMoveDistance = 2
 
 func (n *Node) touchLocal(serial string, action string, x int, y int) error {
-	session, err := n.GetStream(serial)
+	session, err := n.controlSession(serial)
 	if err != nil {
 		return err
 	}
@@ -79,7 +80,7 @@ func (n *Node) Touch(serial string, action string, x int, y int) error {
 }
 
 func (n *Node) tapLocal(serial string, x int, y int) error {
-	session, err := n.GetStream(serial)
+	session, err := n.controlSession(serial)
 	if err != nil {
 		return err
 	}
@@ -103,7 +104,7 @@ func (n *Node) tapLocal(serial string, x int, y int) error {
 }
 
 func (n *Node) pressKeyLocal(serial string, keycode uint32, metaState uint32) error {
-	session, err := n.GetStream(serial)
+	session, err := n.controlSession(serial)
 	if err != nil {
 		return err
 	}
@@ -145,7 +146,7 @@ func (n *Node) PressKey(serial string, keycode uint32, metaState uint32) error {
 }
 
 func (n *Node) pressButtonLocal(serial string, name string) error {
-	session, err := n.GetStream(serial)
+	session, err := n.controlSession(serial)
 	if err != nil {
 		return err
 	}
@@ -180,7 +181,7 @@ func (n *Node) PressButton(serial string, name string) error {
 }
 
 func (n *Node) typeTextLocal(serial string, text string) error {
-	session, err := n.GetStream(serial)
+	session, err := n.controlSession(serial)
 	if err != nil {
 		return err
 	}
@@ -218,7 +219,7 @@ func (n *Node) TypeText(serial string, text string) error {
 }
 
 func (n *Node) getClipboardLocal(serial string) (string, error) {
-	session, err := n.GetStream(serial)
+	session, err := n.controlSession(serial)
 	if err != nil {
 		return "", err
 	}
@@ -300,7 +301,7 @@ func (n *Node) handleClipboardGetRequest(peer *PeerConn, req transport.Clipboard
 }
 
 func (n *Node) setClipboardLocal(serial string, text string) error {
-	session, err := n.GetStream(serial)
+	session, err := n.controlSession(serial)
 	if err != nil {
 		return err
 	}
@@ -356,7 +357,7 @@ func (n *Node) Tap(serial string, x int, y int) error {
 }
 
 func (n *Node) swipeLocal(serial string, startX, startY, endX, endY int) error {
-	session, err := n.GetStream(serial)
+	session, err := n.controlSession(serial)
 	if err != nil {
 		return err
 	}
@@ -373,6 +374,26 @@ func (n *Node) swipeLocal(serial string, startX, startY, endX, endY int) error {
 	defer session.controlMu.Unlock()
 
 	return scrcpy.WriteSwipe(session.controlConn, startX, startY, endX, endY, session.Width, session.Height)
+}
+
+func (n *Node) controlSession(serial string) (*StreamSession, error) {
+	session, err := n.GetStream(serial)
+	if err != nil {
+		device, deviceErr := n.DeviceBySerial(serial)
+		if deviceErr != nil {
+			return nil, err
+		}
+		if device.NodeID == n.ID && device.Platform == PlatformIOS {
+			return n.EnsureStream(serial, streamcfg.Options{})
+		}
+		return nil, err
+	}
+	if !session.isUnhealthyIOS() {
+		return session, nil
+	}
+
+	n.DropStream(serial, session)
+	return n.EnsureStream(serial, streamcfg.Options{})
 }
 
 func (n *Node) touchLocalIOS(session *StreamSession, action string, x int, y int) error {

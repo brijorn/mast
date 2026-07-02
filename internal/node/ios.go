@@ -73,13 +73,15 @@ func (n *Node) startLocalIOSStreamWithOptions(serial string) (*StreamSession, er
 		_ = iosDevice.Close()
 	}
 
-	n.setIOSMJPEGPresetAsync(serial, iosDevice)
 	sizeCtx, sizeCancel := context.WithTimeout(n.ctx, iosCommandTimeout)
 	defer sizeCancel()
 	size, err := iosDevice.WindowSize(sizeCtx)
 	if err != nil {
 		cleanup()
 		return nil, fmt.Errorf("get iOS window size: %w", err)
+	}
+	if err := n.setIOSMJPEGPreset(iosDevice); err != nil && !isContextDeadline(err) {
+		log.Printf("set iOS MJPEG preset for %s: %v", serial, err)
 	}
 
 	streamHost, err := n.streamHostForNode(n.ID)
@@ -100,14 +102,6 @@ func (n *Node) startLocalIOSStreamWithOptions(serial string) (*StreamSession, er
 		iosDevice:    iosDevice,
 		iosCleanup:   cleanup,
 	}, nil
-}
-
-func (n *Node) setIOSMJPEGPresetAsync(serial string, device *ioslink.Device) {
-	go func() {
-		if err := n.setIOSMJPEGPreset(device); err != nil && !isContextDeadline(err) {
-			log.Printf("set iOS MJPEG preset for %s: %v", serial, err)
-		}
-	}()
 }
 
 func (n *Node) setIOSMJPEGPreset(device *ioslink.Device) error {

@@ -26,6 +26,7 @@ type nodeBackend interface {
 	GetStream(serial string) (*node.StreamSession, error)
 	EnsureStream(serial string, opts streamcfg.Options) (*node.StreamSession, error)
 	StopStream(serial string) error
+	DropStream(serial string, session *node.StreamSession)
 	Touch(serial string, action string, x, y int) error
 	Tap(serial string, x, y int) error
 	Swipe(serial string, startX, startY, endX, endY int) error

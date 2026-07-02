@@ -532,7 +532,7 @@ func (n *Node) ensureStream(serial string, opts streamcfg.Options, start func(st
 					delete(n.streams, serial)
 				}
 				n.streamsMu.Unlock()
-				_ = entry.Session.Stop()
+				_ = n.cleanupStreamSession(serial, entry.Session)
 				continue
 			}
 			if err := n.applyStreamOptions(entry.Session, opts); err != nil {
@@ -604,6 +604,29 @@ func (n *Node) StopStream(serial string) error {
 	return n.stopLocalStream(serial)
 }
 
+func (n *Node) DropStream(serial string, session *StreamSession) {
+	n.streamsMu.Lock()
+	entry, ok := n.streams[serial]
+	if !ok {
+		n.streamsMu.Unlock()
+		return
+	}
+	select {
+	case <-entry.Done:
+	default:
+		n.streamsMu.Unlock()
+		return
+	}
+	if entry.Session != session {
+		n.streamsMu.Unlock()
+		return
+	}
+	delete(n.streams, serial)
+	n.streamsMu.Unlock()
+
+	_ = n.cleanupStreamSession(serial, session)
+}
+
 func (n *Node) stopPeerStream(nodeID string, serial string) error {
 	payload := transport.StopStreamRequestPayload{Serial: serial}
 	return n.sendPeerRequest(nodeID, transport.TypeStopStreamRequest, payload)
@@ -628,7 +651,19 @@ func (n *Node) stopLocalStream(serial string) error {
 		return entry.Error
 	}
 
-	return entry.Session.Stop()
+	return n.cleanupStreamSession(serial, entry.Session)
+}
+
+func (n *Node) cleanupStreamSession(serial string, session *StreamSession) error {
+	if session.Platform != PlatformIOS {
+		return session.Stop()
+	}
+	go func() {
+		if err := session.Stop(); err != nil {
+			log.Printf("cleanup iOS stream %s: %v", serial, err)
+		}
+	}()
+	return nil
 }
 
 func (n *Node) adbHostForNode(nodeID string) (string, error) {

@@ -119,6 +119,67 @@ printf 'ARGS=%s\n' "$*"
 	}
 }
 
+func TestStartMakesLocalEntryExecutable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("executable bit is not meaningful on Windows")
+	}
+
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\nprintf 'direct entry ran\\n'\n"
+	if err := os.WriteFile(filepath.Join(source, "run-direct"), []byte(script), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := NewStore(filepath.Join(root, "programs"), fakeDevices{
+		devices: []node.DeviceInfo{{Serial: "phone-1", State: "device", NodeID: "node-1"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	registered, err := registerTestProgram(t, store, source, RegisterUploadOptions{
+		Name:  "direct executable",
+		Entry: Entry{Command: "run-direct"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runs, err := store.Start(StartOptions{ProgramID: registered.ID, Serials: []string{"phone-1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, store, runs[0].ID)
+	run := findRun(t, store, runs[0].ID)
+	if run.Status != RunStatusExited {
+		t.Fatalf("run status = %s, want %s: %s", run.Status, RunStatusExited, run.Error)
+	}
+	if got := filepath.Base(run.Cmd); got != "run-direct" {
+		t.Fatalf("run command = %q, want workspace run-direct", run.Cmd)
+	}
+	info, err := os.Stat(run.Cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&0100 == 0 {
+		t.Fatalf("workspace entry mode = %v, want owner executable", info.Mode())
+	}
+	stdout, stderr, err := store.Logs(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	if !strings.Contains(stdout, "direct entry ran") {
+		t.Fatalf("stdout = %q, want direct entry output", stdout)
+	}
+}
+
 func TestStartDoesNotCleanupPreviousWorkspaceForSerial(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("/bin/sh is not available on Windows")

@@ -413,6 +413,9 @@ func (s *Store) startOne(p Program, device node.DeviceInfo, nodes []node.NodeInf
 		resolvedArgs[i] = resolveValue(arg, runVariables, device)
 	}
 	if localCommand := filepath.Join(workspace, command); fileExists(localCommand) {
+		if err := ensureLocalEntryExecutable(localCommand); err != nil {
+			return nil, err
+		}
 		command = localCommand
 	}
 	command, args, err := s.runnerCommand(command, resolvedArgs)
@@ -577,4 +580,16 @@ func (s *Store) runnerCommand(command string, args []string) (string, []string, 
 		return "", nil, fmt.Errorf("no runner configured for non-native executable %q", command)
 	}
 	return command, args, nil
+}
+
+func ensureLocalEntryExecutable(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	mode := info.Mode()
+	if !mode.IsRegular() || mode&0100 != 0 {
+		return nil
+	}
+	return os.Chmod(path, mode|0100)
 }

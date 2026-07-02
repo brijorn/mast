@@ -15,6 +15,16 @@ jobs:
         with:
           fetch-depth: '0'
 
+      - name: Check out ioslink
+        env:
+          IOSLINK_DEPLOY_KEY: ${{ secrets.IOSLINK_DEPLOY_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$IOSLINK_DEPLOY_KEY" > ~/.ssh/ioslink_deploy_key
+          chmod 600 ~/.ssh/ioslink_deploy_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          GIT_SSH_COMMAND="ssh -i ~/.ssh/ioslink_deploy_key -o IdentitiesOnly=yes" git clone git@github.com:brijorn/ioslink ../ioslink
+
       - name: Set up Go
         uses: actions/setup-go@v6
         with:

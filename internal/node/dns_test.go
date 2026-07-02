@@ -17,9 +17,10 @@ func TestDeviceDNSReturnsAutomaticStatus(t *testing.T) {
 		},
 	}
 	node := &Node{
-		ID:    "local-node",
-		Peers: map[string]*PeerConn{},
-		adb:   fake,
+		ID:             "local-node",
+		AndroidEnabled: true,
+		Peers:          map[string]*PeerConn{},
+		adb:            fake,
 	}
 
 	got, err := node.DeviceDNS("local-123")
@@ -53,9 +54,10 @@ func TestToggleDeviceDNSAutomaticSetsAdGuard(t *testing.T) {
 		},
 	}
 	node := &Node{
-		ID:    "local-node",
-		Peers: map[string]*PeerConn{},
-		adb:   fake,
+		ID:             "local-node",
+		AndroidEnabled: true,
+		Peers:          map[string]*PeerConn{},
+		adb:            fake,
 	}
 
 	got, err := node.ToggleDeviceDNS("local-123")
@@ -85,7 +87,7 @@ func TestToggleDeviceDNSAutomaticSetsAdGuard(t *testing.T) {
 	}
 }
 
-func TestToggleDeviceDNSAdGuardSetsAutomatic(t *testing.T) {
+func TestToggleDeviceDNSAdGuardSetsOff(t *testing.T) {
 	fake := &fakeADB{
 		outputs: map[string][]byte{
 			"": []byte("List of devices attached\nlocal-123\tdevice\n"),
@@ -93,7 +95,7 @@ func TestToggleDeviceDNSAdGuardSetsAutomatic(t *testing.T) {
 		shellCommandOutputQueues: map[string][][]byte{
 			shellCommandKey("local-123", "settings", "get", "global", "private_dns_mode"): [][]byte{
 				[]byte("hostname\n"),
-				[]byte("opportunistic\n"),
+				[]byte("off\n"),
 			},
 			shellCommandKey("local-123", "settings", "get", "global", "private_dns_specifier"): [][]byte{
 				[]byte("dns.adguard.com\n"),
@@ -102,9 +104,10 @@ func TestToggleDeviceDNSAdGuardSetsAutomatic(t *testing.T) {
 		},
 	}
 	node := &Node{
-		ID:    "local-node",
-		Peers: map[string]*PeerConn{},
-		adb:   fake,
+		ID:             "local-node",
+		AndroidEnabled: true,
+		Peers:          map[string]*PeerConn{},
+		adb:            fake,
 	}
 
 	got, err := node.ToggleDeviceDNS("local-123")
@@ -113,8 +116,7 @@ func TestToggleDeviceDNSAdGuardSetsAutomatic(t *testing.T) {
 	}
 
 	expected := &DeviceDNSStatus{
-		Mode:      "opportunistic",
-		Automatic: true,
+		Mode: "off",
 	}
 	if diff := cmp.Diff(expected, got); diff != "" {
 		t.Fatalf("dns status mismatch (-want +got):\n%s", diff)
@@ -123,7 +125,7 @@ func TestToggleDeviceDNSAdGuardSetsAutomatic(t *testing.T) {
 	expectedCalls := []shellCall{
 		{Serial: "local-123", Args: []string{"settings", "get", "global", "private_dns_mode"}},
 		{Serial: "local-123", Args: []string{"settings", "get", "global", "private_dns_specifier"}},
-		{Serial: "local-123", Args: []string{"settings", "put", "global", "private_dns_mode", "opportunistic"}},
+		{Serial: "local-123", Args: []string{"settings", "put", "global", "private_dns_mode", "off"}},
 		{Serial: "local-123", Args: []string{"settings", "delete", "global", "private_dns_specifier"}},
 		{Serial: "local-123", Args: []string{"settings", "get", "global", "private_dns_mode"}},
 		{Serial: "local-123", Args: []string{"settings", "get", "global", "private_dns_specifier"}},

@@ -12,6 +12,7 @@ import (
 
 const (
 	deviceDNSAutomaticMode = "opportunistic"
+	deviceDNSOffMode       = "off"
 	deviceDNSHostnameMode  = "hostname"
 	deviceDNSAdGuardHost   = "dns.adguard.com"
 )
@@ -53,8 +54,15 @@ func (n *Node) ToggleDeviceDNS(serial string) (*DeviceDNSStatus, error) {
 }
 
 func (n *Node) localDeviceDNS(serial string) (*DeviceDNSStatus, error) {
-	if err := n.requireLocalReadyDevice(serial); err != nil {
+	device, err := n.localDeviceBySerial(serial)
+	if err != nil {
 		return nil, err
+	}
+	if device.Platform == PlatformIOS {
+		return nil, errors.New("private DNS is not supported for iOS devices")
+	}
+	if device.State != "device" {
+		return nil, fmt.Errorf("device %s is %s", serial, device.State)
 	}
 
 	modeOutput, err := n.adb.Shell(n.ctx, "", serial, "settings", "get", "global", "private_dns_mode")
@@ -75,7 +83,7 @@ func (n *Node) toggleLocalDeviceDNS(serial string) (*DeviceDNSStatus, error) {
 		return nil, err
 	}
 
-	if status.Automatic {
+	if status.Mode != deviceDNSHostnameMode || status.Hostname != deviceDNSAdGuardHost {
 		if _, err := n.adb.Shell(n.ctx, "", serial, "settings", "put", "global", "private_dns_mode", deviceDNSHostnameMode); err != nil {
 			return nil, err
 		}
@@ -83,7 +91,7 @@ func (n *Node) toggleLocalDeviceDNS(serial string) (*DeviceDNSStatus, error) {
 			return nil, err
 		}
 	} else {
-		if _, err := n.adb.Shell(n.ctx, "", serial, "settings", "put", "global", "private_dns_mode", deviceDNSAutomaticMode); err != nil {
+		if _, err := n.adb.Shell(n.ctx, "", serial, "settings", "put", "global", "private_dns_mode", deviceDNSOffMode); err != nil {
 			return nil, err
 		}
 		if _, err := n.adb.Shell(n.ctx, "", serial, "settings", "delete", "global", "private_dns_specifier"); err != nil {

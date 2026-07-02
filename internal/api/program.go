@@ -187,7 +187,16 @@ func (s *Server) StopRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	run, err := s.programs.Stop(r.PathValue("id"))
+	req := program.StopOptions{ID: r.PathValue("id")}
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	req.ID = r.PathValue("id")
+
+	run, err := s.programs.Stop(req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return

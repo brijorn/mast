@@ -41,16 +41,17 @@ type Program struct {
 }
 
 type Run struct {
-	ID        string            `json:"id"`
-	ProgramID string            `json:"program_id"`
-	Serial    string            `json:"serial"`
-	NodeID    string            `json:"node_id"`
-	Workspace string            `json:"workspace"`
-	Status    string            `json:"status"`
-	Autostart bool              `json:"autostart,omitempty"`
-	ExitCode  *int              `json:"exit_code,omitempty"`
-	Error     string            `json:"error,omitempty"`
-	Env       map[string]string `json:"env,omitempty"`
+	ID              string            `json:"id"`
+	ProgramID       string            `json:"program_id"`
+	Serial          string            `json:"serial"`
+	NodeID          string            `json:"node_id"`
+	Workspace       string            `json:"workspace"`
+	Status          string            `json:"status"`
+	Autostart       bool              `json:"autostart,omitempty"`
+	AutostartPaused bool              `json:"autostart_paused,omitempty"`
+	ExitCode        *int              `json:"exit_code,omitempty"`
+	Error           string            `json:"error,omitempty"`
+	Env             map[string]string `json:"env,omitempty"`
 	// Cmd and CmdArgs are the resolved command and arguments used to start this
 	// run. They are persisted so that Resume can re-execute the same process.
 	Cmd         string     `json:"cmd,omitempty"`
@@ -92,6 +93,11 @@ type StartOptions struct {
 type ResumeOptions struct {
 	ID        string            `json:"id,omitempty"`
 	Variables map[string]string `json:"variables,omitempty"`
+}
+
+type StopOptions struct {
+	ID              string `json:"id,omitempty"`
+	AutostartPaused bool   `json:"autostart_paused,omitempty"`
 }
 
 type LogOffsets struct {

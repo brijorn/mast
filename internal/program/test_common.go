@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -30,6 +31,40 @@ func (f fakeDevices) DeviceBySerial(serial string) (*node.DeviceInfo, error) {
 
 func (f fakeDevices) ListNodes() []node.NodeInfo {
 	return f.nodes
+}
+
+type mutableFakeDevices struct {
+	mu      sync.Mutex
+	devices []node.DeviceInfo
+	nodes   []node.NodeInfo
+}
+
+func (f *mutableFakeDevices) SetDevices(devices []node.DeviceInfo) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.devices = devices
+}
+
+func (f *mutableFakeDevices) ListDevices() ([]node.DeviceInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]node.DeviceInfo(nil), f.devices...), nil
+}
+
+func (f *mutableFakeDevices) DeviceBySerial(serial string) (*node.DeviceInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	device, ok := findDevice(f.devices, serial)
+	if !ok {
+		return nil, errors.New("device not found: " + serial)
+	}
+	return &device, nil
+}
+
+func (f *mutableFakeDevices) ListNodes() []node.NodeInfo {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]node.NodeInfo(nil), f.nodes...)
 }
 
 func registerTestProgram(t *testing.T, store *Store, source string, opts RegisterUploadOptions) (*Program, error) {

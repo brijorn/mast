@@ -68,14 +68,14 @@ func (s *Store) Start(opts StartOptions) ([]Run, error) {
 	return runs, nil
 }
 
-func (s *Store) Stop(id string) (*Run, error) {
+func (s *Store) Stop(opts StopOptions) (*Run, error) {
 	s.mu.Lock()
-	state := s.runs[id]
+	state := s.runs[opts.ID]
 	if state == nil {
 		s.mu.Unlock()
 		return nil, errors.New("run not found")
 	}
-	state.run.Autostart = false
+	state.run.AutostartPaused = opts.AutostartPaused
 	if state.cmd == nil || state.cmd.Process == nil {
 		if state.run.Status == RunStatusRunning || state.run.Status == RunStatusStarting {
 			now := time.Now().UTC()
@@ -118,6 +118,8 @@ func (s *Store) SetRunAutostart(id string, enabled bool) (*Run, error) {
 			s.mu.Unlock()
 			return nil, errors.New("run has no persisted command")
 		}
+	} else {
+		state.run.AutostartPaused = false
 	}
 	state.run.Autostart = enabled
 	run := *state.run
@@ -130,6 +132,7 @@ func (s *Store) SetRunAutostart(id string, enabled bool) (*Run, error) {
 }
 
 func (s *Store) Shutdown() {
+	s.monitorCancel()
 	s.mu.Lock()
 	states := make([]*runState, 0, len(s.runs))
 	for _, state := range s.runs {
@@ -310,6 +313,7 @@ func (s *Store) Resume(opts ResumeOptions) (*Run, error) {
 
 	s.mu.Lock()
 	run.Status = RunStatusStarting
+	run.AutostartPaused = false
 	run.ExitCode = nil
 	run.Error = ""
 	run.CompletedAt = nil
@@ -537,30 +541,7 @@ func (s *Store) loadRuns() {
 }
 
 func (s *Store) resumeAutostartRuns() {
-	s.mu.Lock()
-	ids := make([]string, 0)
-	for id, state := range s.runs {
-		run := state.run
-		if !run.Autostart || run.WorkspaceCleaned || run.Cmd == "" {
-			continue
-		}
-		if run.Status == RunStatusStopped || run.Status == RunStatusLost {
-			ids = append(ids, id)
-		}
-	}
-	s.mu.Unlock()
-
-	for _, id := range ids {
-		if _, err := s.Resume(ResumeOptions{ID: id}); err != nil {
-			s.mu.Lock()
-			state := s.runs[id]
-			if state != nil {
-				state.run.Error = "autostart resume failed: " + err.Error()
-				_ = writeJSON(filepath.Join(state.run.Workspace, "run.json"), state.run)
-			}
-			s.mu.Unlock()
-		}
-	}
+	s.resumeAutostartRunIDs(s.autostartRunIDsForStartup(), "autostart resume failed")
 }
 
 func (s *Store) SetRunners(runners map[string]string) {

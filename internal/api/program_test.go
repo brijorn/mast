@@ -14,6 +14,7 @@ import (
 type fakeProgramBackend struct {
 	started          program.StartOptions
 	resumed          program.ResumeOptions
+	stopped          program.StopOptions
 	deletedID        string
 	autostartID      string
 	autostartEnabled bool
@@ -43,8 +44,9 @@ func (f *fakeProgramBackend) RegisterUpload(opts program.RegisterUploadOptions) 
 	}, nil
 }
 
-func (f *fakeProgramBackend) Stop(id string) (*program.Run, error) {
-	return &program.Run{ID: id, Status: "running"}, nil
+func (f *fakeProgramBackend) Stop(opts program.StopOptions) (*program.Run, error) {
+	f.stopped = opts
+	return &program.Run{ID: opts.ID, Status: "running", AutostartPaused: opts.AutostartPaused}, nil
 }
 
 func (f *fakeProgramBackend) Logs(_ string) (string, string, error) {
@@ -175,6 +177,32 @@ func TestResumeRunPassesVariables(t *testing.T) {
 	}
 	if programs.resumed.Variables["MAX_LEVELS"] != "30" || programs.resumed.Variables["DEVICE_ID"] != "phone-1" {
 		t.Fatalf("variables = %+v", programs.resumed.Variables)
+	}
+}
+
+func TestStopRunCanPauseAutostart(t *testing.T) {
+	programs := &fakeProgramBackend{}
+	server := NewServer(&fakeBackend{}, programs)
+
+	body := []byte(`{"autostart_paused":true}`)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/runs/run-1/stop", bytes.NewReader(body))
+
+	server.Handler().ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusOK, res.Body.String())
+	}
+	if programs.stopped.ID != "run-1" || !programs.stopped.AutostartPaused {
+		t.Fatalf("stopped = %+v, want run-1 with paused autostart", programs.stopped)
+	}
+
+	var got program.Run
+	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !got.AutostartPaused {
+		t.Fatalf("got AutostartPaused = false, want true")
 	}
 }
 

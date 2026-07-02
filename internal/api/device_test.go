@@ -18,6 +18,7 @@ func TestListDevicesReturnsBatteryHealth(t *testing.T) {
 		devices: []node.DeviceInfo{
 			{
 				Serial:                     "phone-1",
+				Platform:                   node.PlatformIOS,
 				State:                      "device",
 				NodeID:                     "node-1",
 				BatteryPercent:             &battery,
@@ -53,6 +54,9 @@ func TestListDevicesReturnsBatteryHealth(t *testing.T) {
 	}
 	if got[0].PowerConnected == nil || !*got[0].PowerConnected {
 		t.Fatalf("PowerConnected = %v, want true", got[0].PowerConnected)
+	}
+	if got[0].Platform != node.PlatformIOS {
+		t.Fatalf("Platform = %q, want ios", got[0].Platform)
 	}
 }
 

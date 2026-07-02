@@ -13,6 +13,7 @@ import (
 const (
 	InjectTouchEvent = 2
 	InjectKeycode    = 0
+	InjectText       = 1
 	GetClipboard     = 8
 	SetClipboard     = 9
 	SetDisplayPower  = 10
@@ -208,6 +209,18 @@ func PressKey(w io.Writer, keycode uint32, metaState uint32) error {
 		return err
 	}
 	return writeKeycode(w, ActionUp, keycode, metaState)
+}
+
+func WriteText(w io.Writer, text string) error {
+	text = truncateUTF8(text, (1<<18)-5)
+	rawText := []byte(text)
+
+	buf := make([]byte, 5+len(rawText))
+	buf[0] = InjectText
+	binary.BigEndian.PutUint32(buf[1:5], uint32(len(rawText)))
+	copy(buf[5:], rawText)
+
+	return writeFull(w, buf)
 }
 
 func WriteGetClipboard(w io.Writer, copyKey byte) error {

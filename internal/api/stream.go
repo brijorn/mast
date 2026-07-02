@@ -16,8 +16,14 @@ type startStreamRequest struct {
 type startStreamResponse struct {
 	ID        string `json:"id"`
 	Serial    string `json:"serial"`
+	Platform  string `json:"platform"`
+	Kind      string `json:"kind"`
 	Host      string `json:"host"`
 	LocalPort int    `json:"local_port"`
+	VideoURL  string `json:"video_url,omitempty"`
+	MJPEGURL  string `json:"mjpeg_url,omitempty"`
+	Width     int    `json:"width,omitempty"`
+	Height    int    `json:"height,omitempty"`
 }
 
 func (s *Server) StartStream(w http.ResponseWriter, r *http.Request) {
@@ -59,9 +65,15 @@ func writeStartStreamResponse(w http.ResponseWriter, serial string, stream *node
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(startStreamResponse{
 		ID:        stream.ID,
+		Platform:  stream.Platform,
+		Kind:      stream.Kind,
 		Host:      stream.Host,
 		Serial:    serial,
 		LocalPort: stream.LocalPort,
+		VideoURL:  stream.VideoURL,
+		MJPEGURL:  stream.MJPEGURL,
+		Width:     stream.Width,
+		Height:    stream.Height,
 	}); err != nil {
 		return
 	}

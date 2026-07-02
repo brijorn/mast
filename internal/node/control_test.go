@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"math"
 	"net"
 	"strings"
 	"testing"
@@ -245,6 +246,128 @@ func TestClipboardLocalUsesScrcpyControl(t *testing.T) {
 	}
 }
 
+func TestTypeTextLocalUsesScrcpyControl(t *testing.T) {
+	controlConn := &recordingConn{}
+	node := newControlTestNode("local-node", "local-123")
+	node.streams["local-123"] = readyStreamEntry(&StreamSession{
+		DeviceSerial: "local-123",
+		controlConn:  controlConn,
+	})
+
+	if err := node.TypeText("local-123", "hello"); err != nil {
+		t.Fatalf("TypeText returned error: %v", err)
+	}
+
+	want := []byte{scrcpy.InjectText, 0, 0, 0, 5, 'h', 'e', 'l', 'l', 'o'}
+	if got := controlConn.data; string(got) != string(want) {
+		t.Fatalf("text control message = %v, want %v", got, want)
+	}
+}
+
+func TestTypeTextRemoteSendsPeerRequest(t *testing.T) {
+	nodeA, nodeB := createNodePair(t)
+	defer func() { _ = nodeA.Close() }()
+	defer func() { _ = nodeB.Close() }()
+
+	nodeA.adb = &fakeADB{
+		outputs: map[string][]byte{
+			"": []byte("List of devices attached\n"),
+		},
+	}
+	nodeB.adb = &fakeADB{
+		outputs: map[string][]byte{
+			"": []byte("List of devices attached\nremote-123\tdevice\n"),
+		},
+	}
+	nodeB.AndroidEnabled = true
+	controlConn := &recordingConn{}
+	nodeB.streams["remote-123"] = readyStreamEntry(&StreamSession{
+		DeviceSerial: "remote-123",
+		controlConn:  controlConn,
+	})
+
+	connectNodePair(t, nodeA, nodeB)
+
+	if err := nodeA.TypeText("remote-123", "hello"); err != nil {
+		t.Fatalf("TypeText returned error: %v", err)
+	}
+
+	waitFor(t, time.Second, func() bool {
+		return len(controlConn.data) == 10
+	})
+	want := []byte{scrcpy.InjectText, 0, 0, 0, 5, 'h', 'e', 'l', 'l', 'o'}
+	if got := controlConn.data; string(got) != string(want) {
+		t.Fatalf("text control message = %v, want %v", got, want)
+	}
+}
+
+func TestIOSTextFromAndroidKeycode(t *testing.T) {
+	tests := []struct {
+		name      string
+		keycode   uint32
+		metaState uint32
+		want      string
+		wantOK    bool
+	}{
+		{name: "lowercase letter", keycode: 35, want: "g", wantOK: true},
+		{name: "uppercase letter", keycode: 35, metaState: 0x0001, want: "G", wantOK: true},
+		{name: "digit", keycode: 8, want: "1", wantOK: true},
+		{name: "shifted digit", keycode: 8, metaState: 0x0001, want: "!", wantOK: true},
+		{name: "space", keycode: 62, want: " ", wantOK: true},
+		{name: "enter", keycode: 66, want: "\n", wantOK: true},
+		{name: "comma", keycode: 55, want: ",", wantOK: true},
+		{name: "shifted comma", keycode: 55, metaState: 0x0001, want: "<", wantOK: true},
+		{name: "unsupported navigation", keycode: 19, wantOK: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := iosTextFromAndroidKeycode(test.keycode, test.metaState)
+			if ok != test.wantOK {
+				t.Fatalf("ok = %t, want %t", ok, test.wantOK)
+			}
+			if got != test.want {
+				t.Fatalf("text = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestIOSTouchPathHelpers(t *testing.T) {
+	points := appendIOSTouchPoint(nil, iosTouchPoint{X: 10, Y: 10})
+	points = appendIOSTouchPoint(points, iosTouchPoint{X: 11, Y: 10})
+	points = appendIOSTouchPoint(points, iosTouchPoint{X: 14, Y: 10})
+	points = appendIOSTouchPoint(points, iosTouchPoint{X: 20, Y: 20})
+
+	if len(points) != 3 {
+		t.Fatalf("path point count = %d, want 3", len(points))
+	}
+	if points[1] != (iosTouchPoint{X: 14, Y: 10}) {
+		t.Fatalf("second point = %+v, want 14,10", points[1])
+	}
+	if distance := iosTouchPathDistance(points); distance < 14 || distance > 15 {
+		t.Fatalf("path distance = %f, want about 14.14", distance)
+	}
+}
+
+func TestIOSDragDuration(t *testing.T) {
+	tests := []struct {
+		elapsed time.Duration
+		want    float64
+	}{
+		{elapsed: 50 * time.Millisecond, want: 0.2},
+		{elapsed: 450 * time.Millisecond, want: 0.45},
+		{elapsed: 3 * time.Second, want: 2},
+	}
+
+	for _, test := range tests {
+		got := iosDragDuration(test.elapsed)
+		if math.Abs(got-test.want) > 0.001 {
+			t.Fatalf("iosDragDuration(%s) = %f, want %f", test.elapsed, got, test.want)
+		}
+	}
+}
+
 func TestClipboardGetFromPeerReturnsRPCResponse(t *testing.T) {
 	nodeA, nodeB := createNodePair(t)
 	defer func() { _ = nodeA.Close() }()
@@ -293,10 +416,11 @@ func newControlTestNode(nodeID string, localSerial string) *Node {
 	}
 
 	return &Node{
-		ID:      nodeID,
-		Peers:   map[string]*PeerConn{},
-		adb:     &fakeADB{outputs: map[string][]byte{"": output}},
-		streams: map[string]*streamEntry{},
+		ID:             nodeID,
+		AndroidEnabled: true,
+		Peers:          map[string]*PeerConn{},
+		adb:            &fakeADB{outputs: map[string][]byte{"": output}},
+		streams:        map[string]*streamEntry{},
 	}
 }
 

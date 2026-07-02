@@ -67,6 +67,19 @@ func TestWriteSetDisplayPowerWritesControlMessage(t *testing.T) {
 	}
 }
 
+func TestWriteTextWritesInjectTextMessage(t *testing.T) {
+	var buf bytes.Buffer
+	if err := WriteText(&buf, "hello"); err != nil {
+		t.Fatalf("WriteText returned error: %v", err)
+	}
+
+	got := buf.Bytes()
+	want := []byte{InjectText, 0, 0, 0, 5, 'h', 'e', 'l', 'l', 'o'}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("text message = %v, want %v", got, want)
+	}
+}
+
 func assertTouchEvent(t *testing.T, msg []byte, action byte, x, y, width, height int, pressure uint16) {
 	t.Helper()
 

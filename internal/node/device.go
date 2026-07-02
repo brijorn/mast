@@ -20,6 +20,7 @@ import (
 
 type DeviceInfo struct {
 	Serial                     string   `json:"serial"`
+	Platform                   string   `json:"platform"`
 	State                      string   `json:"state"`
 	BatteryPercent             *int     `json:"battery_percent,omitempty"`
 	PowerConnected             *bool    `json:"power_connected,omitempty"`
@@ -31,6 +32,11 @@ type DeviceInfo struct {
 	BatteryTrendPercentPerHour *float64 `json:"battery_trend_percent_per_hour,omitempty"`
 	NodeID                     string   `json:"node_id"`
 }
+
+const (
+	PlatformAndroid = "android"
+	PlatformIOS     = "ios"
+)
 
 const peerDeviceRPCTimeout = 10 * time.Second
 
@@ -172,7 +178,7 @@ func (n *Node) ListDevices() ([]DeviceInfo, error) {
 		return nil, err
 	}
 
-	for _, peerID := range n.androidPeerIDs() {
+	for _, peerID := range n.devicePeerIDs() {
 		peerDevices, err := n.listPeerDevices(n.ctx, peerID)
 		if err != nil {
 			log.Printf("list devices from peer %s: %v", peerID, err)
@@ -416,12 +422,29 @@ func (n *Node) deviceBattery(serial string) (batterySnapshot, error) {
 }
 
 func (n *Node) listLocalDeviceStates() ([]DeviceInfo, error) {
-	rawOutput, err := n.adb.Devices(n.ctx, "")
-	if err != nil {
-		return nil, err
+	var devices []DeviceInfo
+	var adbErr error
+	if n.AndroidEnabled {
+		rawOutput, err := n.adb.Devices(n.ctx, "")
+		if err != nil {
+			adbErr = err
+		} else {
+			devices = parseDevicesOutput(string(rawOutput), n.ID, nil)
+		}
 	}
 
-	return parseDevicesOutput(string(rawOutput), n.ID, nil), nil
+	if n.IOSEnabled {
+		iosDevices, err := n.listLocalIOSDevices()
+		if err != nil {
+			log.Printf("list local ios devices: %v", err)
+		} else {
+			devices = append(devices, iosDevices...)
+		}
+	}
+	if adbErr != nil && len(devices) == 0 {
+		return nil, adbErr
+	}
+	return devices, nil
 }
 
 func (n *Node) listLocalDevices() ([]DeviceInfo, error) {
@@ -431,6 +454,9 @@ func (n *Node) listLocalDevices() ([]DeviceInfo, error) {
 	}
 
 	for i := range devices {
+		if devices[i].Platform != PlatformAndroid {
+			continue
+		}
 		if devices[i].State != "device" {
 			continue
 		}
@@ -450,12 +476,12 @@ func (n *Node) listLocalDevices() ([]DeviceInfo, error) {
 	return devices, nil
 }
 
-func (n *Node) androidPeerIDs() []string {
+func (n *Node) devicePeerIDs() []string {
 	var peerIDs []string
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 	for id, peer := range n.Peers {
-		if !peer.AndroidEnabled {
+		if !peer.AndroidEnabled && !peer.IOSEnabled {
 			continue
 		}
 		peerIDs = append(peerIDs, id)
@@ -524,6 +550,9 @@ func (n *Node) localScreenshot(serial string) ([]byte, error) {
 	if device.State != "device" {
 		return nil, fmt.Errorf("device %s is %s", serial, device.State)
 	}
+	if device.Platform == PlatformIOS {
+		return n.localIOSScreenshot(serial)
+	}
 	return n.adb.ExecOut(n.ctx, "", serial, "screencap", "-p")
 }
 
@@ -578,7 +607,7 @@ func (n *Node) DeviceBySerial(serial string) (*DeviceInfo, error) {
 	}
 
 	var peerErrors []error
-	for _, peerID := range n.androidPeerIDs() {
+	for _, peerID := range n.devicePeerIDs() {
 		peerDevices, err := n.listPeerDevices(n.ctx, peerID)
 		if err != nil {
 			log.Printf("find device %s from peer %s: %v", serial, peerID, err)
@@ -624,6 +653,7 @@ func deviceInfoPayloads(devices []DeviceInfo) []transport.DeviceInfoPayload {
 	for _, device := range devices {
 		payloads = append(payloads, transport.DeviceInfoPayload{
 			Serial:                     device.Serial,
+			Platform:                   device.Platform,
 			State:                      device.State,
 			NodeID:                     device.NodeID,
 			BatteryPercent:             device.BatteryPercent,
@@ -644,6 +674,7 @@ func deviceInfosFromPayload(payloads []transport.DeviceInfoPayload) []DeviceInfo
 	for _, payload := range payloads {
 		devices = append(devices, DeviceInfo{
 			Serial:                     payload.Serial,
+			Platform:                   payload.Platform,
 			State:                      payload.State,
 			NodeID:                     payload.NodeID,
 			BatteryPercent:             payload.BatteryPercent,
@@ -682,9 +713,10 @@ func parseDevicesOutput(output string, nodeID string, devices []DeviceInfo) []De
 			continue
 		}
 		devices = append(devices, DeviceInfo{
-			Serial: strings.TrimSpace(parts[0]),
-			State:  strings.TrimSpace(parts[1]),
-			NodeID: nodeID,
+			Serial:   strings.TrimSpace(parts[0]),
+			Platform: PlatformAndroid,
+			State:    strings.TrimSpace(parts[1]),
+			NodeID:   nodeID,
 		})
 	}
 	return devices

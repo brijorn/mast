@@ -9,6 +9,7 @@ import (
 
 	mastconfig "github.com/brijorn/mast/internal/config"
 	"github.com/brijorn/mast/internal/update"
+	"github.com/danielpaulus/go-ios/ios/tunnel"
 	"github.com/gorilla/websocket"
 )
 
@@ -61,6 +62,8 @@ type Node struct {
 	configState    mastconfig.Config
 	configReady    bool
 	configApplier  RuntimeConfigApplier
+	iosMu          sync.Mutex
+	iosTunnelMgr   *tunnel.TunnelManager
 }
 
 func NewNode(id string, addr string, advertiseHost string, androidEnabled bool, iosEnabled bool, proxyEnabled bool) (*Node, error) {

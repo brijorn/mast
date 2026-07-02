@@ -122,6 +122,14 @@ func (f *fakeBackend) PressKey(_ string, _ uint32, _ uint32) error {
 	return nil
 }
 
+func (f *fakeBackend) PressButton(_ string, _ string) error {
+	return nil
+}
+
+func (f *fakeBackend) TypeText(_ string, _ string) error {
+	return nil
+}
+
 func (f *fakeBackend) GetClipboard(_ string) (string, error) {
 	return "", nil
 }
@@ -141,8 +149,11 @@ func TestStartStreamStartsStream(t *testing.T) {
 		session: &node.StreamSession{
 			ID:           "stream-1",
 			DeviceSerial: "local-123",
+			Platform:     node.PlatformAndroid,
+			Kind:         "h264",
 			Host:         "100.64.0.1",
 			LocalPort:    12345,
+			VideoURL:     "/api/streams/video?serial=local-123",
 		},
 	}
 	server := NewServer(backend)
@@ -165,8 +176,11 @@ func TestStartStreamStartsStream(t *testing.T) {
 	expected := startStreamResponse{
 		ID:        "stream-1",
 		Serial:    "local-123",
+		Platform:  node.PlatformAndroid,
+		Kind:      "h264",
 		Host:      "100.64.0.1",
 		LocalPort: 12345,
+		VideoURL:  "/api/streams/video?serial=local-123",
 	}
 	if got != expected {
 		t.Fatalf("response = %+v, want %+v", got, expected)
@@ -177,6 +191,51 @@ func TestStartStreamStartsStream(t *testing.T) {
 	}
 	if got := backend.options[0]; !got.NoAudio || got.MaxSize != 1080 || !got.TurnScreenOff {
 		t.Fatalf("options = %+v, want no_audio=true, max_size=1080, and turn_screen_off=true", got)
+	}
+}
+
+func TestStartStreamReturnsIOSMJPEGStream(t *testing.T) {
+	backend := &fakeBackend{
+		session: &node.StreamSession{
+			ID:           "ios-stream-1",
+			DeviceSerial: "ios-123",
+			Platform:     node.PlatformIOS,
+			Kind:         "mjpeg",
+			Host:         "100.64.0.9",
+			MJPEGURL:     "/api/streams/mjpeg?serial=ios-123",
+			Width:        390,
+			Height:       844,
+		},
+	}
+	server := NewServer(backend)
+
+	body := []byte(`{"serial":"ios-123"}`)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/streams", bytes.NewReader(body))
+
+	server.StartStream(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusOK, res.Body.String())
+	}
+
+	var got startStreamResponse
+	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	expected := startStreamResponse{
+		ID:       "ios-stream-1",
+		Serial:   "ios-123",
+		Platform: node.PlatformIOS,
+		Kind:     "mjpeg",
+		Host:     "100.64.0.9",
+		MJPEGURL: "/api/streams/mjpeg?serial=ios-123",
+		Width:    390,
+		Height:   844,
+	}
+	if got != expected {
+		t.Fatalf("response = %+v, want %+v", got, expected)
 	}
 }
 

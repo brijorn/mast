@@ -1,6 +1,7 @@
 package program
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -20,6 +21,10 @@ type Store struct {
 	devices  deviceLister
 	startCmd func(command string, args ...string) *exec.Cmd
 	runners  map[string]string
+
+	monitorCtx          context.Context
+	monitorCancel       context.CancelFunc
+	observedDeviceReady map[string]bool
 }
 
 type deviceLister interface {
@@ -39,12 +44,16 @@ func NewStore(root string, devices deviceLister) (*Store, error) {
 		return nil, errors.New("program root required")
 	}
 
+	monitorCtx, monitorCancel := context.WithCancel(context.Background())
 	s := &Store{
-		root:     root,
-		programs: make(map[string]Program),
-		runs:     make(map[string]*runState),
-		devices:  devices,
-		startCmd: exec.Command,
+		root:                root,
+		programs:            make(map[string]Program),
+		runs:                make(map[string]*runState),
+		devices:             devices,
+		startCmd:            exec.Command,
+		monitorCtx:          monitorCtx,
+		monitorCancel:       monitorCancel,
+		observedDeviceReady: make(map[string]bool),
 	}
 	if err := os.MkdirAll(s.bundleDir(), 0700); err != nil {
 		return nil, err
@@ -60,6 +69,7 @@ func NewStore(root string, devices deviceLister) (*Store, error) {
 	// Mast no longer owns a process handle for them.
 	s.loadRuns()
 	go s.resumeAutostartRuns()
+	go s.monitorAutostartReconnects()
 	return s, nil
 }
 

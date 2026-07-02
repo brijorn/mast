@@ -522,7 +522,7 @@ func TestStopMarksRunStopped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Stop(started[0].ID); err != nil {
+	if _, err := store.Stop(StopOptions{ID: started[0].ID}); err != nil {
 		t.Fatal(err)
 	}
 	waitForRun(t, store, started[0].ID)
@@ -532,7 +532,7 @@ func TestStopMarksRunStopped(t *testing.T) {
 	}
 }
 
-func TestRunAutostartPersistsAndStopClears(t *testing.T) {
+func TestRunAutostartPersistsAndStopPreserves(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("/bin/sh is not available on Windows")
 	}
@@ -583,12 +583,201 @@ func TestRunAutostartPersistsAndStopClears(t *testing.T) {
 		t.Fatalf("persisted Autostart = false, want true")
 	}
 
-	if _, err := store.Stop(started[0].ID); err != nil {
+	if _, err := store.Stop(StopOptions{ID: started[0].ID}); err != nil {
 		t.Fatal(err)
 	}
 	waitForRun(t, store, started[0].ID)
 	stopped := findRun(t, store, started[0].ID)
-	if stopped.Autostart {
-		t.Fatalf("Autostart = true, want false after manual stop")
+	if !stopped.Autostart {
+		t.Fatalf("Autostart = false, want true after manual stop")
+	}
+	data, err = os.ReadFile(filepath.Join(stopped.Workspace, "run.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if !persisted.Autostart {
+		t.Fatalf("persisted Autostart = false, want true after manual stop")
+	}
+}
+
+func TestPausedAutostartDoesNotResumeOnStartupOrReconnect(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("/bin/sh is not available on Windows")
+	}
+
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "run.sh"), []byte("#!/bin/sh\nsleep 10\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	devices := &mutableFakeDevices{
+		devices: []node.DeviceInfo{{Serial: "phone-1", State: "device", NodeID: "node-1"}},
+	}
+	store, err := NewStore(filepath.Join(root, "programs"), devices)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Shutdown()
+	registered, err := registerTestProgram(t, store, source, RegisterUploadOptions{
+		Name:  "paused autostart runner",
+		Entry: Entry{Command: "/bin/sh", Args: []string{"run.sh"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := store.Start(StartOptions{ProgramID: registered.ID, Serials: []string{"phone-1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetRunAutostart(started[0].ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Stop(StopOptions{ID: started[0].ID, AutostartPaused: true}); err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, store, started[0].ID)
+
+	if ids := store.autostartRunIDsForStartup(); len(ids) != 0 {
+		t.Fatalf("startup autostart ids = %+v, want none", ids)
+	}
+
+	devices.SetDevices(nil)
+	store.checkAutostartReconnects()
+	devices.SetDevices([]node.DeviceInfo{{Serial: "phone-1", State: "device", NodeID: "node-1"}})
+	store.checkAutostartReconnects()
+
+	paused := findRun(t, store, started[0].ID)
+	if paused.Status != RunStatusStopped {
+		t.Fatalf("Status = %q, want %q", paused.Status, RunStatusStopped)
+	}
+	if !paused.Autostart || !paused.AutostartPaused {
+		t.Fatalf("run autostart flags = autostart %v paused %v, want true/true", paused.Autostart, paused.AutostartPaused)
+	}
+
+	resumed, err := store.Resume(ResumeOptions{ID: started[0].ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.AutostartPaused {
+		t.Fatalf("AutostartPaused = true after explicit resume, want false")
+	}
+}
+
+func TestAutostartReconnectDoesNotResumeWhileContinuouslyOnline(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("/bin/sh is not available on Windows")
+	}
+
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "run.sh"), []byte("#!/bin/sh\nsleep 10\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	devices := &mutableFakeDevices{
+		devices: []node.DeviceInfo{{Serial: "phone-1", State: "device", NodeID: "node-1"}},
+	}
+	store, err := NewStore(filepath.Join(root, "programs"), devices)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Shutdown()
+	registered, err := registerTestProgram(t, store, source, RegisterUploadOptions{
+		Name:  "autostart reconnect runner",
+		Entry: Entry{Command: "/bin/sh", Args: []string{"run.sh"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := store.Start(StartOptions{ProgramID: registered.ID, Serials: []string{"phone-1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetRunAutostart(started[0].ID, true); err != nil {
+		t.Fatal(err)
+	}
+
+	store.checkAutostartReconnects()
+	if _, err := store.Stop(StopOptions{ID: started[0].ID}); err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, store, started[0].ID)
+	store.checkAutostartReconnects()
+
+	stopped := findRun(t, store, started[0].ID)
+	if stopped.Status != RunStatusStopped {
+		t.Fatalf("Status = %q, want %q", stopped.Status, RunStatusStopped)
+	}
+	if !stopped.Autostart {
+		t.Fatalf("Autostart = false, want true")
+	}
+}
+
+func TestAutostartReconnectResumesAfterDeviceReturns(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("/bin/sh is not available on Windows")
+	}
+
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "run.sh"), []byte("#!/bin/sh\nsleep 10\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	devices := &mutableFakeDevices{
+		devices: []node.DeviceInfo{{Serial: "phone-1", State: "device", NodeID: "node-1"}},
+	}
+	store, err := NewStore(filepath.Join(root, "programs"), devices)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Shutdown()
+	registered, err := registerTestProgram(t, store, source, RegisterUploadOptions{
+		Name:  "autostart reconnect runner",
+		Entry: Entry{Command: "/bin/sh", Args: []string{"run.sh"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := store.Start(StartOptions{ProgramID: registered.ID, Serials: []string{"phone-1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetRunAutostart(started[0].ID, true); err != nil {
+		t.Fatal(err)
+	}
+	store.checkAutostartReconnects()
+	if _, err := store.Stop(StopOptions{ID: started[0].ID}); err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, store, started[0].ID)
+
+	devices.SetDevices(nil)
+	store.checkAutostartReconnects()
+	devices.SetDevices([]node.DeviceInfo{{Serial: "phone-1", State: "device", NodeID: "node-1"}})
+	store.checkAutostartReconnects()
+
+	resumed := findRun(t, store, started[0].ID)
+	if resumed.Status != RunStatusRunning && resumed.Status != RunStatusStarting {
+		t.Fatalf("Status = %q, want running or starting", resumed.Status)
+	}
+	if resumed.Workspace != started[0].Workspace {
+		t.Fatalf("Workspace = %q, want %q", resumed.Workspace, started[0].Workspace)
+	}
+	if !resumed.Autostart {
+		t.Fatalf("Autostart = false, want true")
 	}
 }

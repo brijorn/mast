@@ -49,7 +49,7 @@ type programBackend interface {
 	ListPrograms() []program.Program
 	Start(opts program.StartOptions) ([]program.Run, error)
 	ListRuns() []program.Run
-	Stop(id string) (*program.Run, error)
+	Stop(opts program.StopOptions) (*program.Run, error)
 	Resume(opts program.ResumeOptions) (*program.Run, error)
 	SetRunAutostart(id string, enabled bool) (*program.Run, error)
 	Logs(id string) (string, string, error)

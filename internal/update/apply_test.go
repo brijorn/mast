@@ -145,6 +145,40 @@ func TestReplaceExecutableRejectsEmptyBinary(t *testing.T) {
 	}
 }
 
+func TestAndroidMastExecutablePathUsesInvokedPath(t *testing.T) {
+	executable := writeTestMastExecutable(t)
+
+	got := androidMastExecutablePath(
+		[]string{executable, "start"},
+		"/apex/com.android.runtime/bin/linker64",
+	)
+	if got != executable {
+		t.Fatalf("androidMastExecutablePath() = %q, want %q", got, executable)
+	}
+}
+
+func TestAndroidMastExecutablePathUsesLinkerArgument(t *testing.T) {
+	executable := writeTestMastExecutable(t)
+
+	got := androidMastExecutablePath(
+		[]string{"/apex/com.android.runtime/bin/linker64", executable, "start"},
+		"/apex/com.android.runtime/bin/linker64",
+	)
+	if got != executable {
+		t.Fatalf("androidMastExecutablePath() = %q, want %q", got, executable)
+	}
+}
+
+func TestAndroidMastExecutablePathRejectsRuntimeLinker(t *testing.T) {
+	got := androidMastExecutablePath(
+		[]string{"/apex/com.android.runtime/bin/linker64", "start"},
+		"/apex/com.android.runtime/bin/linker64",
+	)
+	if got != "" {
+		t.Fatalf("androidMastExecutablePath() = %q, want empty", got)
+	}
+}
+
 func TestVerifyChecksumAcceptsMatchingAsset(t *testing.T) {
 	asset := []byte("release bytes")
 	sum := sha256.Sum256(asset)
@@ -242,6 +276,16 @@ type fakeApplyChecker struct {
 
 func (f *fakeApplyChecker) Check(_ context.Context) (*CheckResult, error) {
 	return f.result, f.err
+}
+
+func writeTestMastExecutable(t *testing.T) string {
+	t.Helper()
+
+	executable := filepath.Join(t.TempDir(), "mast")
+	if err := os.WriteFile(executable, []byte("binary"), 0755); err != nil {
+		t.Fatalf("write test executable: %v", err)
+	}
+	return executable
 }
 
 func buildTarGzArchive(t *testing.T, name string, body []byte) []byte {

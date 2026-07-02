@@ -13,7 +13,9 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -93,7 +95,7 @@ func replaceExecutable(path string, binary []byte) error {
 	}
 
 	if path == "" {
-		executable, err := os.Executable()
+		executable, err := currentExecutablePath()
 		if err != nil {
 			return err
 		}
@@ -149,6 +151,69 @@ func replaceExecutable(path string, binary []byte) error {
 	keepTemp = false
 	_ = os.Remove(backupPath)
 	return nil
+}
+
+func currentExecutablePath() (string, error) {
+	executable, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	if runtime.GOOS != "android" || !isAndroidRuntimeLinker(executable) {
+		return executable, nil
+	}
+	if path := androidMastExecutablePath(os.Args, executable); path != "" {
+		return path, nil
+	}
+	return "", fmt.Errorf("android reported runtime linker %s as executable; real mast binary path not found", executable)
+}
+
+func isAndroidRuntimeLinker(path string) bool {
+	clean := filepath.Clean(path)
+	if !strings.HasPrefix(clean, "/apex/com.android.runtime/bin/") {
+		return false
+	}
+	base := filepath.Base(clean)
+	return base == "linker" || base == "linker64"
+}
+
+func androidMastExecutablePath(args []string, reportedExecutable string) string {
+	candidates := make([]string, 0, len(args)+1)
+	if len(args) > 0 {
+		candidates = append(candidates, args[0])
+		if resolved, err := exec.LookPath(args[0]); err == nil {
+			candidates = append(candidates, resolved)
+		}
+	}
+	for _, arg := range args {
+		if strings.ContainsRune(arg, os.PathSeparator) {
+			candidates = append(candidates, arg)
+		}
+	}
+	for _, candidate := range candidates {
+		if isUsableMastExecutable(candidate, reportedExecutable) {
+			return filepath.Clean(candidate)
+		}
+	}
+	return ""
+}
+
+func isUsableMastExecutable(path string, reportedExecutable string) bool {
+	if path == "" {
+		return false
+	}
+	clean := filepath.Clean(path)
+	if clean == filepath.Clean(reportedExecutable) || isAndroidRuntimeLinker(clean) {
+		return false
+	}
+	base := filepath.Base(clean)
+	if base != "mast" && base != "mast.exe" {
+		return false
+	}
+	info, err := os.Stat(clean)
+	if err != nil || info.IsDir() {
+		return false
+	}
+	return true
 }
 
 func extractBinary(assetName string, archive []byte) ([]byte, error) {

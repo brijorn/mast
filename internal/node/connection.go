@@ -87,6 +87,15 @@ func (n *Node) Close() error {
 	if closeErr := n.Listener.Close(); closeErr != nil && err == nil {
 		err = closeErr
 	}
+	n.iosMu.Lock()
+	iosTunnelMgr := n.iosTunnelMgr
+	n.iosTunnelMgr = nil
+	n.iosMu.Unlock()
+	if iosTunnelMgr != nil {
+		if closeErr := iosTunnelMgr.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}
 	return err
 }
 
@@ -361,6 +370,28 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 
 			if err := n.pressKeyLocal(req.Payload.Serial, req.Payload.Keycode, req.Payload.MetaState); err != nil {
 				log.Println("press key:", err)
+				break
+			}
+		case transport.TypePressButtonRequest:
+			var req transport.PressButtonRequest
+			if err := json.Unmarshal(message, &req); err != nil {
+				log.Println("decode press button request:", err)
+				break
+			}
+
+			if err := n.pressButtonLocal(req.Payload.Serial, req.Payload.Name); err != nil {
+				log.Println("press button:", err)
+				break
+			}
+		case transport.TypeTextInputRequest:
+			var req transport.TextInputRequest
+			if err := json.Unmarshal(message, &req); err != nil {
+				log.Println("decode text input request:", err)
+				break
+			}
+
+			if err := n.typeTextLocal(req.Payload.Serial, req.Payload.Text); err != nil {
+				log.Println("text input:", err)
 				break
 			}
 		case transport.TypeClipboardGetRequest:

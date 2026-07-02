@@ -256,8 +256,8 @@ func TestParseDevicesOutput(t *testing.T) {
 	got := parseDevicesOutput(parserADBOutput, "node-a", []DeviceInfo{})
 
 	expected := []DeviceInfo{
-		{Serial: "abc123", State: "device", NodeID: "node-a"},
-		{Serial: "xyz789", State: "offline", NodeID: "node-a"},
+		{Serial: "abc123", Platform: PlatformAndroid, State: "device", NodeID: "node-a"},
+		{Serial: "xyz789", Platform: PlatformAndroid, State: "offline", NodeID: "node-a"},
 	}
 
 	if diff := cmp.Diff(expected, got); diff != "" {
@@ -385,9 +385,10 @@ func TestListDevicesIncludesLocalDevices(t *testing.T) {
 		},
 	}
 	node := &Node{
-		ID:    "local-node",
-		Peers: map[string]*PeerConn{},
-		adb:   fake,
+		ID:             "local-node",
+		AndroidEnabled: true,
+		Peers:          map[string]*PeerConn{},
+		adb:            fake,
 	}
 
 	got, err := node.ListDevices()
@@ -396,7 +397,7 @@ func TestListDevicesIncludesLocalDevices(t *testing.T) {
 	}
 
 	expected := []DeviceInfo{
-		{Serial: "local-123", State: "device", NodeID: "local-node"},
+		{Serial: "local-123", Platform: PlatformAndroid, State: "device", NodeID: "local-node"},
 	}
 	if diff := cmp.Diff(expected, got); diff != "" {
 		t.Fatalf("devices mismatch (-want +got):\n%s", diff)
@@ -421,9 +422,10 @@ func TestListDevicesIncludesLocalBattery(t *testing.T) {
 		},
 	}
 	node := &Node{
-		ID:    "local-node",
-		Peers: map[string]*PeerConn{},
-		adb:   fake,
+		ID:             "local-node",
+		AndroidEnabled: true,
+		Peers:          map[string]*PeerConn{},
+		adb:            fake,
 	}
 
 	got, err := node.ListDevices()
@@ -434,6 +436,7 @@ func TestListDevicesIncludesLocalBattery(t *testing.T) {
 	expected := []DeviceInfo{
 		{
 			Serial:         "local-123",
+			Platform:       PlatformAndroid,
 			State:          "device",
 			BatteryPercent: &battery,
 			PowerConnected: &powerConnected,
@@ -468,9 +471,10 @@ func TestListDevicesUsesCachedBatteryWhenBatteryFails(t *testing.T) {
 		},
 	}
 	node := &Node{
-		ID:    "local-node",
-		Peers: map[string]*PeerConn{},
-		adb:   fake,
+		ID:             "local-node",
+		AndroidEnabled: true,
+		Peers:          map[string]*PeerConn{},
+		adb:            fake,
 	}
 
 	if _, err := node.ListDevices(); err != nil {
@@ -487,6 +491,7 @@ func TestListDevicesUsesCachedBatteryWhenBatteryFails(t *testing.T) {
 	expected := []DeviceInfo{
 		{
 			Serial:         "local-123",
+			Platform:       PlatformAndroid,
 			State:          "device",
 			BatteryPercent: &battery,
 			PowerConnected: &powerConnected,
@@ -513,9 +518,10 @@ func TestListDevicesKeepsDeviceWhenBatteryFails(t *testing.T) {
 		},
 	}
 	node := &Node{
-		ID:    "local-node",
-		Peers: map[string]*PeerConn{},
-		adb:   fake,
+		ID:             "local-node",
+		AndroidEnabled: true,
+		Peers:          map[string]*PeerConn{},
+		adb:            fake,
 	}
 
 	got, err := node.ListDevices()
@@ -524,7 +530,7 @@ func TestListDevicesKeepsDeviceWhenBatteryFails(t *testing.T) {
 	}
 
 	expected := []DeviceInfo{
-		{Serial: "local-123", State: "device", NodeID: "local-node"},
+		{Serial: "local-123", Platform: PlatformAndroid, State: "device", NodeID: "local-node"},
 	}
 	if diff := cmp.Diff(expected, got); diff != "" {
 		t.Fatalf("devices mismatch (-want +got):\n%s", diff)
@@ -554,6 +560,7 @@ func TestListDevicesIncludesAndroidEnabledPeerDevices(t *testing.T) {
 	}
 	nodeA.adb = nodeAADB
 	nodeB.adb = nodeBADB
+	nodeA.AndroidEnabled = true
 	nodeB.AndroidEnabled = true
 
 	connectNodePair(t, nodeA, nodeB)
@@ -564,8 +571,8 @@ func TestListDevicesIncludesAndroidEnabledPeerDevices(t *testing.T) {
 	}
 
 	expected := []DeviceInfo{
-		{Serial: "local-123", State: "device", NodeID: "a"},
-		{Serial: "remote-456", State: "device", BatteryPercent: &remoteBattery, NodeID: "b"},
+		{Serial: "local-123", Platform: PlatformAndroid, State: "device", NodeID: "a"},
+		{Serial: "remote-456", Platform: PlatformAndroid, State: "device", BatteryPercent: &remoteBattery, NodeID: "b"},
 	}
 	if diff := cmp.Diff(expected, got); diff != "" {
 		t.Fatalf("devices mismatch (-want +got):\n%s", diff)
@@ -595,6 +602,7 @@ func TestListDevicesReturnsLocalDevicesWhenPeerListingFails(t *testing.T) {
 			"": expectedErr,
 		},
 	}
+	nodeA.AndroidEnabled = true
 	nodeB.AndroidEnabled = true
 	connectNodePair(t, nodeA, nodeB)
 
@@ -604,7 +612,7 @@ func TestListDevicesReturnsLocalDevicesWhenPeerListingFails(t *testing.T) {
 	}
 
 	expected := []DeviceInfo{
-		{Serial: "local-123", State: "device", NodeID: "a"},
+		{Serial: "local-123", Platform: PlatformAndroid, State: "device", NodeID: "a"},
 	}
 	if diff := cmp.Diff(expected, got); diff != "" {
 		t.Fatalf("devices mismatch (-want +got):\n%s", diff)
@@ -632,7 +640,8 @@ func TestListDevicesSkipsPeersWithoutAndroidEnabled(t *testing.T) {
 		},
 	}
 	node := &Node{
-		ID: "local-node",
+		ID:             "local-node",
+		AndroidEnabled: true,
 		Peers: map[string]*PeerConn{
 			"remote-node": {
 				AndroidEnabled: false,
@@ -648,7 +657,7 @@ func TestListDevicesSkipsPeersWithoutAndroidEnabled(t *testing.T) {
 	}
 
 	expected := []DeviceInfo{
-		{Serial: "local-123", State: "device", NodeID: "local-node"},
+		{Serial: "local-123", Platform: PlatformAndroid, State: "device", NodeID: "local-node"},
 	}
 	if diff := cmp.Diff(expected, got); diff != "" {
 		t.Fatalf("devices mismatch (-want +got):\n%s", diff)
@@ -668,10 +677,11 @@ func TestListDevicesReturnsADBError(t *testing.T) {
 		},
 	}
 	node := &Node{
-		ID:            "local-node",
-		AdvertiseHost: "100.64.0.1",
-		Peers:         map[string]*PeerConn{},
-		adb:           fake,
+		ID:             "local-node",
+		AdvertiseHost:  "100.64.0.1",
+		AndroidEnabled: true,
+		Peers:          map[string]*PeerConn{},
+		adb:            fake,
 	}
 
 	_, err := node.ListDevices()
@@ -733,10 +743,11 @@ func TestStartStreamSetsUpLocalDeviceStream(t *testing.T) {
 		},
 	}
 	node := &Node{
-		ID:            "local-node",
-		AdvertiseHost: "100.64.0.1",
-		Peers:         map[string]*PeerConn{},
-		adb:           fake,
+		ID:             "local-node",
+		AdvertiseHost:  "100.64.0.1",
+		AndroidEnabled: true,
+		Peers:          map[string]*PeerConn{},
+		adb:            fake,
 	}
 	opts := streamcfg.Options{
 		NoAudio:      true,
@@ -815,10 +826,11 @@ func TestStartStreamTurnsScreenOffAfterControlConnects(t *testing.T) {
 		controlMessages: controlMessages,
 	}
 	node := &Node{
-		ID:            "local-node",
-		AdvertiseHost: "100.64.0.1",
-		Peers:         map[string]*PeerConn{},
-		adb:           fake,
+		ID:             "local-node",
+		AdvertiseHost:  "100.64.0.1",
+		AndroidEnabled: true,
+		Peers:          map[string]*PeerConn{},
+		adb:            fake,
 	}
 
 	session, err := node.StartStream("local-123", streamcfg.Options{

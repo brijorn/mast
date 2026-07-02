@@ -24,6 +24,8 @@ const (
 	TypeTapRequest              = "tap_request"
 	TypeSwipeRequest            = "swipe_request"
 	TypePressKeyRequest         = "press_key_request"
+	TypePressButtonRequest      = "press_button_request"
+	TypeTextInputRequest        = "text_input_request"
 	TypeClipboardGetRequest     = "clipboard_get_request"
 	TypeClipboardGetResponse    = "clipboard_get_response"
 	TypeClipboardSetRequest     = "clipboard_set_request"
@@ -83,6 +85,7 @@ type ListDevicesRequest struct {
 
 type DeviceInfoPayload struct {
 	Serial                     string   `json:"serial"`
+	Platform                   string   `json:"platform"`
 	State                      string   `json:"state"`
 	NodeID                     string   `json:"node_id"`
 	BatteryPercent             *int     `json:"battery_percent,omitempty"`
@@ -180,8 +183,14 @@ type StartStreamRequest struct {
 type StartStreamResultPayload struct {
 	ID        string `json:"id"`
 	Serial    string `json:"serial"`
+	Platform  string `json:"platform"`
+	Kind      string `json:"kind"`
 	Host      string `json:"host"`
 	LocalPort int    `json:"local_port"`
+	VideoURL  string `json:"video_url,omitempty"`
+	MJPEGURL  string `json:"mjpeg_url,omitempty"`
+	Width     int    `json:"width,omitempty"`
+	Height    int    `json:"height,omitempty"`
 }
 
 type StartStreamResponsePayload struct {
@@ -248,6 +257,26 @@ type PressKeyRequestPayload struct {
 	Serial    string `json:"serial"`
 	Keycode   uint32 `json:"keycode"`
 	MetaState uint32 `json:"meta_state,omitempty"`
+}
+
+type PressButtonRequest struct {
+	RawMessage
+	Payload PressButtonRequestPayload `json:"payload"`
+}
+
+type PressButtonRequestPayload struct {
+	Serial string `json:"serial"`
+	Name   string `json:"name"`
+}
+
+type TextInputRequest struct {
+	RawMessage
+	Payload TextInputRequestPayload `json:"payload"`
+}
+
+type TextInputRequestPayload struct {
+	Serial string `json:"serial"`
+	Text   string `json:"text"`
 }
 
 type ClipboardGetRequest struct {

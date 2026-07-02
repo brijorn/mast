@@ -259,6 +259,42 @@ func TestPressKeyRejectsInvalidKeycode(t *testing.T) {
 	}
 }
 
+func TestPressButtonCallsBackend(t *testing.T) {
+	backend := &controlBackend{}
+	server := NewServer(backend)
+
+	body := []byte(`{"serial":"local-123","name":"home"}`)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/control/button", bytes.NewReader(body))
+
+	server.PressButton(res, req)
+
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusNoContent, res.Body.String())
+	}
+	if backend.buttonSerial != "local-123" || backend.buttonName != "home" {
+		t.Fatalf("press button call = serial %q name %q", backend.buttonSerial, backend.buttonName)
+	}
+}
+
+func TestTypeTextCallsBackend(t *testing.T) {
+	backend := &controlBackend{}
+	server := NewServer(backend)
+
+	body := []byte(`{"serial":"local-123","text":"hello iOS"}`)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/control/text", bytes.NewReader(body))
+
+	server.TypeText(res, req)
+
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusNoContent, res.Body.String())
+	}
+	if backend.textSerial != "local-123" || backend.text != "hello iOS" {
+		t.Fatalf("type text call = serial %q text %q", backend.textSerial, backend.text)
+	}
+}
+
 func TestGetClipboardReturnsBackendText(t *testing.T) {
 	backend := &controlBackend{clipboardText: "copied text"}
 	server := NewServer(backend)
@@ -348,6 +384,12 @@ type controlBackend struct {
 	keySerial string
 	keycode   uint32
 
+	buttonSerial string
+	buttonName   string
+
+	textSerial string
+	text       string
+
 	clipboardSerial string
 	clipboardText   string
 
@@ -398,6 +440,18 @@ func (b *controlBackend) Swipe(serial string, startX, startY, endX, endY int) er
 func (b *controlBackend) PressKey(serial string, keycode uint32, metaState uint32) error {
 	b.keySerial = serial
 	b.keycode = keycode
+	return b.err
+}
+
+func (b *controlBackend) PressButton(serial string, name string) error {
+	b.buttonSerial = serial
+	b.buttonName = name
+	return b.err
+}
+
+func (b *controlBackend) TypeText(serial string, text string) error {
+	b.textSerial = serial
+	b.text = text
 	return b.err
 }
 

@@ -30,6 +30,8 @@ type nodeBackend interface {
 	Tap(serial string, x, y int) error
 	Swipe(serial string, startX, startY, endX, endY int) error
 	PressKey(serial string, keycode uint32, metaState uint32) error
+	PressButton(serial string, name string) error
+	TypeText(serial string, text string) error
 	GetClipboard(serial string) (string, error)
 	SetClipboard(serial string, text string) error
 }
@@ -91,6 +93,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/streams", s.StartStream)
 	mux.HandleFunc("DELETE /api/streams/{serial}", s.StopStream)
 	mux.HandleFunc("GET /api/streams/video", s.StreamVideo)
+	mux.HandleFunc("GET /api/streams/mjpeg", s.StreamMJPEG)
 
 	mux.HandleFunc("GET /api/programs", s.ListPrograms)
 	mux.HandleFunc("POST /api/programs/upload", s.UploadProgram)
@@ -109,6 +112,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/control/tap", s.Tap)
 	mux.HandleFunc("POST /api/control/swipe", s.Swipe)
 	mux.HandleFunc("POST /api/control/keypress", s.PressKey)
+	mux.HandleFunc("POST /api/control/button", s.PressButton)
+	mux.HandleFunc("POST /api/control/text", s.TypeText)
 	mux.HandleFunc("POST /api/control/clipboard/get", s.GetClipboard)
 	mux.HandleFunc("POST /api/control/clipboard/set", s.SetClipboard)
 	return mux

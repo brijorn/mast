@@ -128,11 +128,12 @@ func TestEnsureStreamLocalUsesLightweightDeviceLookup(t *testing.T) {
 		},
 	}
 	node := &Node{
-		ID:            "local-node",
-		AdvertiseHost: "127.0.0.1",
-		Peers:         map[string]*PeerConn{},
-		adb:           fake,
-		streams:       make(map[string]*streamEntry),
+		ID:             "local-node",
+		AdvertiseHost:  "127.0.0.1",
+		AndroidEnabled: true,
+		Peers:          map[string]*PeerConn{},
+		adb:            fake,
+		streams:        make(map[string]*streamEntry),
 	}
 
 	session, err := node.EnsureStream("local-123", streamcfg.Options{

@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/brijorn/ioslink"
 	"github.com/brijorn/mast/internal/scrcpy"
 	streamcfg "github.com/brijorn/mast/internal/stream"
 	"github.com/brijorn/mast/internal/transport"
@@ -31,8 +32,12 @@ type streamEntry struct {
 type StreamSession struct {
 	ID           string
 	DeviceSerial string
+	Platform     string
+	Kind         string
 	Host         string
 	LocalPort    int
+	VideoURL     string
+	MJPEGURL     string
 
 	streamListener net.Listener
 
@@ -45,6 +50,21 @@ type StreamSession struct {
 	Width  int
 	Height int
 	cmd    *exec.Cmd
+
+	iosDevice  *ioslink.Device
+	iosCleanup func()
+	iosTouchMu sync.Mutex
+	iosTouch   *iosTouchState
+}
+
+type iosTouchState struct {
+	Points    []iosTouchPoint
+	StartedAt time.Time
+}
+
+type iosTouchPoint struct {
+	X int
+	Y int
 }
 
 const (
@@ -80,6 +100,10 @@ func (s *StreamSession) Stop() error {
 		if waitErr := s.cmd.Wait(); waitErr != nil && err == nil && killErr != nil {
 			err = waitErr
 		}
+	}
+
+	if s.iosCleanup != nil {
+		s.iosCleanup()
 	}
 
 	return err
@@ -148,6 +172,9 @@ func (s *StreamSession) turnScreenOff() error {
 
 func (n *Node) applyStreamOptions(session *StreamSession, opts streamcfg.Options) error {
 	if !opts.TurnScreenOff {
+		return nil
+	}
+	if session.Platform == PlatformIOS {
 		return nil
 	}
 	return session.turnScreenOff()
@@ -272,6 +299,9 @@ func (n *Node) StartStream(serial string, opts streamcfg.Options) (*StreamSessio
 	if device.NodeID != n.ID {
 		return n.startPeerStream(n.ctx, device.NodeID, serial, opts)
 	}
+	if device.Platform == PlatformIOS {
+		return n.startLocalIOSStream(serial, opts)
+	}
 
 	return n.startLocalStreamAfterLookup(serial, opts)
 }
@@ -346,8 +376,11 @@ func (n *Node) startLocalStreamWithDeviceCheck(serial string, opts streamcfg.Opt
 	session := &StreamSession{
 		ID:             uuid.NewString(),
 		DeviceSerial:   serial,
+		Platform:       PlatformAndroid,
+		Kind:           "h264",
 		Host:           streamHost,
 		LocalPort:      port,
+		VideoURL:       "/api/streams/video?serial=" + serial,
 		streamListener: ln,
 		cmd:            cmd,
 	}
@@ -425,8 +458,14 @@ func streamSessionPayload(session *StreamSession) *transport.StartStreamResultPa
 	return &transport.StartStreamResultPayload{
 		ID:        session.ID,
 		Serial:    session.DeviceSerial,
+		Platform:  session.Platform,
+		Kind:      session.Kind,
 		Host:      session.Host,
 		LocalPort: session.LocalPort,
+		VideoURL:  session.VideoURL,
+		MJPEGURL:  session.MJPEGURL,
+		Width:     session.Width,
+		Height:    session.Height,
 	}
 }
 
@@ -437,8 +476,14 @@ func streamSessionFromPayload(payload *transport.StartStreamResultPayload) *Stre
 	return &StreamSession{
 		ID:           payload.ID,
 		DeviceSerial: payload.Serial,
+		Platform:     payload.Platform,
+		Kind:         payload.Kind,
 		Host:         payload.Host,
 		LocalPort:    payload.LocalPort,
+		VideoURL:     payload.VideoURL,
+		MJPEGURL:     payload.MJPEGURL,
+		Width:        payload.Width,
+		Height:       payload.Height,
 	}
 }
 
@@ -451,6 +496,9 @@ func (n *Node) EnsureStream(serial string, opts streamcfg.Options) (*StreamSessi
 	}
 	if device.NodeID != n.ID {
 		return n.startPeerStream(n.ctx, device.NodeID, serial, opts)
+	}
+	if device.Platform == PlatformIOS {
+		return n.ensureStream(serial, opts, n.startLocalIOSStream)
 	}
 
 	return n.ensureStream(serial, opts, n.startLocalStreamAfterLookup)
@@ -476,6 +524,16 @@ func (n *Node) ensureStream(serial string, opts streamcfg.Options, start func(st
 
 			if entry.Session == nil {
 				return nil, errors.New("internal error: stream session is nil")
+			}
+			if entry.Session.isUnhealthyIOS() {
+				n.streamsMu.Lock()
+				current, stillCurrent := n.streams[serial]
+				if stillCurrent && current == entry {
+					delete(n.streams, serial)
+				}
+				n.streamsMu.Unlock()
+				_ = entry.Session.Stop()
+				continue
 			}
 			if err := n.applyStreamOptions(entry.Session, opts); err != nil {
 				return nil, err
@@ -511,6 +569,13 @@ func (n *Node) ensureStream(serial string, opts streamcfg.Options, start func(st
 		}
 		return streamSession, nil
 	}
+}
+
+func (s *StreamSession) isUnhealthyIOS() bool {
+	if s.Platform != PlatformIOS || s.iosDevice == nil {
+		return false
+	}
+	return !s.iosDevice.Status().Ready
 }
 
 func (n *Node) GetStream(serial string) (*StreamSession, error) {

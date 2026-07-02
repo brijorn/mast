@@ -64,6 +64,16 @@ type PressKeyRequest struct {
 	MetaState uint32 `json:"meta_state,omitempty"`
 }
 
+type pressButtonRequest struct {
+	Serial string `json:"serial"`
+	Name   string `json:"name"`
+}
+
+type textInputRequest struct {
+	Serial string `json:"serial"`
+	Text   string `json:"text"`
+}
+
 type clipboardRequest struct {
 	Serial string `json:"serial"`
 	Text   string `json:"text"`
@@ -337,6 +347,51 @@ func (s *Server) PressKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.node.PressKey(req.Serial, req.Keycode, req.MetaState); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) PressButton(w http.ResponseWriter, r *http.Request) {
+	var req pressButtonRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.Serial == "" {
+		http.Error(w, "serial required", http.StatusBadRequest)
+		return
+	}
+
+	if req.Name == "" {
+		http.Error(w, "button name required", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.node.PressButton(req.Serial, req.Name); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) TypeText(w http.ResponseWriter, r *http.Request) {
+	var req textInputRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.Serial == "" {
+		http.Error(w, "serial required", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.node.TypeText(req.Serial, req.Text); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

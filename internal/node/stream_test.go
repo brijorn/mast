@@ -249,6 +249,82 @@ func TestStopStreamRoutesRemoteDeviceToPeer(t *testing.T) {
 	})
 }
 
+func TestStopLocalIOSStreamReturnsBeforeCleanupFinishes(t *testing.T) {
+	done := make(chan struct{})
+	close(done)
+	cleanupStarted := make(chan struct{})
+	releaseCleanup := make(chan struct{})
+
+	node := &Node{
+		streams: map[string]*streamEntry{
+			"ios-123": {
+				Session: &StreamSession{
+					DeviceSerial: "ios-123",
+					Platform:     PlatformIOS,
+					iosCleanup: func() {
+						close(cleanupStarted)
+						<-releaseCleanup
+					},
+				},
+				Done: done,
+			},
+		},
+	}
+	defer close(releaseCleanup)
+
+	start := time.Now()
+	if err := node.stopLocalStream("ios-123"); err != nil {
+		t.Fatalf("stopLocalStream returned error: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
+		t.Fatalf("stopLocalStream took %s, want non-blocking iOS cleanup", elapsed)
+	}
+
+	select {
+	case <-cleanupStarted:
+	case <-time.After(time.Second):
+		t.Fatal("iOS cleanup did not start")
+	}
+
+	node.streamsMu.RLock()
+	_, ok := node.streams["ios-123"]
+	node.streamsMu.RUnlock()
+	if ok {
+		t.Fatal("stream entry still present after stop")
+	}
+}
+
+func TestDropStreamRemovesCurrentSession(t *testing.T) {
+	done := make(chan struct{})
+	close(done)
+	releaseCleanup := make(chan struct{})
+	session := &StreamSession{
+		DeviceSerial: "ios-123",
+		Platform:     PlatformIOS,
+		iosCleanup: func() {
+			<-releaseCleanup
+		},
+	}
+	node := &Node{
+		streams: map[string]*streamEntry{
+			"ios-123": {
+				Session: session,
+				Done:    done,
+			},
+		},
+	}
+	defer close(releaseCleanup)
+
+	node.DropStream("ios-123", session)
+
+	node.streamsMu.RLock()
+	_, ok := node.streams["ios-123"]
+	node.streamsMu.RUnlock()
+	if ok {
+		t.Fatal("stream entry still present after drop")
+	}
+}
+
 func TestEnsureStreamReusesExistingStreamWithStaleReplayKeyframe(t *testing.T) {
 	node := &Node{
 		streams: make(map[string]*streamEntry),

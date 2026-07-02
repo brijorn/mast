@@ -106,6 +106,8 @@ func (f *fakeBackend) StopStream(serial string) error {
 	return f.err
 }
 
+func (f *fakeBackend) DropStream(_ string, _ *node.StreamSession) {}
+
 func (f *fakeBackend) Touch(_ string, _ string, _, _ int) error {
 	return nil
 }

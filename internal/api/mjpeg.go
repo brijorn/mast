@@ -25,5 +25,6 @@ func (s *Server) StreamMJPEG(w http.ResponseWriter, r *http.Request) {
 
 	if err := stream.StreamMJPEG(r.Context(), w); err != nil && !errors.Is(err, r.Context().Err()) {
 		log.Printf("mjpeg stream %s: %v", serial, err)
+		s.node.DropStream(serial, stream)
 	}
 }

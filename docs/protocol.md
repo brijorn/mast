@@ -132,9 +132,9 @@ Requests Android private DNS state for a local device on the destination node.
 
 ## device_dns_toggle_request
 
-Toggles Android private DNS for a local device on the destination node. Automatic
-mode changes to `dns.adguard.com`; any non-automatic mode changes back to
-automatic.
+Toggles Android private DNS for a local device on the destination node. Any mode
+that is not `dns.adguard.com` changes to `dns.adguard.com`; `dns.adguard.com`
+changes to private DNS off.
 
 ```json
 {
@@ -362,6 +362,28 @@ scrcpy control socket.
 
 This is a fire-and-forget message. Errors are logged on the receiving node.
 
+## text_input_request
+
+Requests that the device owner type text into the currently focused field or
+keyboard. Android uses the active scrcpy control socket. iOS uses
+ioslink/WebDriverAgent keys.
+
+```json
+{
+  "type": "text_input_request",
+  "id": "message-id",
+  "from": "node-a",
+  "to": "node-b",
+  "timestamp": "2026-06-22T17:00:00Z",
+  "payload": {
+    "serial": "remote-123",
+    "text": "hello"
+  }
+}
+```
+
+This is a fire-and-forget message. Errors are logged on the receiving node.
+
 ## clipboard_get_request
 
 Requests clipboard text from a device owned by the destination node.
@@ -398,8 +420,9 @@ If reading fails, `payload.error` contains the error string.
 
 ## clipboard_set_request
 
-Requests that the device owner set clipboard text through the active scrcpy
-control socket.
+Requests that the device owner set clipboard text. Android uses the active
+scrcpy control socket. iOS uses ioslink/WebDriverAgent text input, with
+pasteboard writes attempted as best effort.
 
 ```json
 {

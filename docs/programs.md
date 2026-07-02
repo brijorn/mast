@@ -192,9 +192,11 @@ When Mast starts, it automatically resumes autostart-enabled runs that are
 `stopped` or `lost`, using the same run ID and instance workspace. Normal
 `exited` and `failed` runs are not restarted automatically.
 
-Manual `POST /api/runs/{id}/stop` disables autostart for that run. Mast's own
-shutdown path stops active programs without clearing autostart, so configured
-runs come back when Mast is launched again.
+Manual `POST /api/runs/{id}/stop` preserves autostart for that run. Clients can
+send `{"autostart_paused": true}` with the stop request when a run should stay
+stopped until an explicit resume, such as battery protection waiting for a
+resume threshold. Mast's own shutdown path stops active programs without
+pausing autostart, so configured runs come back when Mast is launched again.
 
 When Mast restarts while a run is active, it restores that run as `lost` rather
 than `failed`, because Mast no longer knows whether the program itself failed.

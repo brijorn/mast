@@ -11,7 +11,7 @@ network.
 | `GET` | `/api/devices` | List local and peer Android devices. |
 | `GET` | `/api/devices/{serial}/screenshot` | Capture a PNG screenshot from a device. |
 | `GET` | `/api/devices/{serial}/dns` | Read Android private DNS mode for a device. |
-| `POST` | `/api/devices/{serial}/dns/toggle` | Toggle Android private DNS between automatic and AdGuard. |
+| `POST` | `/api/devices/{serial}/dns/toggle` | Toggle Android private DNS between off and AdGuard. |
 | `GET` | `/api/nodes` | List the local node and connected peers. |
 | `GET` | `/api/nodes/{id}/config` | Read local or peer node config. |
 | `PUT` | `/api/nodes/{id}/config` | Update local or peer node config. |
@@ -28,6 +28,7 @@ network.
 | `POST` | `/api/control/tap` | Send a tap. |
 | `POST` | `/api/control/swipe` | Send a swipe. |
 | `POST` | `/api/control/keypress` | Send an Android keycode. |
+| `POST` | `/api/control/text` | Type text into the focused field. |
 | `POST` | `/api/control/clipboard/get` | Read clipboard text. |
 | `POST` | `/api/control/clipboard/set` | Set clipboard text. |
 | `GET` | `/api/programs` | List uploaded programs. |
@@ -106,9 +107,9 @@ Returns Android private DNS state for a local or peer-owned device.
 POST /api/devices/{serial}/dns/toggle
 ```
 
-When the device is automatic, Mast sets private DNS to `dns.adguard.com`. When
-the device is not automatic, Mast returns it to automatic mode. The response is
-the device DNS state after the change.
+When the device is not using `dns.adguard.com`, Mast sets private DNS to
+`dns.adguard.com`. When the device is using `dns.adguard.com`, Mast turns
+private DNS off. The response is the device DNS state after the change.
 
 ```json
 {
@@ -535,13 +536,38 @@ Successful response:
 204 No Content
 ```
 
+## Type Text
+
+```http
+POST /api/control/text
+```
+
+Types text into the currently focused field or keyboard. Android uses the
+active scrcpy control socket. iOS uses ioslink/WebDriverAgent keys.
+
+Request body:
+
+```json
+{
+  "serial": "local-123",
+  "text": "hello"
+}
+```
+
+Successful response:
+
+```http
+204 No Content
+```
+
 ## Get Clipboard
 
 ```http
 POST /api/control/clipboard/get
 ```
 
-Reads clipboard text through the active scrcpy control socket.
+Reads clipboard text. Android uses the active scrcpy control socket. iOS uses
+ioslink/WebDriverAgent pasteboard support.
 
 Request body:
 
@@ -565,7 +591,10 @@ Response body:
 POST /api/control/clipboard/set
 ```
 
-Sets clipboard text through the active scrcpy control socket.
+Sets clipboard text and requests paste/input into the focused field where the
+device bridge supports it. Android uses the active scrcpy control socket. iOS
+uses ioslink/WebDriverAgent text input, with pasteboard writes attempted as
+best effort.
 
 Request body:
 
@@ -638,7 +667,7 @@ template variables are covered in [Programs](programs.md). The HTTP surface is:
 | `DELETE` | `/api/programs/{id}` | Delete a program by content ID or slug. |
 | `GET` | `/api/runs` | List known runs. |
 | `POST` | `/api/runs` | Start the current program by slug or content ID. |
-| `POST` | `/api/runs/{id}/stop` | Stop a run and disable its autostart flag. |
+| `POST` | `/api/runs/{id}/stop` | Stop a run, optionally pausing autostart. |
 | `POST` | `/api/runs/{id}/resume` | Resume the same run ID and workspace. |
 | `PUT` | `/api/runs/{id}/autostart` | Enable or disable autostart for a run. |
 | `GET` | `/api/runs/{id}/logs` | Read stdout/stderr with optional offsets. |
@@ -663,6 +692,14 @@ Resume run request:
   "variables": {
     "MAX_LEVELS": "30"
   }
+}
+```
+
+Stop run request:
+
+```json
+{
+  "autostart_paused": true
 }
 ```
 

@@ -1,10 +1,10 @@
 # Mast
 
-Mast is an Android device control layer for coordinating devices across
+Mast is a mobile device control layer for coordinating Android and iOS devices across
 multiple computers.
 
 ##### Current Capabilities:
-- Discover local Android devices through ADB and merge Android-enabled peer devices into one node view.
+- Discover local Android devices through ADB, discover local iOS devices through ioslink, and merge peer devices into one node view.
 - Connect Mast nodes over the local network or Tailscale with a websocket peer protocol.
 - Expose a local control API for devices, nodes, screenshots, scrcpy streams, touch input, keypresses, clipboard access, program runs, config, and updates.
 - Start scrcpy streams, including peer-owned streams, stop streams tracked by a node, and replay video websocket packets for late viewers.
@@ -26,14 +26,14 @@ intended for trusted private networks.
 ## Control API
 
 The local control API exposes endpoints for device inventory, stream lifecycle,
-Android input, program runs, node config, and updates.
+input, program runs, node config, and updates.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/api/devices` | List visible Android devices |
+| `GET` | `/api/devices` | List visible devices |
 | `GET` | `/api/devices/{serial}/screenshot` | Capture a device screenshot |
 | `GET` | `/api/devices/{serial}/dns` | Read Android private DNS mode |
-| `POST` | `/api/devices/{serial}/dns/toggle` | Toggle private DNS between automatic and AdGuard |
+| `POST` | `/api/devices/{serial}/dns/toggle` | Toggle private DNS between off and AdGuard |
 | `GET` | `/api/nodes` | List local and connected Mast nodes |
 | `GET` | `/api/nodes/{id}/config` | Read local or peer node config |
 | `PUT` | `/api/nodes/{id}/config` | Update local or peer node config |
@@ -45,6 +45,7 @@ Android input, program runs, node config, and updates.
 | `POST` | `/api/control/touch` | Send one live touch event |
 | `POST` | `/api/control/swipe` | Swipe stream coordinates |
 | `POST` | `/api/control/keypress` | Send an Android keycode |
+| `POST` | `/api/control/text` | Type text into the focused field |
 | `POST` | `/api/control/clipboard/get` | Read device clipboard text |
 | `POST` | `/api/control/clipboard/set` | Set device clipboard text |
 | `GET` | `/api/programs` | List uploaded programs |

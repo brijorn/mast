@@ -3,8 +3,9 @@ package proxy
 import (
 	"io"
 	"maps"
-	"net"
 	"net/http"
+
+	"github.com/brijorn/mast/internal/netutil"
 )
 
 type Server struct {
@@ -15,7 +16,7 @@ type Server struct {
 func NewServer(addr string) *Server {
 	return &Server{
 		Addr:   addr,
-		Client: http.Client{},
+		Client: *netutil.HTTPClient(),
 	}
 }
 
@@ -25,7 +26,7 @@ func (s *Server) Handler() http.Handler {
 
 		if r.Method == http.MethodConnect {
 
-			targetConn, err := net.Dial("tcp", r.Host)
+			targetConn, err := netutil.DialContext(r.Context(), "tcp", r.Host)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return

@@ -17,6 +17,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/brijorn/mast/internal/netutil"
 )
 
 type Applier struct {
@@ -331,7 +333,7 @@ func download(ctx context.Context, httpClient *http.Client, rawURL string) ([]by
 	}
 	req.Header.Set("User-Agent", "mast")
 	if httpClient == nil {
-		httpClient = http.DefaultClient
+		httpClient = netutil.HTTPClient()
 	}
 
 	resp, err := httpClient.Do(req)

@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+
+	"github.com/brijorn/mast/internal/netutil"
 )
 
 const (
@@ -53,7 +55,7 @@ func (c *Client) LatestRelease(ctx context.Context) (*GitHubRelease, error) {
 
 	httpClient := c.HTTPClient
 	if httpClient == nil {
-		httpClient = http.DefaultClient
+		httpClient = netutil.HTTPClient()
 	}
 
 	res, err := httpClient.Do(req)

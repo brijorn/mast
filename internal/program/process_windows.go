@@ -3,6 +3,7 @@
 package program
 
 import (
+	"errors"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -13,6 +14,10 @@ const windowsCreateNewProcessGroup = 0x00000200
 
 func configureRunCommand(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windowsCreateNewProcessGroup}
+}
+
+func configureCompanionRunCommand(cmd *exec.Cmd, _ int) {
+	configureRunCommand(cmd)
 }
 
 func runProcessStatus(run *Run) (alive bool, matches bool) {
@@ -31,8 +36,23 @@ func runProcessStatus(run *Run) (alive bool, matches bool) {
 }
 
 func killRunProcess(run *Run) error {
-	if run.PID <= 0 {
-		return nil
+	var errs []error
+	for _, companion := range run.Companions {
+		if companion.PID <= 0 {
+			continue
+		}
+		if err := taskkillProcessTree(companion.PID); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	return exec.Command("taskkill", "/PID", strconv.Itoa(run.PID), "/T", "/F").Run()
+	if run.PID > 0 {
+		if err := taskkillProcessTree(run.PID); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func taskkillProcessTree(pid int) error {
+	return exec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F").Run()
 }

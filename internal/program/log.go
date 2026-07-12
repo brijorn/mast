@@ -68,8 +68,9 @@ func (s *Store) newRunLogWriter(run *Run, path, stream string) (*boundedLogWrite
 		case "stderr":
 			run.StderrLogStart = start
 		}
-		_ = writeJSON(filepath.Join(run.Workspace, "run.json"), run)
+		snapshot := nextRunSnapshot(run)
 		s.mu.Unlock()
+		writeRunJSONBestEffort(filepath.Join(snapshot.Workspace, "run.json"), &snapshot)
 	})
 }
 

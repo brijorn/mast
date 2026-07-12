@@ -15,6 +15,10 @@ func configureRunCommand(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 }
 
+func configureCompanionRunCommand(cmd *exec.Cmd, processGroupID int) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pgid: processGroupID}
+}
+
 func runProcessStatus(run *Run) (alive bool, matches bool) {
 	if run.PID <= 0 {
 		return false, false

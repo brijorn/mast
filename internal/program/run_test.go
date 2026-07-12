@@ -1,8 +1,10 @@
 package program
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -43,6 +45,11 @@ printf 'SOCKET=%s\n' "$ADB_SERVER_SOCKET"
 printf 'ADB_HOST=%s\n' "$ANDROID_ADB_SERVER_ADDRESS"
 printf 'ADB_HOST_VAR=%s\n' "$ANDROID_ADB_SERVER_HOST"
 printf 'ADB_PORT=%s\n' "$ANDROID_ADB_SERVER_PORT"
+printf 'DEVICE_SERIAL=%s\n' "$DEVICE_SERIAL"
+printf 'DEVICE_PLATFORM=%s\n' "$DEVICE_PLATFORM"
+printf 'MAST_NODE_ID=%s\n' "$MAST_NODE_ID"
+printf 'MAST_API_URL=%s\n' "$MAST_API_URL"
+printf 'MAST_RUN_ID=%s\n' "$MAST_RUN_ID"
 printf 'PYTHONUNBUFFERED=%s\n' "$PYTHONUNBUFFERED"
 printf 'ARGS=%s\n' "$*"
 `
@@ -52,7 +59,7 @@ printf 'ARGS=%s\n' "$*"
 
 	store, err := NewStore(filepath.Join(root, "programs"), fakeDevices{
 		devices: []node.DeviceInfo{
-			{Serial: "remote-123", State: "device", NodeID: "peer-a"},
+			{Serial: "remote-123", Platform: node.PlatformAndroid, State: "device", NodeID: "peer-a"},
 		},
 		nodes: []node.NodeInfo{
 			{ID: "local", Local: true, Addr: "127.0.0.1"},
@@ -62,6 +69,7 @@ printf 'ARGS=%s\n' "$*"
 	if err != nil {
 		t.Fatal(err)
 	}
+	store.SetMastAPIURL("http://127.0.0.1:6271")
 
 	registered, err := registerTestProgram(t, store, source, RegisterUploadOptions{
 		Name:       "test runner",
@@ -110,12 +118,61 @@ printf 'ARGS=%s\n' "$*"
 		"ADB_HOST=10.0.0.4",
 		"ADB_HOST_VAR=10.0.0.4",
 		"ADB_PORT=5038",
+		"DEVICE_SERIAL=remote-123",
+		"DEVICE_PLATFORM=android",
+		"MAST_NODE_ID=peer-a",
+		"MAST_API_URL=http://127.0.0.1:6271",
+		"MAST_RUN_ID=" + runs[0].ID,
 		"PYTHONUNBUFFERED=1",
 		"ARGS=--license abc-123",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout missing %q:\n%s", want, stdout)
 		}
+	}
+}
+
+func TestSoftStopRequestPersistsAndAcknowledges(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "programs", "instances", "run-soft-stop")
+	if err := os.MkdirAll(workspace, 0700); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(filepath.Join(root, "programs"), fakeDevices{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := &Run{ID: "run-soft-stop", Workspace: workspace, Status: RunStatusRunning, StartedAt: time.Now().UTC()}
+	store.mu.Lock()
+	store.runs[run.ID] = &runState{run: run}
+	store.mu.Unlock()
+	requested, err := store.RequestStop(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requested.StopRequestedAt == nil {
+		t.Fatal("StopRequestedAt is nil")
+	}
+	status, err := store.StopRequest(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.RequestedAt == nil || status.AcknowledgedAt != nil {
+		t.Fatalf("status = %+v", status)
+	}
+	acknowledged, err := store.AcknowledgeStop(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if acknowledged.StopAcknowledgedAt == nil {
+		t.Fatal("StopAcknowledgedAt is nil")
+	}
+	data, err := os.ReadFile(filepath.Join(workspace, "run.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte("stop_acknowledged_at")) {
+		t.Fatalf("run.json = %s", data)
 	}
 }
 
@@ -177,6 +234,155 @@ func TestStartMakesLocalEntryExecutable(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "direct entry ran") {
 		t.Fatalf("stdout = %q, want direct entry output", stdout)
+	}
+}
+
+func TestCompanionConditionAndSharedLifecycle(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixtures require Unix process groups")
+	}
+
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "main.sh"), []byte("#!/bin/sh\nprintf 'main started\\n'\nsleep 0.2\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "helper.sh"), []byte("#!/bin/sh\nprintf 'helper started\\n'\nsleep 10\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := NewStore(filepath.Join(root, "programs"), fakeDevices{
+		devices: []node.DeviceInfo{{Serial: "phone-1", State: "device", NodeID: "node-1"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registered, err := registerTestProgram(t, store, source, RegisterUploadOptions{
+		Name: "companion test",
+		Entry: Entry{
+			Command: "main.sh",
+			Companions: []CompanionEntry{{
+				ID: "helper", Command: "helper.sh", Required: true,
+				EnabledWhen: CompanionCondition{Variable: "HELPER_ENABLED", Equals: "true"},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	disabled, err := store.Start(StartOptions{ProgramID: registered.ID, Serials: []string{"phone-1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, store, disabled[0].ID)
+	if got := findRun(t, store, disabled[0].ID); len(got.Companions) != 0 {
+		t.Fatalf("disabled companions = %+v, want none", got.Companions)
+	}
+
+	enabled, err := store.Start(StartOptions{
+		ProgramID: registered.ID, Serials: []string{"phone-1"}, Variables: map[string]string{"HELPER_ENABLED": "true"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, store, enabled[0].ID)
+	run := findRun(t, store, enabled[0].ID)
+	if run.Status != RunStatusExited || len(run.Companions) != 1 || run.Companions[0].PID != 0 {
+		t.Fatalf("run = %+v, want exited run with stopped companion", run)
+	}
+	stdout, _, err := store.Logs(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout, "main started") || !strings.Contains(stdout, "helper started") {
+		t.Fatalf("shared stdout = %q", stdout)
+	}
+}
+
+func TestRequiredCompanionExitFailsRun(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixtures require Unix process groups")
+	}
+
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "main.sh"), []byte("#!/bin/sh\nsleep 10\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "helper.sh"), []byte("#!/bin/sh\nprintf 'helper failed\\n' >&2\nexit 7\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(filepath.Join(root, "programs"), fakeDevices{
+		devices: []node.DeviceInfo{{Serial: "phone-1", State: "device", NodeID: "node-1"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registered, err := registerTestProgram(t, store, source, RegisterUploadOptions{
+		Name:  "required companion",
+		Entry: Entry{Command: "main.sh", Companions: []CompanionEntry{{ID: "helper", Command: "helper.sh", Required: true}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, err := store.Start(StartOptions{ProgramID: registered.ID, Serials: []string{"phone-1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, store, runs[0].ID)
+	run := findRun(t, store, runs[0].ID)
+	if run.Status != RunStatusFailed || !strings.Contains(run.Error, "required companion helper exited") {
+		t.Fatalf("run status/error = %s %q", run.Status, run.Error)
+	}
+}
+
+func TestOptionalCompanionStartFailureDoesNotFailRun(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture requires Unix")
+	}
+
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "main.sh"), []byte("#!/bin/sh\nprintf 'main completed\\n'\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(filepath.Join(root, "programs"), fakeDevices{
+		devices: []node.DeviceInfo{{Serial: "phone-1", State: "device", NodeID: "node-1"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registered, err := registerTestProgram(t, store, source, RegisterUploadOptions{
+		Name: "optional companion",
+		Entry: Entry{
+			Command:    "main.sh",
+			Companions: []CompanionEntry{{ID: "optional", Command: "missing-optional-helper"}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, err := store.Start(StartOptions{ProgramID: registered.ID, Serials: []string{"phone-1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, store, runs[0].ID)
+	run := findRun(t, store, runs[0].ID)
+	if run.Status != RunStatusExited {
+		t.Fatalf("run status = %q, want exited; error = %q", run.Status, run.Error)
+	}
+	if len(run.Companions) != 1 || run.Companions[0].Error == "" {
+		t.Fatalf("optional companion = %+v, want recorded start error", run.Companions)
 	}
 }
 
@@ -364,6 +570,70 @@ func TestLoadRunsMarksActiveRunsLost(t *testing.T) {
 	}
 	if runs[0].CompletedAt != nil {
 		t.Fatalf("CompletedAt = %v, want nil", runs[0].CompletedAt)
+	}
+}
+
+func TestListRunsReconcilesDeadActiveProcess(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("/bin/sh is not available on Windows")
+	}
+
+	root := t.TempDir()
+	store, err := NewStore(filepath.Join(root, "programs"), fakeDevices{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command("/bin/sh", "-c", "true")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatal(err)
+	}
+
+	workspace := filepath.Join(store.instanceDir(), "dead-active-run")
+	if err := os.MkdirAll(workspace, 0700); err != nil {
+		t.Fatal(err)
+	}
+	run := &Run{
+		ID:        "dead-active-run",
+		ProgramID: "program-1",
+		Serial:    "phone-1",
+		NodeID:    "node-1",
+		Workspace: workspace,
+		Status:    RunStatusRunning,
+		PID:       cmd.Process.Pid,
+		StartedAt: time.Now().UTC(),
+	}
+	store.mu.Lock()
+	store.runs[run.ID] = &runState{run: run, cmd: cmd}
+	store.mu.Unlock()
+
+	runs := store.ListRuns()
+	if len(runs) != 1 {
+		t.Fatalf("len(runs) = %d, want 1", len(runs))
+	}
+	if runs[0].Status != RunStatusLost {
+		t.Fatalf("Status = %q, want %q", runs[0].Status, RunStatusLost)
+	}
+	if runs[0].PID != 0 {
+		t.Fatalf("PID = %d, want 0", runs[0].PID)
+	}
+	if !strings.Contains(runs[0].Error, "process finished") {
+		t.Fatalf("Error = %q, want process finished message", runs[0].Error)
+	}
+
+	var persisted Run
+	data, err := os.ReadFile(filepath.Join(workspace, "run.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Status != RunStatusLost {
+		t.Fatalf("persisted Status = %q, want %q", persisted.Status, RunStatusLost)
 	}
 }
 
@@ -590,6 +860,70 @@ func TestStopMarksRunStopped(t *testing.T) {
 	stopped := findRun(t, store, started[0].ID)
 	if stopped.Status != RunStatusStopped {
 		t.Fatalf("Status = %q, want %q", stopped.Status, RunStatusStopped)
+	}
+}
+
+func TestStopReconcilesAlreadyFinishedProcess(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("/bin/sh is not available on Windows")
+	}
+
+	root := t.TempDir()
+	store, err := NewStore(filepath.Join(root, "programs"), fakeDevices{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command("/bin/sh", "-c", "true")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatal(err)
+	}
+
+	workspace := filepath.Join(store.instanceDir(), "finished-run")
+	if err := os.MkdirAll(workspace, 0700); err != nil {
+		t.Fatal(err)
+	}
+	run := &Run{
+		ID:        "finished-run",
+		ProgramID: "program-1",
+		Serial:    "phone-1",
+		NodeID:    "node-1",
+		Workspace: workspace,
+		Status:    RunStatusRunning,
+		PID:       cmd.Process.Pid,
+		StartedAt: time.Now().UTC(),
+	}
+	store.mu.Lock()
+	store.runs[run.ID] = &runState{run: run, cmd: cmd}
+	store.mu.Unlock()
+
+	stopped, err := store.Stop(StopOptions{ID: run.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stopped.Status != RunStatusStopped {
+		t.Fatalf("Status = %q, want %q", stopped.Status, RunStatusStopped)
+	}
+	if stopped.PID != 0 {
+		t.Fatalf("PID = %d, want 0", stopped.PID)
+	}
+	if stopped.CompletedAt == nil {
+		t.Fatal("CompletedAt is nil, want stop timestamp")
+	}
+
+	var persisted Run
+	data, err := os.ReadFile(filepath.Join(workspace, "run.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Status != RunStatusStopped {
+		t.Fatalf("persisted Status = %q, want %q", persisted.Status, RunStatusStopped)
 	}
 }
 

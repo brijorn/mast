@@ -10,25 +10,78 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/brijorn/mast/internal/node"
 	"github.com/google/uuid"
 )
 
+const runSchemaVersion = 1
+
+func cloneRun(run *Run) Run {
+	clone := *run
+	clone.Env = make(map[string]string, len(run.Env))
+	for key, value := range run.Env {
+		clone.Env[key] = value
+	}
+	clone.CmdArgs = append([]string(nil), run.CmdArgs...)
+	clone.Companions = append([]RunProcess(nil), run.Companions...)
+	for index := range clone.Companions {
+		clone.Companions[index].CmdArgs = append([]string(nil), run.Companions[index].CmdArgs...)
+	}
+	return clone
+}
+
+func nextRunSnapshot(run *Run) Run {
+	run.SchemaVersion = runSchemaVersion
+	run.Revision++
+	return cloneRun(run)
+}
+
 func (s *Store) ListRuns() []Run {
+	s.reconcileActiveRunProcesses()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	runs := make([]Run, 0, len(s.runs))
 	for _, state := range s.runs {
-		run := *state.run
+		run := cloneRun(state.run)
 		runs = append(runs, run)
 	}
 	sort.Slice(runs, func(i, j int) bool {
 		return runs[i].StartedAt.Before(runs[j].StartedAt)
 	})
 	return runs
+}
+
+func (s *Store) reconcileActiveRunProcesses() {
+	var changed []Run
+
+	s.mu.Lock()
+	for _, state := range s.runs {
+		run := state.run
+		if state.stopping || !runIsActive(run) || run.PID <= 0 {
+			continue
+		}
+		alive, matches := runProcessStatus(run)
+		if alive && matches {
+			continue
+		}
+		if alive {
+			markRunLost(run, "process pid is now owned by another process")
+		} else {
+			markRunLost(run, "process finished before Mast collected exit status")
+			run.PID = 0
+		}
+		changed = append(changed, nextRunSnapshot(run))
+	}
+	s.mu.Unlock()
+
+	for _, run := range changed {
+		writeRunJSONBestEffort(filepath.Join(run.Workspace, "run.json"), &run)
+	}
 }
 
 func (s *Store) Start(opts StartOptions) ([]Run, error) {
@@ -77,29 +130,119 @@ func (s *Store) Stop(opts StopOptions) (*Run, error) {
 	}
 	state.run.AutostartPaused = opts.AutostartPaused
 	if state.cmd == nil || state.cmd.Process == nil {
-		if state.run.Status == RunStatusRunning || state.run.Status == RunStatusStarting {
-			now := time.Now().UTC()
-			state.run.Status = RunStatusStopped
-			state.run.CompletedAt = &now
-			state.run.ExitCode = nil
-			state.run.Error = ""
-		}
-		run := *state.run
+		markRunStopped(state.run)
+		run := nextRunSnapshot(state.run)
 		s.mu.Unlock()
-		_ = writeJSON(filepath.Join(run.Workspace, "run.json"), &run)
+		writeRunJSONBestEffort(filepath.Join(run.Workspace, "run.json"), &run)
 		return &run, nil
 	}
 	state.stopping = true
 	if state.run.PID == 0 {
 		state.run.PID = state.cmd.Process.Pid
 	}
-	run := *state.run
+	run := nextRunSnapshot(state.run)
 	s.mu.Unlock()
-	_ = writeJSON(filepath.Join(run.Workspace, "run.json"), &run)
+	writeRunJSONBestEffort(filepath.Join(run.Workspace, "run.json"), &run)
 	if err := killRunProcess(&run); err != nil {
+		if alive, _ := runProcessStatus(&run); !alive {
+			s.mu.Lock()
+			state := s.runs[opts.ID]
+			if state == nil {
+				s.mu.Unlock()
+				return nil, errors.New("run not found")
+			}
+			markRunStopped(state.run)
+			run = nextRunSnapshot(state.run)
+			s.mu.Unlock()
+			writeRunJSONBestEffort(filepath.Join(run.Workspace, "run.json"), &run)
+			return &run, nil
+		}
 		return nil, err
 	}
 	return &run, nil
+}
+
+func (s *Store) RequestStop(id string) (*Run, error) {
+	s.mu.Lock()
+	state := s.runs[id]
+	if state == nil {
+		s.mu.Unlock()
+		return nil, errors.New("run not found")
+	}
+	if !runIsActive(state.run) {
+		s.mu.Unlock()
+		return nil, errors.New("run is not active")
+	}
+	if state.run.StopRequestedAt == nil {
+		now := time.Now().UTC()
+		state.run.StopRequestedAt = &now
+		state.run.StopAcknowledgedAt = nil
+	}
+	run := nextRunSnapshot(state.run)
+	s.mu.Unlock()
+	if err := writeRunJSON(filepath.Join(run.Workspace, "run.json"), &run); err != nil {
+		return nil, err
+	}
+	return &run, nil
+}
+
+func (s *Store) StopRequest(id string) (*StopRequest, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state := s.runs[id]
+	if state == nil {
+		return nil, errors.New("run not found")
+	}
+	return &StopRequest{RequestedAt: state.run.StopRequestedAt, AcknowledgedAt: state.run.StopAcknowledgedAt}, nil
+}
+
+func (s *Store) AcknowledgeStop(id string) (*Run, error) {
+	s.mu.Lock()
+	state := s.runs[id]
+	if state == nil {
+		s.mu.Unlock()
+		return nil, errors.New("run not found")
+	}
+	if state.run.StopRequestedAt == nil {
+		s.mu.Unlock()
+		return nil, errors.New("stop has not been requested")
+	}
+	if state.run.StopAcknowledgedAt == nil {
+		now := time.Now().UTC()
+		state.run.StopAcknowledgedAt = &now
+	}
+	run := nextRunSnapshot(state.run)
+	s.mu.Unlock()
+	if err := writeRunJSON(filepath.Join(run.Workspace, "run.json"), &run); err != nil {
+		return nil, err
+	}
+	return &run, nil
+}
+
+func markRunStopped(run *Run) {
+	if !runIsActive(run) {
+		return
+	}
+	now := time.Now().UTC()
+	run.Status = RunStatusStopped
+	run.CompletedAt = &now
+	run.ExitCode = nil
+	run.Error = ""
+	run.PID = 0
+}
+
+func markRunLost(run *Run, message string) {
+	if !runIsActive(run) {
+		return
+	}
+	run.Status = RunStatusLost
+	run.CompletedAt = nil
+	run.ExitCode = nil
+	run.Error = message
+}
+
+func runIsActive(run *Run) bool {
+	return run.Status == RunStatusRunning || run.Status == RunStatusStarting
 }
 
 func (s *Store) SetRunAutostart(id string, enabled bool) (*Run, error) {
@@ -122,10 +265,10 @@ func (s *Store) SetRunAutostart(id string, enabled bool) (*Run, error) {
 		state.run.AutostartPaused = false
 	}
 	state.run.Autostart = enabled
-	run := *state.run
+	run := nextRunSnapshot(state.run)
 	s.mu.Unlock()
 
-	if err := writeJSON(filepath.Join(run.Workspace, "run.json"), &run); err != nil {
+	if err := writeRunJSON(filepath.Join(run.Workspace, "run.json"), &run); err != nil {
 		return nil, err
 	}
 	return &run, nil
@@ -135,6 +278,7 @@ func (s *Store) Shutdown() {
 	s.monitorCancel()
 	s.mu.Lock()
 	states := make([]*runState, 0, len(s.runs))
+	runs := make([]Run, 0, len(s.runs))
 	for _, state := range s.runs {
 		if state.cmd != nil && state.cmd.Process != nil &&
 			(state.run.Status == RunStatusRunning || state.run.Status == RunStatusStarting) {
@@ -143,15 +287,16 @@ func (s *Store) Shutdown() {
 				state.run.PID = state.cmd.Process.Pid
 			}
 			states = append(states, state)
+			runs = append(runs, cloneRun(state.run))
 		}
 	}
 	s.mu.Unlock()
 
-	for _, state := range states {
-		_ = killRunProcess(state.run)
+	for index := range runs {
+		_ = killRunProcess(&runs[index])
 	}
-	for _, state := range states {
-		_ = waitForRunProcessExit(state.run, 2*time.Second)
+	for index := range runs {
+		_ = waitForRunProcessExit(&runs[index], 2*time.Second)
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -198,6 +343,95 @@ func mergeVariables(base map[string]string, overrides map[string]string) map[str
 		merged[key] = value
 	}
 	return merged
+}
+
+func companionEnabled(companion CompanionEntry, variables map[string]string) bool {
+	variable := strings.TrimSpace(companion.EnabledWhen.Variable)
+	if variable == "" {
+		return true
+	}
+	want := strings.TrimSpace(companion.EnabledWhen.Equals)
+	got, ok := variables[variable]
+	if !ok {
+		got = variables[strings.ToLower(variable)]
+	}
+	return strings.EqualFold(strings.TrimSpace(got), want)
+}
+
+func (s *Store) resolveRunCommand(workspace, command string, args []string) (string, []string, error) {
+	if localCommand := filepath.Join(workspace, command); fileExists(localCommand) {
+		if err := ensureLocalEntryExecutable(localCommand); err != nil {
+			return "", nil, err
+		}
+		command = localCommand
+	}
+	return s.runnerCommand(command, args)
+}
+
+func (s *Store) startRunProcesses(state *runState, stdout, stderr io.Writer, env map[string]string) error {
+	run := state.run
+	cmd := s.startCmd(run.Cmd, run.CmdArgs...)
+	configureRunCommand(cmd)
+	cmd.Dir = run.Workspace
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	cmd.Env = mergeEnv(os.Environ(), env)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	state.cmd = cmd
+	run.PID = cmd.Process.Pid
+
+	for index := range run.Companions {
+		process := &run.Companions[index]
+		companionCmd := s.startCmd(process.Cmd, process.CmdArgs...)
+		configureCompanionRunCommand(companionCmd, run.PID)
+		companionCmd.Dir = run.Workspace
+		companionCmd.Stdout = stdout
+		companionCmd.Stderr = stderr
+		companionCmd.Env = mergeEnv(os.Environ(), env)
+		if err := companionCmd.Start(); err != nil {
+			if !process.Required {
+				process.Error = err.Error()
+				continue
+			}
+			s.mu.Lock()
+			state.mainExited = true
+			s.mu.Unlock()
+			_ = killRunProcess(run)
+			_ = cmd.Wait()
+			state.companionWG.Wait()
+			return fmt.Errorf("start companion %s: %w", process.ID, err)
+		}
+		process.PID = companionCmd.Process.Pid
+		process.Error = ""
+		state.companionCmds = append(state.companionCmds, companionCmd)
+		state.companionWG.Add(1)
+		go s.waitCompanion(state, process.ID, process.Required, companionCmd)
+	}
+	return nil
+}
+
+func (s *Store) waitCompanion(state *runState, id string, required bool, cmd *exec.Cmd) {
+	err := cmd.Wait()
+	state.companionWG.Done()
+	if !required {
+		return
+	}
+
+	s.mu.Lock()
+	if state.stopping || state.mainExited || !runIsActive(state.run) {
+		s.mu.Unlock()
+		return
+	}
+	message := fmt.Sprintf("required companion %s exited", id)
+	if err != nil {
+		message += ": " + err.Error()
+	}
+	state.companionFailure = message
+	run := cloneRun(state.run)
+	s.mu.Unlock()
+	_ = killRunProcess(&run)
 }
 
 func (s *Store) programForRun(run *Run) Program {
@@ -303,28 +537,32 @@ func (s *Store) Resume(opts ResumeOptions) (*Run, error) {
 		return nil, err
 	}
 
-	cmd := s.startCmd(run.Cmd, run.CmdArgs...)
-	configureRunCommand(cmd)
-	cmd.Dir = run.Workspace
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
 	env := withDefaultRunEnv(variables)
-	cmd.Env = mergeEnv(os.Environ(), env)
 
 	s.mu.Lock()
 	run.Status = RunStatusStarting
 	run.AutostartPaused = false
+	run.StopRequestedAt = nil
+	run.StopAcknowledgedAt = nil
 	run.ExitCode = nil
 	run.Error = ""
 	run.CompletedAt = nil
 	run.PID = 0
+	for index := range run.Companions {
+		run.Companions[index].PID = 0
+		run.Companions[index].Error = ""
+	}
 	run.StartedAt = time.Now().UTC()
 	state.stopping = false
+	state.mainExited = false
+	state.companionFailure = ""
+	state.companionCmds = nil
+	startingSnapshot := nextRunSnapshot(run)
 	s.mu.Unlock()
 
-	_ = writeJSON(filepath.Join(run.Workspace, "run.json"), run)
+	writeRunJSONBestEffort(filepath.Join(startingSnapshot.Workspace, "run.json"), &startingSnapshot)
 
-	if err := cmd.Start(); err != nil {
+	if err := s.startRunProcesses(state, stdout, stderr, env); err != nil {
 		_ = stdout.Close()
 		_ = stderr.Close()
 		s.mu.Lock()
@@ -332,17 +570,17 @@ func (s *Store) Resume(opts ResumeOptions) (*Run, error) {
 		run.Error = err.Error()
 		now := time.Now().UTC()
 		run.CompletedAt = &now
-		_ = writeJSON(filepath.Join(run.Workspace, "run.json"), run)
+		failedSnapshot := nextRunSnapshot(run)
 		s.mu.Unlock()
+		writeRunJSONBestEffort(filepath.Join(failedSnapshot.Workspace, "run.json"), &failedSnapshot)
 		return nil, err
 	}
 
 	s.mu.Lock()
 	run.Status = RunStatusRunning
-	run.PID = cmd.Process.Pid
-	state.cmd = cmd
-	_ = writeJSON(filepath.Join(run.Workspace, "run.json"), run)
+	runningSnapshot := nextRunSnapshot(run)
 	s.mu.Unlock()
+	writeRunJSONBestEffort(filepath.Join(runningSnapshot.Workspace, "run.json"), &runningSnapshot)
 
 	go s.waitRun(state, stdout, stderr)
 	return run, nil
@@ -400,40 +638,56 @@ func (s *Store) startOne(p Program, device node.DeviceInfo, nodes []node.NodeInf
 	}
 
 	env := defaultRunEnv()
+	for key, value := range s.standardDeviceEnv(device) {
+		env[key] = value
+	}
 	for key, value := range adbEnv(device, nodes) {
 		env[key] = value
 	}
 	for key, value := range runVariables {
 		env[key] = value
 	}
+	env["MAST_RUN_ID"] = id
 
 	command := p.Entry.Command
 	resolvedArgs := make([]string, len(p.Entry.Args))
 	for i, arg := range p.Entry.Args {
 		resolvedArgs[i] = resolveValue(arg, runVariables, device)
 	}
-	if localCommand := filepath.Join(workspace, command); fileExists(localCommand) {
-		if err := ensureLocalEntryExecutable(localCommand); err != nil {
-			return nil, err
-		}
-		command = localCommand
-	}
-	command, args, err := s.runnerCommand(command, resolvedArgs)
+	command, args, err := s.resolveRunCommand(workspace, command, resolvedArgs)
 	if err != nil {
 		return nil, err
 	}
 
 	run := &Run{
-		ID:        id,
-		ProgramID: p.ID,
-		Serial:    device.Serial,
-		NodeID:    device.NodeID,
-		Workspace: workspace,
-		Status:    RunStatusStarting,
-		Env:       env,
-		Cmd:       command,
-		CmdArgs:   args,
-		StartedAt: time.Now().UTC(),
+		SchemaVersion: runSchemaVersion,
+		Revision:      1,
+		ID:            id,
+		ProgramID:     p.ID,
+		Serial:        device.Serial,
+		NodeID:        device.NodeID,
+		Workspace:     workspace,
+		Status:        RunStatusStarting,
+		Env:           env,
+		Cmd:           command,
+		CmdArgs:       args,
+		StartedAt:     time.Now().UTC(),
+	}
+	for _, companion := range p.Entry.Companions {
+		if !companionEnabled(companion, runVariables) {
+			continue
+		}
+		resolvedCompanionArgs := make([]string, len(companion.Args))
+		for index, arg := range companion.Args {
+			resolvedCompanionArgs[index] = resolveValue(arg, runVariables, device)
+		}
+		companionCommand, companionArgs, err := s.resolveRunCommand(workspace, companion.Command, resolvedCompanionArgs)
+		if err != nil {
+			return nil, fmt.Errorf("resolve companion %s: %w", companion.ID, err)
+		}
+		run.Companions = append(run.Companions, RunProcess{
+			ID: companion.ID, Cmd: companionCommand, CmdArgs: companionArgs, Required: companion.Required,
+		})
 	}
 	stdout, err := s.newRunLogWriter(run, filepath.Join(workspace, "stdout.log"), "stdout")
 	if err != nil {
@@ -444,31 +698,25 @@ func (s *Store) startOne(p Program, device node.DeviceInfo, nodes []node.NodeInf
 		_ = stdout.Close()
 		return nil, err
 	}
-	cmd := s.startCmd(command, args...)
-	configureRunCommand(cmd)
-	cmd.Dir = workspace
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
-	cmd.Env = mergeEnv(os.Environ(), env)
-	if err := writeJSON(filepath.Join(workspace, "run.json"), run); err != nil {
+	state := &runState{run: run}
+	if err := writeRunJSON(filepath.Join(workspace, "run.json"), run); err != nil {
 		_ = stdout.Close()
 		_ = stderr.Close()
 		return nil, err
 	}
 
-	if err := cmd.Start(); err != nil {
+	if err := s.startRunProcesses(state, stdout, stderr, env); err != nil {
 		_ = stdout.Close()
 		_ = stderr.Close()
 		return nil, err
 	}
 
-	run.Status = RunStatusRunning
-	run.PID = cmd.Process.Pid
-	state := &runState{run: run, cmd: cmd}
-	_ = writeJSON(filepath.Join(workspace, "run.json"), run)
 	s.mu.Lock()
+	run.Status = RunStatusRunning
 	s.runs[id] = state
+	runSnapshot := nextRunSnapshot(run)
 	s.mu.Unlock()
+	writeRunJSONBestEffort(filepath.Join(workspace, "run.json"), &runSnapshot)
 
 	go s.waitRun(state, stdout, stderr)
 	return run, nil
@@ -476,18 +724,32 @@ func (s *Store) startOne(p Program, device node.DeviceInfo, nodes []node.NodeInf
 
 func (s *Store) waitRun(state *runState, stdout, stderr io.Closer) {
 	err := state.cmd.Wait()
+	s.mu.Lock()
+	state.mainExited = true
+	runForStop := cloneRun(state.run)
+	s.mu.Unlock()
+	if len(state.companionCmds) > 0 {
+		_ = killRunProcess(&runForStop)
+		state.companionWG.Wait()
+	}
 	_ = stdout.Close()
 	_ = stderr.Close()
 
 	now := time.Now().UTC()
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	state.run.CompletedAt = &now
 	state.run.PID = 0
+	for index := range state.run.Companions {
+		state.run.Companions[index].PID = 0
+	}
 	if state.stopping {
 		state.run.ExitCode = nil
 		state.run.Status = RunStatusStopped
 		state.run.Error = ""
+	} else if state.companionFailure != "" {
+		state.run.ExitCode = nil
+		state.run.Status = RunStatusFailed
+		state.run.Error = state.companionFailure
 	} else if err == nil {
 		code := 0
 		state.run.ExitCode = &code
@@ -501,7 +763,9 @@ func (s *Store) waitRun(state *runState, stdout, stderr io.Closer) {
 		state.run.Status = RunStatusFailed
 		state.run.Error = err.Error()
 	}
-	_ = writeJSON(filepath.Join(state.run.Workspace, "run.json"), state.run)
+	completedSnapshot := nextRunSnapshot(state.run)
+	writeRunJSONBestEffort(filepath.Join(completedSnapshot.Workspace, "run.json"), &completedSnapshot)
+	s.mu.Unlock()
 }
 
 // loadRuns scans the instances directory and restores run state from persisted
@@ -525,6 +789,9 @@ func (s *Store) loadRuns() {
 		if err := json.Unmarshal(data, &run); err != nil {
 			continue
 		}
+		if run.SchemaVersion == 0 {
+			run.SchemaVersion = runSchemaVersion
+		}
 		if run.Status == RunStatusRunning || run.Status == RunStatusStarting {
 			alive, matches := runProcessStatus(&run)
 			run.Status = RunStatusLost
@@ -537,7 +804,8 @@ func (s *Store) loadRuns() {
 			default:
 				run.Error = "mast restarted; process ownership was lost"
 			}
-			_ = writeJSON(runFile, &run)
+			snapshot := nextRunSnapshot(&run)
+			writeRunJSONBestEffort(runFile, &snapshot)
 		}
 		s.runs[run.ID] = &runState{run: &run}
 	}

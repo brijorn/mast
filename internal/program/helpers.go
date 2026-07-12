@@ -7,23 +7,97 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/brijorn/mast/internal/node"
 )
 
+var jsonWriteMu sync.Mutex
+
 func writeJSON(path string, value any) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	jsonWriteMu.Lock()
+	defer jsonWriteMu.Unlock()
+	return writeJSONLocked(path, value)
+}
+
+func writeRunJSON(path string, run *Run) error {
+	jsonWriteMu.Lock()
+	defer jsonWriteMu.Unlock()
+	if data, err := os.ReadFile(path); err == nil {
+		var persisted Run
+		if json.Unmarshal(data, &persisted) == nil && persisted.Revision > run.Revision {
+			return nil
+		}
+	}
+	return writeJSONLocked(path, run)
+}
+
+func writeJSONLocked(path string, value any) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(value, "", "  ")
+
+	temp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0600)
+	tempPath := temp.Name()
+	defer func() { _ = os.Remove(tempPath) }()
+
+	if err := temp.Chmod(0600); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	encoder := json.NewEncoder(temp)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(value); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tempPath, path); err != nil {
+		return err
+	}
+	if runtime.GOOS != "windows" {
+		directory, err := os.Open(dir)
+		if err != nil {
+			return err
+		}
+		err = directory.Sync()
+		closeErr := directory.Close()
+		if err != nil {
+			return err
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+	}
+	return nil
+}
+
+func writeJSONBestEffort(path string, value any) {
+	if err := writeJSON(path, value); err != nil {
+		log.Printf("persist %s: %v", path, err)
+	}
+}
+
+func writeRunJSONBestEffort(path string, run *Run) {
+	if err := writeRunJSON(path, run); err != nil {
+		log.Printf("persist %s: %v", path, err)
+	}
 }
 
 func hashDir(root string) (string, error) {
@@ -116,6 +190,10 @@ func findDevice(devices []node.DeviceInfo, serial string) (node.DeviceInfo, bool
 }
 
 func adbEnv(device node.DeviceInfo, nodes []node.NodeInfo) map[string]string {
+	if device.Platform != node.PlatformAndroid {
+		return map[string]string{}
+	}
+
 	env := map[string]string{
 		"ANDROID_SERIAL": device.Serial,
 	}

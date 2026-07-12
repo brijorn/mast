@@ -137,7 +137,10 @@ func (s *Store) resumeAutostartRunIDs(ids []string, errorPrefix string) {
 			state := s.runs[id]
 			if state != nil {
 				state.run.Error = errorPrefix + ": " + err.Error()
-				_ = writeJSON(filepath.Join(state.run.Workspace, "run.json"), state.run)
+				snapshot := nextRunSnapshot(state.run)
+				s.mu.Unlock()
+				writeRunJSONBestEffort(filepath.Join(snapshot.Workspace, "run.json"), &snapshot)
+				continue
 			}
 			s.mu.Unlock()
 		}

@@ -14,17 +14,39 @@ import (
 )
 
 type Store struct {
-	root     string
-	mu       sync.Mutex
-	programs map[string]Program
-	runs     map[string]*runState
-	devices  deviceLister
-	startCmd func(command string, args ...string) *exec.Cmd
-	runners  map[string]string
+	root       string
+	mu         sync.Mutex
+	programs   map[string]Program
+	runs       map[string]*runState
+	devices    deviceLister
+	startCmd   func(command string, args ...string) *exec.Cmd
+	runners    map[string]string
+	mastAPIURL string
 
 	monitorCtx          context.Context
 	monitorCancel       context.CancelFunc
 	observedDeviceReady map[string]bool
+}
+
+func (s *Store) SetMastAPIURL(value string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mastAPIURL = value
+}
+
+func (s *Store) standardDeviceEnv(device node.DeviceInfo) map[string]string {
+	s.mu.Lock()
+	apiURL := s.mastAPIURL
+	s.mu.Unlock()
+	env := map[string]string{
+		"DEVICE_SERIAL":   device.Serial,
+		"DEVICE_PLATFORM": device.Platform,
+		"MAST_NODE_ID":    device.NodeID,
+	}
+	if apiURL != "" {
+		env["MAST_API_URL"] = apiURL
+	}
+	return env
 }
 
 type deviceLister interface {
@@ -34,9 +56,13 @@ type deviceLister interface {
 }
 
 type runState struct {
-	run      *Run
-	cmd      *exec.Cmd
-	stopping bool
+	run              *Run
+	cmd              *exec.Cmd
+	companionCmds    []*exec.Cmd
+	companionWG      sync.WaitGroup
+	companionFailure string
+	mainExited       bool
+	stopping         bool
 }
 
 func NewStore(root string, devices deviceLister) (*Store, error) {

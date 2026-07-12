@@ -41,12 +41,39 @@ Content-Type: multipart/form-data
 |---|---|---|
 | `name` | string | Human-readable program name (optional; defaults to `"unnamed"`) |
 | `slug` | string | Stable program slug (optional; derived from `name` when omitted) |
-| `entry` | JSON string | `{"command":"run.sh","args":[]}` |
+| `entry` | JSON string | Main command plus optional managed companions (below). |
 | `config_file` | string | Path to the config file inside the bundle (optional) |
 | `config_mappings` | JSON string | `[{"section":"Settings","key":"DEVICE_ID","value":"{{phone.serial}}"}]` |
 | `files` | file (multiple) | Each file part's filename is its relative path in the bundle |
 
 Response: `201 Created` with the `Program` JSON object.
+
+### Managed companions
+
+An entry can declare helper processes that share the main run's workspace,
+environment, logs, process group, Stop action, and resume snapshot:
+
+```json
+{
+  "command": "main.exe",
+  "companions": [
+    {
+      "id": "new-game-helper",
+      "command": "bin/new-game-helper",
+      "args": ["run"],
+      "enabled_when": { "variable": "ALT_LAYOUT", "equals": "true" },
+      "required": true
+    }
+  ]
+}
+```
+
+The condition is evaluated only for a new run. The resolved companion command
+is persisted in `run.json`, so Resume reproduces the same process set. A
+required companion that cannot start or exits unexpectedly fails and stops the
+complete run. An optional companion start failure is recorded on that companion
+without preventing the main process from running. Main-process exit and
+explicit Stop terminate all companions.
 
 ### Updating program metadata
 
@@ -115,6 +142,22 @@ metadata when they need to show update state.
 Running instances are never interrupted by an upload — they hold their own
 copy of the bundle files in their instance workspace.
 
+## Standard run environment
+
+Mast injects the device-routing contract into every new run:
+
+| Variable | Meaning |
+|---|---|
+| `MAST_API_URL` | Mast API used by deployed device clients. |
+| `DEVICE_SERIAL` | Selected local or peer device serial. |
+| `DEVICE_PLATFORM` | `android` or `ios`. |
+| `MAST_NODE_ID` | Node that owns the selected device. |
+| `ANDROID_SERIAL` | Android-only compatibility alias for `DEVICE_SERIAL`. |
+
+Standard FrameKit programs use these values to route screenshots and controls
+back through Mast. They do not start independent ADB, WDA, tunnel, or ioslink
+sessions in a deployed workspace.
+
 ---
 
 ## Instance cleanup
@@ -158,6 +201,9 @@ run workspace where the platform supports it, then terminates that process tree
 before starting the replacement. Mast does not compare process argv because
 wrappers such as Wine can replace the visible command line after launch.
 
+The set of enabled companions never changes on Resume, even when variable
+overrides are supplied.
+
 ### Logs
 
 `GET /api/runs/{id}/logs` returns stdout and stderr. Without query parameters,
@@ -200,6 +246,21 @@ pausing autostart, so configured runs come back when Mast is launched again.
 
 When Mast restarts while a run is active, it restores that run as `lost` rather
 than `failed`, because Mast no longer knows whether the program itself failed.
+
+### Cooperative stop
+
+Clients that need graceful cleanup can request, poll, and acknowledge a soft
+stop through `/api/runs/{id}/stop-request` and `/api/runs/{id}/stop-ack`.
+Requesting or acknowledging does not kill the process; the program exits itself
+after cleanup, or the coordinator follows with the normal `/stop` endpoint.
+Both operations are idempotent and retain the first request and acknowledgement
+timestamps.
+
+Each workspace keeps a schema-versioned, monotonically revisioned `run.json`
+recovery checkpoint. Mast writes checkpoints through a same-directory temporary
+file, flushes them, and atomically replaces the prior snapshot so a crash cannot
+leave partially serialized JSON. A delayed older revision cannot replace a
+newer checkpoint.
 
 ---
 

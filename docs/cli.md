@@ -53,6 +53,7 @@ mast config set node_id pixel-proxy
 mast config set advertise_host 100.64.0.10
 mast config set adb_port 5038
 mast config set programs_dir /home/user/.mast/programs
+mast config set device_blacklist android-serial,ios-udid
 mast config set android_enabled true
 mast config set ios_enabled true
 mast config set proxy_enabled true
@@ -70,12 +71,17 @@ api_addr
 advertise_host
 adb_port
 programs_dir
+device_blacklist
 android_enabled
 ios_enabled
 proxy_enabled
 lock_portrait
 runners.<file_extension>
 ```
+
+`device_blacklist` is a comma- or whitespace-separated list of Android serials
+and iOS UDIDs. It is evaluated when Mast starts, so restart Mast after changing
+it.
 
 ## config show
 
@@ -165,6 +171,20 @@ Lists peers saved in `peers.json`.
 
 ```sh
 mast peer ls
+```
+
+## device blacklist
+
+Manages the startup blacklist in `config.json`. Blacklisted Android serials and
+iOS UDIDs are omitted from Mast's device list after the next restart, so normal
+stream, control, screenshot, DNS, and program-run paths cannot connect to them.
+
+```sh
+mast device blacklist add android-serial
+mast device blacklist add ios-udid
+mast device blacklist ls
+mast device blacklist remove ios-udid
+mast device blacklist clear
 ```
 
 ## version

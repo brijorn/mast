@@ -83,11 +83,10 @@ The response uses the same message ID:
         "serial": "remote-123",
         "state": "device",
         "node_id": "node-b",
-        "battery_percent": 81,
-        "power_connected": true,
-        "power_source": "usb",
-        "battery_status": "charging",
-        "power_health": "charging"
+        "battery": {
+          "percent": 81,
+          "state": "charging"
+        }
       }
     ]
   }
@@ -98,8 +97,7 @@ If the listing fails, `payload.error` contains the error string.
 
 ## device_dns_get_request
 
-Requests Android private DNS state for a local device on the destination node.
-`automatic` is true when Android reports private DNS mode as `opportunistic`.
+Requests normalized Android private DNS state for a local device on the destination node.
 
 ```json
 {
@@ -123,35 +121,35 @@ Requests Android private DNS state for a local device on the destination node.
   "timestamp": "2026-06-22T17:00:01Z",
   "payload": {
     "result": {
-      "mode": "opportunistic",
-      "automatic": true
+      "mode": "automatic"
     }
   }
 }
 ```
 
-## device_dns_toggle_request
+## device_dns_set_request
 
-Toggles Android private DNS for a local device on the destination node. Any mode
-that is not `dns.adguard.com` changes to `dns.adguard.com`; `dns.adguard.com`
-changes to private DNS off.
+Sets Android private DNS explicitly for a local device on the destination node.
+Mode is `off`, `automatic`, or `hostname`; hostname mode requires `hostname`.
 
 ```json
 {
-  "type": "device_dns_toggle_request",
+  "type": "device_dns_set_request",
   "id": "message-id",
   "from": "node-a",
   "to": "node-b",
   "timestamp": "2026-06-22T17:00:00Z",
   "payload": {
-    "serial": "remote-123"
+    "serial": "remote-123",
+    "mode": "hostname",
+    "hostname": "dns.adguard.com"
   }
 }
 ```
 
 ```json
 {
-  "type": "device_dns_toggle_response",
+  "type": "device_dns_set_response",
   "id": "message-id",
   "from": "node-b",
   "to": "node-a",
@@ -159,8 +157,7 @@ changes to private DNS off.
   "payload": {
     "result": {
       "mode": "hostname",
-      "hostname": "dns.adguard.com",
-      "automatic": false
+      "hostname": "dns.adguard.com"
     }
   }
 }

@@ -8,13 +8,18 @@ network.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/devices` | List local and peer Android devices. |
+| `GET` | `/api/devices` | List local and peer Android and iOS devices. |
 | `GET` | `/api/devices/{serial}/screenshot` | Capture a PNG screenshot from a device. |
+| `GET` | `/api/devices/{serial}/geometry` | Read screenshot-pixel and input-coordinate geometry. |
 | `GET` | `/api/devices/{serial}/dns` | Read Android private DNS mode for a device. |
-| `POST` | `/api/devices/{serial}/dns/toggle` | Toggle Android private DNS between off and AdGuard. |
+| `PUT` | `/api/devices/{serial}/dns` | Set Android private DNS explicitly. |
 | `GET` | `/api/nodes` | List the local node and connected peers. |
 | `GET` | `/api/nodes/{id}/config` | Read local or peer node config. |
 | `PUT` | `/api/nodes/{id}/config` | Update local or peer node config. |
+| `GET` | `/api/nodes/{id}/device-blacklist` | Read a node's startup device blacklist. |
+| `PUT` | `/api/nodes/{id}/device-blacklist` | Replace a node's startup device blacklist. |
+| `POST` | `/api/nodes/{id}/device-blacklist` | Add one serial to a node's startup device blacklist. |
+| `DELETE` | `/api/nodes/{id}/device-blacklist` | Remove one serial from a node's startup device blacklist. |
 | `GET` | `/api/update` | Check the local node for a Mast release update. |
 | `POST` | `/api/update` | Apply a Mast release update on the local node. |
 | `GET` | `/api/nodes/{id}/update` | Check a local or peer node for a Mast release update. |
@@ -38,6 +43,9 @@ network.
 | `GET` | `/api/runs` | List program runs. |
 | `POST` | `/api/runs` | Start program runs. |
 | `POST` | `/api/runs/{id}/stop` | Stop a run. |
+| `POST` | `/api/runs/{id}/stop-request` | Request cooperative run shutdown. |
+| `GET` | `/api/runs/{id}/stop-request` | Read cooperative shutdown state. |
+| `POST` | `/api/runs/{id}/stop-ack` | Acknowledge a cooperative shutdown request. |
 | `POST` | `/api/runs/{id}/resume` | Resume a completed, stopped, failed, or lost run. |
 | `PUT` | `/api/runs/{id}/autostart` | Set run autostart. |
 | `GET` | `/api/runs/{id}/logs` | Read run logs, optionally by byte offset. |
@@ -49,28 +57,83 @@ network.
 GET /api/devices
 ```
 
-Returns Android devices visible to the local node and Android-enabled peers.
+Returns Android and iOS devices visible to the local node and enabled peers.
+Devices in a node's startup blacklist are omitted and cannot be selected for
+streams, screenshots, control, DNS, or program runs through normal serial
+lookup.
 
 ```json
 [
   {
     "serial": "local-123",
+    "platform": "android",
     "state": "device",
-    "battery_percent": 81,
-    "power_connected": true,
-    "power_source": "usb",
-    "battery_status": "charging",
-    "power_health": "charging",
-    "battery_current_now": 432000,
-    "battery_current_avg": 380000,
-    "battery_trend_percent_per_hour": 6.4,
+    "battery": {
+      "percent": 81,
+      "state": "charging"
+    },
     "node_id": "node-a"
   }
 ]
 ```
 
-Battery and power fields are omitted when Android does not expose that detail or
-the device is not in a usable `device` state.
+Battery is omitted when Android does not expose usable battery information or
+the device is not ready. `state` is one of `charging`, `holding`, `full`,
+`discharging`, `plugged_draining`, or `unknown`. Mast derives this semantic
+state from Android power, current, and trend telemetry; those raw inputs are not
+part of the public device contract.
+
+## Device Blacklist
+
+The device blacklist is stored in node config and evaluated when Mast starts.
+Changing it through the API persists the next-start value and reports that a
+restart is required.
+
+```http
+GET /api/nodes/{id}/device-blacklist
+```
+
+```json
+{
+  "serials": ["android-serial", "ios-udid"]
+}
+```
+
+Replace the list:
+
+```http
+PUT /api/nodes/{id}/device-blacklist
+Content-Type: application/json
+
+{"serials":["android-serial","ios-udid"]}
+```
+
+Add or remove one serial:
+
+```http
+POST /api/nodes/{id}/device-blacklist
+Content-Type: application/json
+
+{"serial":"ios-udid"}
+```
+
+```http
+DELETE /api/nodes/{id}/device-blacklist
+Content-Type: application/json
+
+{"serial":"ios-udid"}
+```
+
+Successful mutation response:
+
+```json
+{
+  "serials": ["android-serial", "ios-udid"],
+  "changed_keys": ["device_blacklist"],
+  "restart_required": true,
+  "restart_required_keys": ["device_blacklist"]
+}
+```
 
 ## Capture Screenshot
 
@@ -79,6 +142,29 @@ GET /api/devices/{serial}/screenshot
 ```
 
 Returns a PNG screenshot for a local or peer-owned device.
+
+## Device Geometry
+
+```http
+GET /api/devices/{serial}/geometry
+```
+
+Returns the platform, orientation, screenshot pixel size, and input coordinate
+size for a local or peer-owned device. Android commonly reports matching
+spaces. iOS screenshots may be physical pixels while ioslink/WDA inputs use
+logical coordinates.
+
+```json
+{
+  "serial": "ios-udid",
+  "platform": "ios",
+  "orientation": "portrait",
+  "screenshot_width": 1179,
+  "screenshot_height": 2556,
+  "input_width": 393,
+  "input_height": 852
+}
+```
 
 Successful response:
 
@@ -98,26 +184,28 @@ Returns Android private DNS state for a local or peer-owned device.
 
 ```json
 {
-  "mode": "opportunistic",
-  "automatic": true
+  "mode": "automatic"
 }
 ```
 
 ```http
-POST /api/devices/{serial}/dns/toggle
+PUT /api/devices/{serial}/dns
+Content-Type: application/json
 ```
 
-When the device is not using `dns.adguard.com`, Mast sets private DNS to
-`dns.adguard.com`. When the device is using `dns.adguard.com`, Mast turns
-private DNS off. The response is the device DNS state after the change.
+Set private DNS off or automatic with `{ "mode": "off" }` or
+`{ "mode": "automatic" }`. Hostname mode requires a hostname:
 
 ```json
 {
   "mode": "hostname",
-  "hostname": "dns.adguard.com",
-  "automatic": false
+  "hostname": "dns.adguard.com"
 }
 ```
+
+The response is the normalized device DNS state after the write. Read responses
+may use `unknown` when Android reports a mode Mast does not recognize; `unknown`
+is not accepted as a write mode.
 
 ## List Nodes
 
@@ -172,6 +260,7 @@ Returns the selected local or peer node's persisted runtime config.
   "advertise_host": "127.0.0.1",
   "adb_port": 5037,
   "programs_dir": "/home/user/.mast/programs",
+  "device_blacklist": ["android-serial", "ios-udid"],
   "android_enabled": true,
   "ios_enabled": false,
   "proxy_enabled": false,
@@ -201,6 +290,7 @@ as a `runners` object or as `runners.<extension>` keys.
     "ios_enabled": false,
     "proxy_enabled": true,
     "lock_portrait": true,
+    "device_blacklist": "android-serial,ios-udid",
     "adb_port": 5038,
     "api_addr": ":7001",
     "runners": {
@@ -222,6 +312,7 @@ Response body:
     "advertise_host": "127.0.0.1",
     "adb_port": 5038,
     "programs_dir": "/home/user/.mast/programs",
+    "device_blacklist": ["android-serial", "ios-udid"],
     "android_enabled": true,
     "ios_enabled": false,
     "proxy_enabled": true,
@@ -230,20 +321,21 @@ Response body:
       ".py": "python3"
     }
   },
-  "changed_keys": ["adb_port", "android_enabled", "api_addr", "lock_portrait", "node_id", "proxy_enabled", "runners..py"],
+  "changed_keys": ["adb_port", "android_enabled", "api_addr", "device_blacklist", "lock_portrait", "node_id", "proxy_enabled", "runners..py"],
   "restart_required": true,
-  "restart_required_keys": ["api_addr", "node_id"]
+  "restart_required_keys": ["api_addr", "device_blacklist", "node_id"]
 }
 ```
 
 Supported config keys are `node_id`, `bind_addr`, `proxy_addr`, `api_addr`,
 `advertise_host`, `adb_port`, `programs_dir`, `android_enabled`, `ios_enabled`,
-`proxy_enabled`, `lock_portrait`, and `runners.<file_extension>`.
+`proxy_enabled`, `lock_portrait`, `device_blacklist`, and
+`runners.<file_extension>`.
 
-Listener and directory fields such as `bind_addr`, `api_addr`, `proxy_addr`, and
-`programs_dir` are persisted immediately but require a restart to fully take
-effect. Changing `node_id` also requires a restart because it changes the
-peer identity advertised by the running node.
+Listener, directory, and startup device fields such as `bind_addr`, `api_addr`,
+`proxy_addr`, `programs_dir`, and `device_blacklist` are persisted immediately
+but require a restart to fully take effect. Changing `node_id` also requires a
+restart because it changes the peer identity advertised by the running node.
 
 Runtime fields such as Android/iOS visibility, ADB port, advertised host, proxy
 enablement, portrait locking, and runner mappings are applied to the running
@@ -386,6 +478,8 @@ Starts a scrcpy stream for a device serial. Only one stream start is allowed per
 serial at a time; concurrent requests for the same serial wait for the same
 startup result. If `no_control` is false or omitted, `turn_screen_off` defaults
 to true.
+Android H.264 sessions that stop producing packets for ten seconds are treated
+as unhealthy and replaced on the next start or video-subscription request.
 
 Request body:
 
@@ -687,6 +781,9 @@ template variables are covered in [Programs](programs.md). The HTTP surface is:
 | `GET` | `/api/runs` | List known runs. |
 | `POST` | `/api/runs` | Start the current program by slug or content ID. |
 | `POST` | `/api/runs/{id}/stop` | Stop a run, optionally pausing autostart. |
+| `POST` | `/api/runs/{id}/stop-request` | Idempotently request cooperative shutdown. |
+| `GET` | `/api/runs/{id}/stop-request` | Read request and acknowledgement timestamps. |
+| `POST` | `/api/runs/{id}/stop-ack` | Idempotently acknowledge the pending request. |
 | `POST` | `/api/runs/{id}/resume` | Resume the same run ID and workspace. |
 | `PUT` | `/api/runs/{id}/autostart` | Enable or disable autostart for a run. |
 | `GET` | `/api/runs/{id}/logs` | Read stdout/stderr with optional offsets. |
@@ -722,6 +819,23 @@ Stop run request:
 }
 ```
 
+Cooperative shutdown is separate from hard stop. Posting to
+`/api/runs/{id}/stop-request` records `stop_requested_at` on an active run but
+does not terminate it. A program can poll `GET /api/runs/{id}/stop-request`,
+perform its own cleanup, and call `POST /api/runs/{id}/stop-ack`; acknowledgement
+records `stop_acknowledged_at` but also does not terminate the process. Repeated
+request and acknowledgement calls preserve their original timestamps. The
+coordinator must still call `/stop` if the process does not exit itself.
+
+Stop-request response:
+
+```json
+{
+  "requested_at": "2026-07-12T14:00:00Z",
+  "acknowledged_at": "2026-07-12T14:00:01Z"
+}
+```
+
 Autostart request:
 
 ```json
@@ -732,9 +846,12 @@ Autostart request:
 
 ## Coordinate Space and Routing
 
-Tap, touch, and swipe coordinates are scrcpy stream coordinates. Mast reads the
-stream width and height from scrcpy metadata when the stream starts, then uses
-those dimensions when writing control messages.
+Tap, touch, and swipe coordinates are scrcpy stream coordinates while a stream
+is active. Mast reads the stream width and height from scrcpy metadata and uses
+those dimensions when writing control messages. A local Android tap prefers
+that control socket. If no controlled stream exists, tap falls back to
+`adb input tap`; in that streamless case coordinates are Android screenshot
+pixels.
 
 If a device command targets a serial owned by another node, the receiving API
 node routes the command over the peer websocket to the device owner.

@@ -33,7 +33,7 @@ input, program runs, node config, and updates.
 | `GET` | `/api/devices` | List visible devices |
 | `GET` | `/api/devices/{serial}/screenshot` | Capture a device screenshot |
 | `GET` | `/api/devices/{serial}/dns` | Read Android private DNS mode |
-| `POST` | `/api/devices/{serial}/dns/toggle` | Toggle private DNS between off and AdGuard |
+| `PUT` | `/api/devices/{serial}/dns` | Set private DNS mode explicitly |
 | `GET` | `/api/nodes` | List local and connected Mast nodes |
 | `GET` | `/api/nodes/{id}/config` | Read local or peer node config |
 | `PUT` | `/api/nodes/{id}/config` | Update local or peer node config |

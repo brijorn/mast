@@ -13,18 +13,33 @@ func (s *Server) StreamMJPEG(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	stream, err := s.node.GetStream(serial)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if stream.Kind != "mjpeg" {
-		http.Error(w, "active stream is not MJPEG", http.StatusBadRequest)
-		return
-	}
-
-	if err := stream.StreamMJPEG(r.Context(), w); err != nil && !errors.Is(err, r.Context().Err()) {
+	tracked := &trackingResponseWriter{ResponseWriter: w}
+	if err := s.node.StreamMJPEG(r.Context(), serial, tracked); err != nil && !errors.Is(err, r.Context().Err()) {
 		log.Printf("mjpeg stream %s: %v", serial, err)
-		s.node.DropStream(serial, stream)
+		if !tracked.wrote {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	}
+}
+
+type trackingResponseWriter struct {
+	http.ResponseWriter
+	wrote bool
+}
+
+func (w *trackingResponseWriter) WriteHeader(statusCode int) {
+	w.wrote = true
+	w.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (w *trackingResponseWriter) Write(p []byte) (int, error) {
+	w.wrote = true
+	return w.ResponseWriter.Write(p)
+}
+
+func (w *trackingResponseWriter) Flush() {
+	w.wrote = true
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
 	}
 }

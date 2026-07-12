@@ -31,18 +31,39 @@ func (n *Node) Listen() error {
 
 // Connect opens an outgoing peer websocket connection.
 func (n *Node) Connect(addr string) error {
+	u, err := url.Parse(addr)
+	if err != nil {
+		return err
+	}
+	host := u.Hostname()
+	if n.hasPeerConnection(addr, host) {
+		return nil
+	}
+
 	conn, _, err := websocket.DefaultDialer.Dial(addr, nil)
 	if err != nil {
 		return err
 	}
 
-	u, err := url.Parse(addr)
-	if err != nil {
-		return err
-	}
-
-	go n.handleConnection(&PeerConn{conn: conn, Addr: u.Hostname(), Target: addr}, addr)
+	go n.handleConnection(&PeerConn{conn: conn, Addr: host, Target: addr}, addr)
 	return nil
+}
+
+func (n *Node) hasPeerConnection(target string, host string) bool {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	for id, peer := range n.Peers {
+		if peer.Target != "" {
+			if peer.Target == target {
+				return true
+			}
+			continue
+		}
+		if peer.Addr == host || id == host {
+			return true
+		}
+	}
+	return false
 }
 
 func (n *Node) ConnectPersistent(addr string) {
@@ -162,6 +183,7 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				IOSEnabled:     n.IOSEnabled,
 				ProxyEnabled:   n.ProxyEnabled,
 				ADBPort:        n.ADBPort,
+				APIAddr:        n.APIAddr,
 				Version:        version.Version,
 				Commit:         version.Commit,
 				BuildDate:      version.Date,
@@ -194,7 +216,7 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				log.Println("removing peer", id)
 			}
 
-			if addr != "" {
+			if addr != "" && !peer.replaced.Load() {
 				go n.reconnect(addr)
 			}
 			break
@@ -229,6 +251,7 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 
 			n.mu.Lock()
 			if old, exists := n.Peers[raw.From]; exists {
+				old.replaced.Store(true)
 				err := old.conn.Close()
 				if err != nil {
 					return
@@ -238,6 +261,7 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 			peer.IOSEnabled = req.Payload.IOSEnabled
 			peer.ProxyEnabled = req.Payload.ProxyEnabled
 			peer.ADBPort = req.Payload.ADBPort
+			peer.APIAddr = req.Payload.APIAddr
 			peer.Version = req.Payload.Version
 			peer.Commit = req.Payload.Commit
 			peer.BuildDate = req.Payload.BuildDate
@@ -260,6 +284,7 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 							IOSEnabled:     n.IOSEnabled,
 							ProxyEnabled:   n.ProxyEnabled,
 							ADBPort:        n.ADBPort,
+							APIAddr:        n.APIAddr,
 							Version:        version.Version,
 							Commit:         version.Commit,
 							BuildDate:      version.Date,
@@ -312,35 +337,35 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				log.Println("decode list devices request:", err)
 				break
 			}
-			n.handleListDevicesRequest(peer, req)
+			go n.handleListDevicesRequest(peer, req)
 		case transport.TypeDeviceDNSGetRequest:
 			var req transport.DeviceDNSGetRequest
 			if err := json.Unmarshal(message, &req); err != nil {
 				log.Println("decode device dns get request:", err)
 				break
 			}
-			n.handleDeviceDNSGetRequest(peer, req)
-		case transport.TypeDeviceDNSToggleRequest:
-			var req transport.DeviceDNSToggleRequest
+			go n.handleDeviceDNSGetRequest(peer, req)
+		case transport.TypeDeviceDNSSetRequest:
+			var req transport.DeviceDNSSetRequest
 			if err := json.Unmarshal(message, &req); err != nil {
 				log.Println("decode device dns toggle request:", err)
 				break
 			}
-			n.handleDeviceDNSToggleRequest(peer, req)
+			go n.handleDeviceDNSSetRequest(peer, req)
 		case transport.TypeStartStreamRequest:
 			var req transport.StartStreamRequest
 			if err := json.Unmarshal(message, &req); err != nil {
 				log.Println("decode start stream request:", err)
 				break
 			}
-			n.handleStartStreamRequest(peer, req)
+			go n.handleStartStreamRequest(peer, req)
 		case transport.TypeScreenshotRequest:
 			var req transport.ScreenshotRequest
 			if err := json.Unmarshal(message, &req); err != nil {
 				log.Println("decode screenshot request:", err)
 				break
 			}
-			n.handleScreenshotRequest(peer, req)
+			go n.handleScreenshotRequest(peer, req)
 		case transport.TypeStopStreamRequest:
 			var req transport.StopStreamRequest
 			if err := json.Unmarshal(message, &req); err != nil {
@@ -359,7 +384,7 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				break
 			}
 
-			if err := n.tapLocal(req.Payload.Serial, req.Payload.X, req.Payload.Y); err != nil {
+			if err := n.Tap(req.Payload.Serial, req.Payload.X, req.Payload.Y); err != nil {
 				log.Println("tap:", err)
 				break
 			}
@@ -424,7 +449,7 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				log.Println("decode clipboard get request:", err)
 				break
 			}
-			n.handleClipboardGetRequest(peer, req)
+			go n.handleClipboardGetRequest(peer, req)
 		case transport.TypeClipboardSetRequest:
 			var req transport.ClipboardSetRequest
 			if err := json.Unmarshal(message, &req); err != nil {
@@ -442,28 +467,28 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				log.Println("decode update check request:", err)
 				break
 			}
-			n.handleUpdateCheckRequest(peer, req)
+			go n.handleUpdateCheckRequest(peer, req)
 		case transport.TypeUpdateApplyRequest:
 			var req transport.UpdateApplyRequest
 			if err := json.Unmarshal(message, &req); err != nil {
 				log.Println("decode update apply request:", err)
 				break
 			}
-			n.handleUpdateApplyRequest(peer, req)
+			go n.handleUpdateApplyRequest(peer, req)
 		case transport.TypeConfigGetRequest:
 			var req transport.ConfigGetRequest
 			if err := json.Unmarshal(message, &req); err != nil {
 				log.Println("decode config get request:", err)
 				break
 			}
-			n.handleConfigGetRequest(peer, req)
+			go n.handleConfigGetRequest(peer, req)
 		case transport.TypeConfigUpdateRequest:
 			var req transport.ConfigUpdateRequest
 			if err := json.Unmarshal(message, &req); err != nil {
 				log.Println("decode config update request:", err)
 				break
 			}
-			n.handleConfigUpdateRequest(peer, req)
+			go n.handleConfigUpdateRequest(peer, req)
 		}
 	}
 }

@@ -10,16 +10,22 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/brijorn/ioslink"
+	mastconfig "github.com/brijorn/mast/internal/config"
 	"github.com/brijorn/mast/internal/scrcpy"
 	streamcfg "github.com/brijorn/mast/internal/stream"
 	"github.com/brijorn/mast/internal/transport"
 	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
 )
 
 type streamEntry struct {
@@ -43,6 +49,7 @@ type StreamSession struct {
 
 	videoConn        net.Conn
 	videoBroadcaster *videoBroadcaster
+	videoStartedAt   time.Time
 
 	controlConn net.Conn
 	controlMu   sync.Mutex
@@ -68,8 +75,19 @@ type iosTouchPoint struct {
 }
 
 const (
-	peerStreamRPCTimeout = 30 * time.Second
+	peerStreamRPCTimeout     = 30 * time.Second
+	androidVideoStallTimeout = 10 * time.Second
 )
+
+var ErrStreamNotFound = errors.New("stream not found")
+
+func streamNotFoundError(serial string) error {
+	return fmt.Errorf("%w: %s", ErrStreamNotFound, serial)
+}
+
+func IsStreamNotFound(err error) bool {
+	return errors.Is(err, ErrStreamNotFound) || (err != nil && strings.Contains(err.Error(), "stream not found"))
+}
 
 func (s *StreamSession) Stop() error {
 	var err error
@@ -248,14 +266,14 @@ func (n *Node) deviceBySerial(serial string) (DeviceInfo, error) {
 	return *device, nil
 }
 
-func (n *Node) pushScrcpyServer(host string) error {
+func (n *Node) pushScrcpyServer(host string, serial string) error {
 	localPath, cleanup, err := writeScrcpyServerTempFile()
 	if err != nil {
 		return err
 	}
 	defer cleanup()
 
-	return n.adb.Push(n.ctx, host, localPath, scrcpy.RemotePath)
+	return n.adb.Push(n.ctx, host, serial, localPath, scrcpy.RemotePath)
 }
 
 func newScrcpyListener() (net.Listener, int, error) {
@@ -268,13 +286,13 @@ func newScrcpyListener() (net.Listener, int, error) {
 	return ln, port, nil
 }
 
-func (n *Node) createScrcpyReverse(host string, port int) error {
-	return n.adb.Reverse(n.ctx, host, scrcpy.DeviceSocket, port)
+func (n *Node) createScrcpyReverse(host string, serial string, port int) error {
+	return n.adb.Reverse(n.ctx, host, serial, scrcpy.DeviceSocket, port)
 }
 
-func (n *Node) startScrcpyProcess(host string, opts streamcfg.Options) (*exec.Cmd, error) {
+func (n *Node) startScrcpyProcess(host string, serial string, opts streamcfg.Options) (*exec.Cmd, error) {
 	shellArgs := scrcpyServerArgs(opts)
-	return n.adb.StartShell(host, shellArgs...)
+	return n.adb.StartShell(host, serial, shellArgs...)
 }
 
 func scrcpyServerArgs(opts streamcfg.Options) []string {
@@ -302,19 +320,22 @@ func (n *Node) StartStream(serial string, opts streamcfg.Options) (*StreamSessio
 	if device.Platform == PlatformIOS {
 		return n.startLocalIOSStream(serial, opts)
 	}
+	if device.Platform != PlatformAndroid {
+		return nil, fmt.Errorf("device %s has unsupported platform %s", serial, device.Platform)
+	}
 
-	return n.startLocalStreamAfterLookup(serial, opts)
+	return n.startLocalAndroidStreamAfterLookup(serial, opts)
 }
 
-func (n *Node) startLocalStream(serial string, opts streamcfg.Options) (*StreamSession, error) {
-	return n.startLocalStreamWithDeviceCheck(serial, opts, true)
+func (n *Node) startLocalAndroidStream(serial string, opts streamcfg.Options) (*StreamSession, error) {
+	return n.startLocalAndroidStreamWithDeviceCheck(serial, opts, true)
 }
 
-func (n *Node) startLocalStreamAfterLookup(serial string, opts streamcfg.Options) (*StreamSession, error) {
-	return n.startLocalStreamWithDeviceCheck(serial, opts, false)
+func (n *Node) startLocalAndroidStreamAfterLookup(serial string, opts streamcfg.Options) (*StreamSession, error) {
+	return n.startLocalAndroidStreamWithDeviceCheck(serial, opts, false)
 }
 
-func (n *Node) startLocalStreamWithDeviceCheck(serial string, opts streamcfg.Options, checkDevice bool) (*StreamSession, error) {
+func (n *Node) startLocalAndroidStreamWithDeviceCheck(serial string, opts streamcfg.Options, checkDevice bool) (*StreamSession, error) {
 	opts = opts.WithDefaults()
 
 	if opts.TurnScreenOff && opts.NoControl {
@@ -322,8 +343,12 @@ func (n *Node) startLocalStreamWithDeviceCheck(serial string, opts streamcfg.Opt
 	}
 
 	if checkDevice {
-		if _, err := n.localDeviceBySerial(serial); err != nil {
+		device, err := n.localDeviceBySerial(serial)
+		if err != nil {
 			return nil, err
+		}
+		if device.Platform != PlatformAndroid {
+			return nil, fmt.Errorf("device %s is %s, not android", serial, device.Platform)
 		}
 	}
 
@@ -353,7 +378,7 @@ func (n *Node) startLocalStreamWithDeviceCheck(serial string, opts streamcfg.Opt
 		return nil, err
 	}
 
-	if err := n.pushScrcpyServer(host); err != nil {
+	if err := n.pushScrcpyServer(host, serial); err != nil {
 		return nil, err
 	}
 
@@ -362,12 +387,12 @@ func (n *Node) startLocalStreamWithDeviceCheck(serial string, opts streamcfg.Opt
 		return nil, err
 	}
 
-	if err := n.createScrcpyReverse(host, port); err != nil {
+	if err := n.createScrcpyReverse(host, serial, port); err != nil {
 		_ = ln.Close()
 		return nil, err
 	}
 
-	cmd, err := n.startScrcpyProcess(host, opts)
+	cmd, err := n.startScrcpyProcess(host, serial, opts)
 	if err != nil {
 		_ = ln.Close()
 		return nil, err
@@ -395,6 +420,7 @@ func (n *Node) startLocalStreamWithDeviceCheck(serial string, opts streamcfg.Opt
 	}
 
 	session.videoBroadcaster = newVideoBroadcaster()
+	session.videoStartedAt = time.Now()
 	go session.broadcastVideo(func() {
 		n.streamsMu.Lock()
 		entry, ok := n.streams[serial]
@@ -497,17 +523,31 @@ func (n *Node) EnsureStream(serial string, opts streamcfg.Options) (*StreamSessi
 	if device.NodeID != n.ID {
 		return n.startPeerStream(n.ctx, device.NodeID, serial, opts)
 	}
-	if device.Platform == PlatformIOS {
+	switch device.Platform {
+	case PlatformIOS:
 		return n.ensureStream(serial, opts, n.startLocalIOSStream)
+	case PlatformAndroid:
+		return n.ensureStream(serial, opts, n.startLocalAndroidStreamAfterLookup)
+	default:
+		return nil, fmt.Errorf("device %s has unsupported platform %s", serial, device.Platform)
 	}
-
-	return n.ensureStream(serial, opts, n.startLocalStreamAfterLookup)
 }
 
 func (n *Node) ensureLocalStream(serial string, opts streamcfg.Options) (*StreamSession, error) {
 	opts = opts.WithDefaults()
 
-	return n.ensureStream(serial, opts, n.startLocalStream)
+	device, err := n.localDeviceBySerial(serial)
+	if err != nil {
+		return nil, err
+	}
+	switch device.Platform {
+	case PlatformIOS:
+		return n.ensureStream(serial, opts, n.startLocalIOSStream)
+	case PlatformAndroid:
+		return n.ensureStream(serial, opts, n.startLocalAndroidStreamAfterLookup)
+	default:
+		return nil, fmt.Errorf("device %s has unsupported platform %s", serial, device.Platform)
+	}
 }
 
 func (n *Node) ensureStream(serial string, opts streamcfg.Options, start func(string, streamcfg.Options) (*StreamSession, error)) (*StreamSession, error) {
@@ -525,7 +565,7 @@ func (n *Node) ensureStream(serial string, opts streamcfg.Options, start func(st
 			if entry.Session == nil {
 				return nil, errors.New("internal error: stream session is nil")
 			}
-			if entry.Session.isUnhealthyIOS() {
+			if entry.Session.isUnhealthyIOS() || entry.Session.isUnhealthyAndroidVideo(time.Now()) {
 				n.streamsMu.Lock()
 				current, stillCurrent := n.streams[serial]
 				if stillCurrent && current == entry {
@@ -578,12 +618,24 @@ func (s *StreamSession) isUnhealthyIOS() bool {
 	return !s.iosDevice.Status().Ready
 }
 
+func (s *StreamSession) isUnhealthyAndroidVideo(now time.Time) bool {
+	if s.Platform != PlatformAndroid || s.Kind != "h264" || s.videoStartedAt.IsZero() || s.videoBroadcaster == nil {
+		return false
+	}
+
+	latestPacketAt := s.videoBroadcaster.latestPacketTime()
+	if latestPacketAt.IsZero() {
+		latestPacketAt = s.videoStartedAt
+	}
+	return now.Sub(latestPacketAt) > androidVideoStallTimeout
+}
+
 func (n *Node) GetStream(serial string) (*StreamSession, error) {
 	n.streamsMu.RLock()
 	entry, ok := n.streams[serial]
 	n.streamsMu.RUnlock()
 	if !ok {
-		return nil, errors.New("stream not found: " + serial)
+		return nil, streamNotFoundError(serial)
 	}
 	<-entry.Done
 	if entry.Error != nil {
@@ -594,6 +646,359 @@ func (n *Node) GetStream(serial string) (*StreamSession, error) {
 	}
 
 	return entry.Session, nil
+}
+
+func (n *Node) StreamMJPEG(ctx context.Context, serial string, w http.ResponseWriter) error {
+	device, err := n.deviceBySerial(serial)
+	if err != nil {
+		return err
+	}
+
+	if device.NodeID != n.ID {
+		return n.proxyPeerMJPEG(ctx, device.NodeID, serial, w)
+	}
+
+	stream, err := n.GetStream(serial)
+	if err != nil {
+		return err
+	}
+	if stream.Kind != "mjpeg" {
+		return errors.New("active stream is not MJPEG")
+	}
+
+	if err := stream.StreamMJPEG(ctx, w); err != nil {
+		return n.handleMJPEGStreamError(ctx, serial, stream, err)
+	}
+	return nil
+}
+
+func (n *Node) handleMJPEGStreamError(ctx context.Context, serial string, stream *StreamSession, err error) error {
+	if isMJPEGViewerDisconnect(ctx, err) {
+		return nil
+	}
+	n.DropStream(serial, stream)
+	return err
+}
+
+func isMJPEGViewerDisconnect(ctx context.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return true
+	}
+	if errors.Is(err, context.Canceled) {
+		return true
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "broken pipe") ||
+		strings.Contains(message, "connection reset") ||
+		strings.Contains(message, "stream closed") ||
+		strings.Contains(message, "use of closed network connection") ||
+		strings.Contains(message, "client disconnected") ||
+		strings.Contains(message, "request canceled") ||
+		strings.Contains(message, "context canceled")
+}
+
+func (n *Node) StreamVideo(ctx context.Context, serial string, conn *websocket.Conn) error {
+	device, err := n.deviceBySerial(serial)
+	if err != nil {
+		return err
+	}
+
+	if device.NodeID != n.ID {
+		return n.proxyPeerVideo(ctx, device.NodeID, serial, conn)
+	}
+
+	stream, err := n.EnsureStream(serial, streamcfg.Options{})
+	if err != nil {
+		return err
+	}
+	if stream.Kind != "h264" {
+		return errors.New("active stream is not H.264")
+	}
+
+	packets, unsubscribe, err := stream.SubscribeVideo()
+	if err != nil {
+		return err
+	}
+	defer unsubscribe()
+	streamDone := make(chan struct{})
+	defer close(streamDone)
+	go func() {
+		select {
+		case <-ctx.Done():
+			unsubscribe()
+		case <-streamDone:
+		}
+	}()
+
+	for {
+		packet, ok := packets.Next()
+		if !ok {
+			return nil
+		}
+		if err := conn.WriteMessage(websocket.BinaryMessage, encodeVideoPacket(&packet)); err != nil {
+			return err
+		}
+	}
+}
+
+func (n *Node) proxyPeerVideo(ctx context.Context, nodeID string, serial string, conn *websocket.Conn) error {
+	stream, err := n.EnsureStream(serial, streamcfg.Options{})
+	if err != nil {
+		return err
+	}
+	if stream.Kind != "h264" {
+		return errors.New("active stream is not H.264")
+	}
+
+	streamURL, err := n.peerVideoURL(nodeID, stream)
+	if err != nil {
+		return err
+	}
+	streamURL, err = videoViewerURL(streamURL, "peer-"+uuid.NewString())
+	if err != nil {
+		return err
+	}
+
+	peerConn, _, err := websocket.DefaultDialer.DialContext(ctx, streamURL, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = peerConn.Close() }()
+	streamDone := make(chan struct{})
+	defer close(streamDone)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = peerConn.Close()
+		case <-streamDone:
+		}
+	}()
+
+	for {
+		messageType, data, err := peerConn.ReadMessage()
+		if err != nil {
+			return err
+		}
+		if messageType != websocket.BinaryMessage {
+			continue
+		}
+		if err := conn.WriteMessage(websocket.BinaryMessage, data); err != nil {
+			return err
+		}
+	}
+}
+
+func (n *Node) proxyPeerMJPEG(ctx context.Context, nodeID string, serial string, w http.ResponseWriter) error {
+	stream, err := n.EnsureStream(serial, streamcfg.Options{})
+	if err != nil {
+		return err
+	}
+	if stream.Kind != "mjpeg" {
+		return errors.New("active stream is not MJPEG")
+	}
+
+	streamURL, err := n.peerMJPEGURL(nodeID, stream)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, streamURL, nil)
+	if err != nil {
+		return err
+	}
+	res, err := n.Client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = res.Body.Close() }()
+
+	if res.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(res.Body, 1024))
+		message := strings.TrimSpace(string(body))
+		if message == "" {
+			message = res.Status
+		}
+		return fmt.Errorf("peer mjpeg stream returned %s: %s", res.Status, message)
+	}
+
+	copyHeaders(w.Header(), res.Header)
+	w.WriteHeader(res.StatusCode)
+	return copyStreamResponse(w, res.Body)
+}
+
+func (n *Node) peerMJPEGURL(nodeID string, stream *StreamSession) (string, error) {
+	if stream == nil {
+		return "", errors.New("stream session not found")
+	}
+	if stream.MJPEGURL == "" {
+		return "", errors.New("stream missing MJPEG URL")
+	}
+	if parsed, err := url.Parse(stream.MJPEGURL); err == nil && parsed.IsAbs() {
+		return stream.MJPEGURL, nil
+	}
+
+	peer, ok := n.GetPeer(nodeID)
+	if !ok {
+		return "", errors.New("peer not found: " + nodeID)
+	}
+
+	host := stream.Host
+	if host == "" {
+		host = peer.Addr
+	}
+
+	base, err := peerAPIBaseURL(host, peer.APIAddr)
+	if err != nil {
+		return "", err
+	}
+	baseURL, err := url.Parse(base)
+	if err != nil {
+		return "", err
+	}
+	streamPath, err := url.Parse(stream.MJPEGURL)
+	if err != nil {
+		return "", err
+	}
+	return baseURL.ResolveReference(streamPath).String(), nil
+}
+
+func (n *Node) peerVideoURL(nodeID string, stream *StreamSession) (string, error) {
+	if stream == nil {
+		return "", errors.New("stream session not found")
+	}
+	if stream.VideoURL == "" {
+		return "", errors.New("stream missing video URL")
+	}
+	if parsed, err := url.Parse(stream.VideoURL); err == nil && parsed.IsAbs() {
+		return websocketURLFromHTTPURL(parsed), nil
+	}
+
+	peer, ok := n.GetPeer(nodeID)
+	if !ok {
+		return "", errors.New("peer not found: " + nodeID)
+	}
+
+	host := stream.Host
+	if host == "" {
+		host = peer.Addr
+	}
+
+	base, err := peerAPIBaseURL(host, peer.APIAddr)
+	if err != nil {
+		return "", err
+	}
+	baseURL, err := url.Parse(base)
+	if err != nil {
+		return "", err
+	}
+	streamPath, err := url.Parse(stream.VideoURL)
+	if err != nil {
+		return "", err
+	}
+	return websocketURLFromHTTPURL(baseURL.ResolveReference(streamPath)), nil
+}
+
+func websocketURLFromHTTPURL(u *url.URL) string {
+	clone := *u
+	switch clone.Scheme {
+	case "https":
+		clone.Scheme = "wss"
+	default:
+		clone.Scheme = "ws"
+	}
+	return clone.String()
+}
+
+func videoViewerURL(rawURL string, viewer string) (string, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return "", err
+	}
+	query := parsed.Query()
+	query.Set("viewer", viewer)
+	parsed.RawQuery = query.Encode()
+	return parsed.String(), nil
+}
+
+func peerAPIBaseURL(host string, apiAddr string) (string, error) {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return "", errors.New("peer stream host not configured")
+	}
+	if parsed, err := url.Parse(host); err == nil && parsed.Scheme != "" && parsed.Host != "" {
+		host = parsed.Host
+	}
+	if _, _, err := net.SplitHostPort(host); err == nil {
+		return "http://" + host, nil
+	}
+
+	port, err := apiPort(apiAddr)
+	if err != nil {
+		return "", err
+	}
+	return "http://" + net.JoinHostPort(host, port), nil
+}
+
+func apiPort(apiAddr string) (string, error) {
+	apiAddr = strings.TrimSpace(apiAddr)
+	if apiAddr == "" {
+		apiAddr = mastconfig.DefaultAPIAddr
+	}
+	if parsed, err := url.Parse(apiAddr); err == nil && parsed.Scheme != "" && parsed.Host != "" {
+		if port := parsed.Port(); port != "" {
+			return port, nil
+		}
+		return "", fmt.Errorf("api address %q missing port", apiAddr)
+	}
+	if _, port, err := net.SplitHostPort(apiAddr); err == nil && port != "" {
+		return port, nil
+	}
+	if strings.HasPrefix(apiAddr, ":") && len(apiAddr) > 1 {
+		return strings.TrimPrefix(apiAddr, ":"), nil
+	}
+	if _, err := strconv.Atoi(apiAddr); err == nil {
+		return apiAddr, nil
+	}
+	if idx := strings.LastIndex(apiAddr, ":"); idx >= 0 && idx+1 < len(apiAddr) {
+		port := apiAddr[idx+1:]
+		if _, err := strconv.Atoi(port); err == nil {
+			return port, nil
+		}
+	}
+	return "", fmt.Errorf("api address %q missing port", apiAddr)
+}
+
+func copyHeaders(dst http.Header, src http.Header) {
+	for key, values := range src {
+		for _, value := range values {
+			dst.Add(key, value)
+		}
+	}
+}
+
+func copyStreamResponse(w http.ResponseWriter, body io.Reader) error {
+	buf := make([]byte, 32*1024)
+	flusher, _ := w.(http.Flusher)
+	for {
+		n, readErr := body.Read(buf)
+		if n > 0 {
+			if _, err := w.Write(buf[:n]); err != nil {
+				return err
+			}
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				return nil
+			}
+			return readErr
+		}
+	}
 }
 
 func (n *Node) StopStream(serial string) error {
@@ -640,7 +1045,7 @@ func (n *Node) stopLocalStream(serial string) error {
 		delete(n.streams, serial)
 	} else {
 		n.streamsMu.Unlock()
-		return errors.New("stream not found: " + serial)
+		return streamNotFoundError(serial)
 	}
 
 	n.streamsMu.Unlock()

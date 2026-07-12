@@ -56,6 +56,10 @@ func (s *Server) StopStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.node.StopStream(serial); err != nil {
+		if node.IsStreamNotFound(err) {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

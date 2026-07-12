@@ -7,13 +7,16 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	mastconfig "github.com/brijorn/mast/internal/config"
 	"github.com/brijorn/mast/internal/node"
 	streamcfg "github.com/brijorn/mast/internal/stream"
 	"github.com/brijorn/mast/internal/update"
+	"github.com/gorilla/websocket"
 )
 
 type fakeBackend struct {
@@ -23,13 +26,16 @@ type fakeBackend struct {
 	err     error
 	devices []node.DeviceInfo
 	dns     *node.DeviceDNSStatus
+	dnsSet  *node.DeviceDNSStatus
 	calls   int
 	serials []string
 	options []streamcfg.Options
 	stopped []string
 
-	started chan struct{}
-	release chan struct{}
+	started      chan struct{}
+	release      chan struct{}
+	videoStarts  chan string
+	videoCancels chan string
 }
 
 func (f *fakeBackend) ListDevices() ([]node.DeviceInfo, error) {
@@ -47,10 +53,11 @@ func (f *fakeBackend) DeviceDNS(serial string) (*node.DeviceDNSStatus, error) {
 	return f.dns, f.err
 }
 
-func (f *fakeBackend) ToggleDeviceDNS(serial string) (*node.DeviceDNSStatus, error) {
+func (f *fakeBackend) SetDeviceDNS(serial string, desired node.DeviceDNSStatus) (*node.DeviceDNSStatus, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.serials = append(f.serials, serial)
+	f.dnsSet = &desired
 	return f.dns, f.err
 }
 
@@ -111,6 +118,138 @@ func (f *fakeBackend) StopStream(serial string) error {
 }
 
 func (f *fakeBackend) DropStream(_ string, _ *node.StreamSession) {}
+
+func (f *fakeBackend) StreamMJPEG(_ context.Context, serial string, w http.ResponseWriter) error {
+	f.mu.Lock()
+	f.serials = append(f.serials, serial)
+	err := f.err
+	f.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+	_, _ = w.Write([]byte("--frame\r\n"))
+	return nil
+}
+
+func (f *fakeBackend) StreamVideo(ctx context.Context, serial string, conn *websocket.Conn) error {
+	f.mu.Lock()
+	f.serials = append(f.serials, serial)
+	err := f.err
+	f.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	if f.videoStarts != nil {
+		f.videoStarts <- serial
+		<-ctx.Done()
+		f.videoCancels <- serial
+		return ctx.Err()
+	}
+	return conn.WriteMessage(websocket.BinaryMessage, []byte("video"))
+}
+
+func TestStreamVideoClientCloseCancelsViewer(t *testing.T) {
+	backend := &fakeBackend{
+		videoStarts:  make(chan string, 1),
+		videoCancels: make(chan string, 1),
+	}
+	server := httptest.NewServer(NewServer(backend).Handler())
+	defer server.Close()
+
+	url := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/streams/video?serial=phone-1&viewer=viewer-1"
+	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		t.Fatalf("dial video websocket: %v", err)
+	}
+
+	select {
+	case <-backend.videoStarts:
+	case <-time.After(time.Second):
+		t.Fatal("video viewer did not start")
+	}
+	if err := conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "")); err != nil {
+		t.Fatalf("close video websocket: %v", err)
+	}
+	_ = conn.Close()
+
+	select {
+	case <-backend.videoCancels:
+	case <-time.After(time.Second):
+		t.Fatal("video viewer was not canceled after the client closed")
+	}
+}
+
+func TestStreamVideoNewViewerReplacesPreviousViewer(t *testing.T) {
+	backend := &fakeBackend{
+		videoStarts:  make(chan string, 2),
+		videoCancels: make(chan string, 2),
+	}
+	server := httptest.NewServer(NewServer(backend).Handler())
+	defer server.Close()
+
+	url := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/streams/video?serial=phone-1&viewer=viewer-1"
+	first, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		t.Fatalf("dial first video websocket: %v", err)
+	}
+	defer func() { _ = first.Close() }()
+	select {
+	case <-backend.videoStarts:
+	case <-time.After(time.Second):
+		t.Fatal("first video viewer did not start")
+	}
+
+	second, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		t.Fatalf("dial replacement video websocket: %v", err)
+	}
+	defer func() { _ = second.Close() }()
+	select {
+	case <-backend.videoStarts:
+	case <-time.After(time.Second):
+		t.Fatal("replacement video viewer did not start")
+	}
+	select {
+	case <-backend.videoCancels:
+	case <-time.After(time.Second):
+		t.Fatal("previous video viewer was not canceled")
+	}
+}
+
+func TestStreamVideoDifferentViewersRemainConnected(t *testing.T) {
+	backend := &fakeBackend{
+		videoStarts:  make(chan string, 2),
+		videoCancels: make(chan string, 2),
+	}
+	server := httptest.NewServer(NewServer(backend).Handler())
+	defer server.Close()
+	baseURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/streams/video?serial=phone-1&viewer="
+
+	first, _, err := websocket.DefaultDialer.Dial(baseURL+"viewer-1", nil)
+	if err != nil {
+		t.Fatalf("dial first viewer: %v", err)
+	}
+	defer func() { _ = first.Close() }()
+	second, _, err := websocket.DefaultDialer.Dial(baseURL+"viewer-2", nil)
+	if err != nil {
+		t.Fatalf("dial second viewer: %v", err)
+	}
+	defer func() { _ = second.Close() }()
+
+	for range 2 {
+		select {
+		case <-backend.videoStarts:
+		case <-time.After(time.Second):
+			t.Fatal("video viewer did not start")
+		}
+	}
+	select {
+	case <-backend.videoCancels:
+		t.Fatal("an independent video viewer was canceled")
+	case <-time.After(100 * time.Millisecond):
+	}
+}
 
 func (f *fakeBackend) Touch(_ string, _ string, _, _ int) error {
 	return nil
@@ -245,6 +384,29 @@ func TestStartStreamReturnsIOSMJPEGStream(t *testing.T) {
 	}
 }
 
+func TestStreamMJPEGDelegatesToBackend(t *testing.T) {
+	backend := &fakeBackend{}
+	server := NewServer(backend)
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/streams/mjpeg?serial=ios-123", nil)
+
+	server.Handler().ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusOK, res.Body.String())
+	}
+	if got := res.Header().Get("Content-Type"); got != "multipart/x-mixed-replace; boundary=frame" {
+		t.Fatalf("Content-Type = %q, want MJPEG", got)
+	}
+	if got := res.Body.String(); got != "--frame\r\n" {
+		t.Fatalf("body = %q, want frame marker", got)
+	}
+	if len(backend.serials) != 1 || backend.serials[0] != "ios-123" {
+		t.Fatalf("serials = %+v, want ios-123", backend.serials)
+	}
+}
+
 func TestStopStreamStopsSerial(t *testing.T) {
 	backend := &fakeBackend{}
 	server := NewServer(backend)
@@ -259,6 +421,20 @@ func TestStopStreamStopsSerial(t *testing.T) {
 	}
 	if len(backend.stopped) != 1 || backend.stopped[0] != "local-123" {
 		t.Fatalf("stopped = %#v, want local-123", backend.stopped)
+	}
+}
+
+func TestStopStreamTreatsMissingStreamAsStopped(t *testing.T) {
+	backend := &fakeBackend{err: errors.New("stream not found: local-123")}
+	server := NewServer(backend)
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/api/streams/local-123", nil)
+
+	server.Handler().ServeHTTP(res, req)
+
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusNoContent, res.Body.String())
 	}
 }
 

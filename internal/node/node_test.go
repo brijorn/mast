@@ -6,9 +6,27 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
 
 func waitFor(t *testing.T, timeout time.Duration, condition func() bool) {
 	t.Helper()
@@ -40,23 +58,48 @@ func createNodePair(t *testing.T) (*Node, *Node) {
 	return nodeA, nodeB
 }
 
-func connectNodePair(t *testing.T, nodeA *Node, nodeB *Node) {
+func connectNode(t *testing.T, from *Node, to *Node) {
 	t.Helper()
 
-	_, port, err := net.SplitHostPort(nodeB.Listener.Addr().String())
+	_, port, err := net.SplitHostPort(to.Listener.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := nodeA.Connect("ws://127.0.0.1:" + port + "/ws"); err != nil {
+	if err := from.Connect("ws://127.0.0.1:" + port + "/ws"); err != nil {
 		t.Fatal(err)
 	}
 
 	waitFor(t, time.Second, func() bool {
-		nodeA.mu.RLock()
-		defer nodeA.mu.RUnlock()
-		_, ok := nodeA.Peers["b"]
+		from.mu.RLock()
+		defer from.mu.RUnlock()
+		_, ok := from.Peers[to.ID]
 		return ok
 	})
+}
+
+func connectPeerToNode(t *testing.T, peer *Node, target *Node) {
+	t.Helper()
+
+	_, port, err := net.SplitHostPort(target.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := peer.Connect("ws://127.0.0.1:" + port + "/ws"); err != nil {
+		t.Fatal(err)
+	}
+
+	waitFor(t, time.Second, func() bool {
+		target.mu.RLock()
+		defer target.mu.RUnlock()
+		_, ok := target.Peers[peer.ID]
+		return ok
+	})
+}
+
+func connectNodePair(t *testing.T, nodeA *Node, nodeB *Node) {
+	t.Helper()
+
+	connectNode(t, nodeA, nodeB)
 }
 func TestNodeConnect(t *testing.T) {
 
@@ -82,6 +125,53 @@ func TestNodeConnectionStoresPeerVersionMetadata(t *testing.T) {
 	}
 	if peer.BuildDate != "unknown" {
 		t.Fatalf("peer build date = %q, want unknown", peer.BuildDate)
+	}
+}
+
+func TestNodeConnectIsIdempotentForConnectedTarget(t *testing.T) {
+	nodeA, nodeB := createNodePair(t)
+
+	_, port, err := net.SplitHostPort(nodeB.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := "ws://127.0.0.1:" + port + "/ws"
+	if err := nodeA.Connect(target); err != nil {
+		t.Fatal(err)
+	}
+
+	waitFor(t, time.Second, func() bool {
+		nodeA.mu.RLock()
+		defer nodeA.mu.RUnlock()
+		_, ok := nodeA.Peers["b"]
+		return ok
+	})
+
+	nodeA.mu.RLock()
+	before := nodeA.Peers["b"]
+	nodeA.mu.RUnlock()
+
+	if err := nodeA.Connect(target); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	nodeA.mu.RLock()
+	after := nodeA.Peers["b"]
+	nodeA.mu.RUnlock()
+
+	if after != before {
+		t.Fatal("duplicate Connect replaced the existing peer connection")
+	}
+}
+
+func TestHasPeerConnectionAllowsDifferentTargetOnSameHost(t *testing.T) {
+	node := &Node{Peers: map[string]*PeerConn{
+		"first": {Addr: "127.0.0.1", Target: "ws://127.0.0.1:6270/ws"},
+	}}
+
+	if node.hasPeerConnection("ws://127.0.0.1:7000/ws", "127.0.0.1") {
+		t.Fatal("different port on the same host was treated as an existing peer")
 	}
 }
 
@@ -163,7 +253,7 @@ func TestNodeClose(t *testing.T) {
 }
 
 func TestNodeHeartbeat(t *testing.T) {
-	var buf bytes.Buffer
+	var buf lockedBuffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image/png"
 	"log"
 	"os/exec"
 	"regexp"
@@ -15,22 +16,44 @@ import (
 	"sync"
 	"time"
 
+	streamcfg "github.com/brijorn/mast/internal/stream"
 	"github.com/brijorn/mast/internal/transport"
 )
 
 type DeviceInfo struct {
-	Serial                     string   `json:"serial"`
-	Platform                   string   `json:"platform"`
-	State                      string   `json:"state"`
-	BatteryPercent             *int     `json:"battery_percent,omitempty"`
-	PowerConnected             *bool    `json:"power_connected,omitempty"`
-	PowerSource                string   `json:"power_source,omitempty"`
-	BatteryStatus              string   `json:"battery_status,omitempty"`
-	PowerHealth                string   `json:"power_health,omitempty"`
-	BatteryCurrentNow          *int     `json:"battery_current_now,omitempty"`
-	BatteryCurrentAvg          *int     `json:"battery_current_avg,omitempty"`
-	BatteryTrendPercentPerHour *float64 `json:"battery_trend_percent_per_hour,omitempty"`
-	NodeID                     string   `json:"node_id"`
+	Serial   string         `json:"serial"`
+	Platform string         `json:"platform"`
+	State    string         `json:"state"`
+	Battery  *DeviceBattery `json:"battery,omitempty"`
+	NodeID   string         `json:"node_id"`
+}
+
+type BatteryState string
+
+const (
+	BatteryStateCharging        BatteryState = "charging"
+	BatteryStateHolding         BatteryState = "holding"
+	BatteryStateFull            BatteryState = "full"
+	BatteryStateDischarging     BatteryState = "discharging"
+	BatteryStatePluggedDraining BatteryState = "plugged_draining"
+	BatteryStateUnknown         BatteryState = "unknown"
+)
+
+type DeviceBattery struct {
+	Percent *int         `json:"percent,omitempty"`
+	State   BatteryState `json:"state"`
+}
+
+// DeviceGeometry separates captured screenshot pixels from the coordinate
+// space accepted by the device control backend.
+type DeviceGeometry struct {
+	Serial           string `json:"serial"`
+	Platform         string `json:"platform"`
+	Orientation      string `json:"orientation"`
+	ScreenshotWidth  int    `json:"screenshot_width"`
+	ScreenshotHeight int    `json:"screenshot_height"`
+	InputWidth       int    `json:"input_width"`
+	InputHeight      int    `json:"input_height"`
 }
 
 const (
@@ -42,9 +65,9 @@ const peerDeviceRPCTimeout = 10 * time.Second
 
 type adbRunner interface {
 	Devices(ctx context.Context, host string) ([]byte, error)
-	Push(ctx context.Context, host string, localPath string, remotePath string) error
-	Reverse(ctx context.Context, host string, deviceSocket string, localPort int) error
-	StartShell(host string, arg ...string) (*exec.Cmd, error)
+	Push(ctx context.Context, host string, serial string, localPath string, remotePath string) error
+	Reverse(ctx context.Context, host string, serial string, deviceSocket string, localPort int) error
+	StartShell(host string, serial string, arg ...string) (*exec.Cmd, error)
 	Shell(ctx context.Context, host string, serial string, arg ...string) ([]byte, error)
 	ExecOut(ctx context.Context, host string, serial string, arg ...string) ([]byte, error)
 }
@@ -56,7 +79,7 @@ type batterySnapshot struct {
 	PowerConnected             *bool
 	PowerSource                string
 	BatteryStatus              string
-	PowerHealth                string
+	BatteryState               BatteryState
 	BatteryCurrentNow          *int
 	BatteryCurrentAvg          *int
 	BatteryTrendPercentPerHour *float64
@@ -96,13 +119,15 @@ func (a realADB) Devices(ctx context.Context, host string) ([]byte, error) {
 	return a.run(ctx, host, adbCommandTimeout, "devices")
 }
 
-func (a realADB) Push(ctx context.Context, host string, localPath string, remotePath string) error {
-	_, err := a.run(ctx, host, adbCommandTimeout, "push", localPath, remotePath)
+func (a realADB) Push(ctx context.Context, host string, serial string, localPath string, remotePath string) error {
+	args := adbSerialArgs(serial, "push", localPath, remotePath)
+	_, err := a.run(ctx, host, adbCommandTimeout, args...)
 	return err
 }
 
-func (a realADB) Reverse(ctx context.Context, host string, deviceSocket string, localPort int) error {
-	_, err := a.run(ctx, host, adbCommandTimeout, "reverse", deviceSocket, "tcp:"+strconv.Itoa(localPort))
+func (a realADB) Reverse(ctx context.Context, host string, serial string, deviceSocket string, localPort int) error {
+	args := adbSerialArgs(serial, "reverse", deviceSocket, "tcp:"+strconv.Itoa(localPort))
+	_, err := a.run(ctx, host, adbCommandTimeout, args...)
 	return err
 }
 
@@ -123,9 +148,8 @@ func (s *SafeBuffer) String() string {
 	return s.buf.String()
 }
 
-func (a realADB) StartShell(host string, arg ...string) (*exec.Cmd, error) {
-	args := adbArgs(host)
-	args = append(args, "shell")
+func (a realADB) StartShell(host string, serial string, arg ...string) (*exec.Cmd, error) {
+	args := adbArgs(host, adbSerialArgs(serial, "shell")...)
 	args = append(args, arg...)
 	cmd := exec.Command("adb", args...)
 	cmd.Stderr = &SafeBuffer{}
@@ -136,21 +160,13 @@ func (a realADB) StartShell(host string, arg ...string) (*exec.Cmd, error) {
 }
 
 func (a realADB) Shell(ctx context.Context, host string, serial string, arg ...string) ([]byte, error) {
-	var args []string
-	if serial != "" {
-		args = append(args, "-s", serial)
-	}
-	args = append(args, "shell")
+	args := adbSerialArgs(serial, "shell")
 	args = append(args, arg...)
 	return a.run(ctx, host, adbCommandTimeout, args...)
 }
 
 func (a realADB) ExecOut(ctx context.Context, host string, serial string, arg ...string) ([]byte, error) {
-	var args []string
-	if serial != "" {
-		args = append(args, "-s", serial)
-	}
-	args = append(args, "exec-out")
+	args := adbSerialArgs(serial, "exec-out")
 	args = append(args, arg...)
 	return a.run(ctx, host, adbTransferTimeout, args...)
 }
@@ -160,6 +176,14 @@ func adbArgs(host string, arg ...string) []string {
 	if host != "" {
 		args = append(args, "-H", host, "-P", "5037")
 	}
+	return append(args, arg...)
+}
+
+func adbSerialArgs(serial string, arg ...string) []string {
+	if serial == "" {
+		return arg
+	}
+	args := []string{"-s", serial}
 	return append(args, arg...)
 }
 
@@ -178,15 +202,14 @@ func (n *Node) ListDevices() ([]DeviceInfo, error) {
 		return nil, err
 	}
 
-	for _, peerID := range n.devicePeerIDs() {
-		peerDevices, err := n.listPeerDevices(n.ctx, peerID)
-		if err != nil {
-			log.Printf("list devices from peer %s: %v", peerID, err)
-			n.setPeerDeviceError(peerID, err.Error())
+	for _, result := range n.listPeerDevicesConcurrently(n.ctx, n.devicePeerIDs()) {
+		if result.err != nil {
+			log.Printf("list devices from peer %s: %v", result.peerID, result.err)
+			n.setPeerDeviceError(result.peerID, result.err.Error())
 			continue
 		}
-		n.setPeerDeviceError(peerID, "")
-		devices = append(devices, peerDevices...)
+		n.setPeerDeviceError(result.peerID, "")
+		devices = append(devices, result.devices...)
 	}
 
 	return devices, nil
@@ -238,7 +261,7 @@ func parseBatterySnapshot(output string) (batterySnapshot, error) {
 	trend, latestCurrentAvg := parseBatteryTrend(output)
 	snapshot.BatteryTrendPercentPerHour = trend
 	snapshot.BatteryCurrentAvg = latestCurrentAvg
-	snapshot.PowerHealth = derivePowerHealth(snapshot)
+	snapshot.BatteryState = deriveBatteryState(snapshot)
 
 	return snapshot, nil
 }
@@ -363,37 +386,37 @@ func firstErr(errs ...error) error {
 	return nil
 }
 
-func derivePowerHealth(snapshot batterySnapshot) string {
+func deriveBatteryState(snapshot batterySnapshot) BatteryState {
 	if snapshot.BatteryStatus == "" && snapshot.PowerConnected == nil {
 		return ""
 	}
 	if snapshot.BatteryStatus == "full" {
-		return "full"
+		return BatteryStateFull
 	}
 
 	if snapshot.PowerConnected != nil && *snapshot.PowerConnected {
 		if snapshot.BatteryTrendPercentPerHour != nil && *snapshot.BatteryTrendPercentPerHour < -0.1 {
-			return "plugged_draining"
+			return BatteryStatePluggedDraining
 		}
 		if snapshot.BatteryCurrentNow != nil && *snapshot.BatteryCurrentNow < 0 {
-			return "plugged_draining"
+			return BatteryStatePluggedDraining
 		}
 		if snapshot.BatteryStatus == "charging" {
-			return "charging"
+			return BatteryStateCharging
 		}
-		return "holding"
+		return BatteryStateHolding
 	}
 
 	if snapshot.PowerConnected != nil && !*snapshot.PowerConnected {
 		if snapshot.BatteryStatus == "discharging" ||
 			(snapshot.BatteryTrendPercentPerHour != nil && *snapshot.BatteryTrendPercentPerHour < -0.1) ||
 			(snapshot.BatteryCurrentNow != nil && *snapshot.BatteryCurrentNow < 0) {
-			return "unplugged_draining"
+			return BatteryStateDischarging
 		}
-		return "unknown"
+		return BatteryStateUnknown
 	}
 
-	return "unknown"
+	return BatteryStateUnknown
 }
 
 func (n *Node) cacheBattery(serial string, snapshot batterySnapshot) {
@@ -444,7 +467,21 @@ func (n *Node) listLocalDeviceStates() ([]DeviceInfo, error) {
 	if adbErr != nil && len(devices) == 0 {
 		return nil, adbErr
 	}
-	return devices, nil
+	return n.filterBlacklistedDevices(devices), nil
+}
+
+func (n *Node) filterBlacklistedDevices(devices []DeviceInfo) []DeviceInfo {
+	if len(devices) == 0 {
+		return devices
+	}
+	filtered := devices[:0]
+	for _, device := range devices {
+		if n.isDeviceBlacklisted(device.Serial) {
+			continue
+		}
+		filtered = append(filtered, device)
+	}
+	return filtered
 }
 
 func (n *Node) listLocalDevices() ([]DeviceInfo, error) {
@@ -486,7 +523,44 @@ func (n *Node) devicePeerIDs() []string {
 		}
 		peerIDs = append(peerIDs, id)
 	}
+	slices.Sort(peerIDs)
 	return peerIDs
+}
+
+type peerDevicesResult struct {
+	peerID  string
+	devices []DeviceInfo
+	err     error
+}
+
+func (n *Node) listPeerDevicesConcurrently(ctx context.Context, peerIDs []string) []peerDevicesResult {
+	if len(peerIDs) == 0 {
+		return nil
+	}
+
+	resultsByPeer := make(map[string]peerDevicesResult, len(peerIDs))
+	results := make(chan peerDevicesResult, len(peerIDs))
+	var wg sync.WaitGroup
+	for _, peerID := range peerIDs {
+		wg.Add(1)
+		go func(peerID string) {
+			defer wg.Done()
+			devices, err := n.listPeerDevices(ctx, peerID)
+			results <- peerDevicesResult{peerID: peerID, devices: devices, err: err}
+		}(peerID)
+	}
+	wg.Wait()
+	close(results)
+
+	for result := range results {
+		resultsByPeer[result.peerID] = result
+	}
+
+	ordered := make([]peerDevicesResult, 0, len(peerIDs))
+	for _, peerID := range peerIDs {
+		ordered = append(ordered, resultsByPeer[peerID])
+	}
+	return ordered
 }
 
 func (n *Node) listPeerDevices(ctx context.Context, peerID string) ([]DeviceInfo, error) {
@@ -542,6 +616,49 @@ func (n *Node) Screenshot(serial string) ([]byte, error) {
 	return n.peerScreenshot(n.ctx, device.NodeID, serial)
 }
 
+// Geometry returns the live screenshot and input coordinate spaces for a
+// device. Mast intentionally owns the ioslink/WDA session used for iOS.
+func (n *Node) Geometry(serial string) (*DeviceGeometry, error) {
+	device, err := n.DeviceBySerial(serial)
+	if err != nil {
+		return nil, err
+	}
+
+	inputWidth, inputHeight := 0, 0
+	if device.Platform == PlatformIOS {
+		stream, err := n.EnsureStream(serial, streamcfg.Options{})
+		if err != nil {
+			return nil, err
+		}
+		inputWidth, inputHeight = stream.Width, stream.Height
+	}
+
+	data, err := n.Screenshot(serial)
+	if err != nil {
+		return nil, err
+	}
+	config, err := png.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("decode screenshot geometry: %w", err)
+	}
+	if inputWidth <= 0 || inputHeight <= 0 {
+		inputWidth, inputHeight = config.Width, config.Height
+	}
+	orientation := "portrait"
+	if config.Width > config.Height {
+		orientation = "landscape"
+	}
+	return &DeviceGeometry{
+		Serial:           serial,
+		Platform:         device.Platform,
+		Orientation:      orientation,
+		ScreenshotWidth:  config.Width,
+		ScreenshotHeight: config.Height,
+		InputWidth:       inputWidth,
+		InputHeight:      inputHeight,
+	}, nil
+}
+
 func (n *Node) localScreenshot(serial string) ([]byte, error) {
 	device, err := n.localDeviceBySerial(serial)
 	if err != nil {
@@ -550,10 +667,14 @@ func (n *Node) localScreenshot(serial string) ([]byte, error) {
 	if device.State != "device" {
 		return nil, fmt.Errorf("device %s is %s", serial, device.State)
 	}
-	if device.Platform == PlatformIOS {
+	switch device.Platform {
+	case PlatformIOS:
 		return n.localIOSScreenshot(serial)
+	case PlatformAndroid:
+		return n.adb.ExecOut(n.ctx, "", serial, "screencap", "-p")
+	default:
+		return nil, fmt.Errorf("device %s has unsupported platform %s", serial, device.Platform)
 	}
-	return n.adb.ExecOut(n.ctx, "", serial, "screencap", "-p")
 }
 
 func (n *Node) peerScreenshot(ctx context.Context, peerID string, serial string) ([]byte, error) {
@@ -606,22 +727,46 @@ func (n *Node) DeviceBySerial(serial string) (*DeviceInfo, error) {
 		return &devices[index], nil
 	}
 
+	return n.peerDeviceBySerial(serial, n.devicePeerIDs())
+}
+
+func (n *Node) peerDeviceBySerial(serial string, peerIDs []string) (*DeviceInfo, error) {
+	if len(peerIDs) == 0 {
+		return nil, errors.New("device not found: " + serial)
+	}
+
+	ctx := n.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	results := make(chan peerDevicesResult, len(peerIDs))
+	for _, peerID := range peerIDs {
+		go func(peerID string) {
+			devices, err := n.listPeerDevices(ctx, peerID)
+			results <- peerDevicesResult{peerID: peerID, devices: devices, err: err}
+		}(peerID)
+	}
+
 	var peerErrors []error
-	for _, peerID := range n.devicePeerIDs() {
-		peerDevices, err := n.listPeerDevices(n.ctx, peerID)
-		if err != nil {
-			log.Printf("find device %s from peer %s: %v", serial, peerID, err)
-			n.setPeerDeviceError(peerID, err.Error())
-			peerErrors = append(peerErrors, err)
+	for range peerIDs {
+		result := <-results
+		if result.err != nil {
+			log.Printf("find device %s from peer %s: %v", serial, result.peerID, result.err)
+			n.setPeerDeviceError(result.peerID, result.err.Error())
+			peerErrors = append(peerErrors, result.err)
 			continue
 		}
-		n.setPeerDeviceError(peerID, "")
+		n.setPeerDeviceError(result.peerID, "")
 
-		index := slices.IndexFunc(peerDevices, func(d DeviceInfo) bool {
+		index := slices.IndexFunc(result.devices, func(d DeviceInfo) bool {
 			return d.Serial == serial
 		})
 		if index != -1 {
-			return &peerDevices[index], nil
+			cancel()
+			return &result.devices[index], nil
 		}
 	}
 
@@ -652,18 +797,11 @@ func deviceInfoPayloads(devices []DeviceInfo) []transport.DeviceInfoPayload {
 	payloads := make([]transport.DeviceInfoPayload, 0, len(devices))
 	for _, device := range devices {
 		payloads = append(payloads, transport.DeviceInfoPayload{
-			Serial:                     device.Serial,
-			Platform:                   device.Platform,
-			State:                      device.State,
-			NodeID:                     device.NodeID,
-			BatteryPercent:             device.BatteryPercent,
-			PowerConnected:             device.PowerConnected,
-			PowerSource:                device.PowerSource,
-			BatteryStatus:              device.BatteryStatus,
-			PowerHealth:                device.PowerHealth,
-			BatteryCurrentNow:          device.BatteryCurrentNow,
-			BatteryCurrentAvg:          device.BatteryCurrentAvg,
-			BatteryTrendPercentPerHour: device.BatteryTrendPercentPerHour,
+			Serial:   device.Serial,
+			Platform: device.Platform,
+			State:    device.State,
+			NodeID:   device.NodeID,
+			Battery:  deviceBatteryPayload(device.Battery),
 		})
 	}
 	return payloads
@@ -673,32 +811,40 @@ func deviceInfosFromPayload(payloads []transport.DeviceInfoPayload) []DeviceInfo
 	devices := make([]DeviceInfo, 0, len(payloads))
 	for _, payload := range payloads {
 		devices = append(devices, DeviceInfo{
-			Serial:                     payload.Serial,
-			Platform:                   payload.Platform,
-			State:                      payload.State,
-			NodeID:                     payload.NodeID,
-			BatteryPercent:             payload.BatteryPercent,
-			PowerConnected:             payload.PowerConnected,
-			PowerSource:                payload.PowerSource,
-			BatteryStatus:              payload.BatteryStatus,
-			PowerHealth:                payload.PowerHealth,
-			BatteryCurrentNow:          payload.BatteryCurrentNow,
-			BatteryCurrentAvg:          payload.BatteryCurrentAvg,
-			BatteryTrendPercentPerHour: payload.BatteryTrendPercentPerHour,
+			Serial:   payload.Serial,
+			Platform: payload.Platform,
+			State:    payload.State,
+			NodeID:   payload.NodeID,
+			Battery:  deviceBatteryFromPayload(payload.Battery),
 		})
 	}
 	return devices
 }
 
 func applyBatterySnapshot(device *DeviceInfo, snapshot batterySnapshot) {
-	device.BatteryPercent = snapshot.BatteryPercent
-	device.PowerConnected = snapshot.PowerConnected
-	device.PowerSource = snapshot.PowerSource
-	device.BatteryStatus = snapshot.BatteryStatus
-	device.PowerHealth = snapshot.PowerHealth
-	device.BatteryCurrentNow = snapshot.BatteryCurrentNow
-	device.BatteryCurrentAvg = snapshot.BatteryCurrentAvg
-	device.BatteryTrendPercentPerHour = snapshot.BatteryTrendPercentPerHour
+	if snapshot.BatteryPercent == nil && snapshot.BatteryState == "" {
+		device.Battery = nil
+		return
+	}
+	state := snapshot.BatteryState
+	if state == "" {
+		state = BatteryStateUnknown
+	}
+	device.Battery = &DeviceBattery{Percent: snapshot.BatteryPercent, State: state}
+}
+
+func deviceBatteryPayload(battery *DeviceBattery) *transport.DeviceBatteryPayload {
+	if battery == nil {
+		return nil
+	}
+	return &transport.DeviceBatteryPayload{Percent: battery.Percent, State: string(battery.State)}
+}
+
+func deviceBatteryFromPayload(payload *transport.DeviceBatteryPayload) *DeviceBattery {
+	if payload == nil {
+		return nil
+	}
+	return &DeviceBattery{Percent: payload.Percent, State: BatteryState(payload.State)}
 }
 
 func parseDevicesOutput(output string, nodeID string, devices []DeviceInfo) []DeviceInfo {

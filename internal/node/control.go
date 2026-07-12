@@ -103,6 +103,19 @@ func (n *Node) tapLocal(serial string, x int, y int) error {
 	return nil
 }
 
+func (n *Node) tapLocalAndroidADB(serial string, x int, y int) error {
+	_, err := n.adb.Shell(n.ctx, "", serial, "input", "tap", fmt.Sprintf("%d", x), fmt.Sprintf("%d", y))
+	return err
+}
+
+func (n *Node) tapLocalAndroid(serial string, x int, y int) error {
+	session, err := n.GetStream(serial)
+	if err == nil && session.controlConn != nil {
+		return n.tapLocal(serial, x, y)
+	}
+	return n.tapLocalAndroidADB(serial, x, y)
+}
+
 func (n *Node) pressKeyLocal(serial string, keycode uint32, metaState uint32) error {
 	session, err := n.controlSession(serial)
 	if err != nil {
@@ -341,6 +354,10 @@ func (n *Node) Tap(serial string, x int, y int) error {
 	device, err := n.DeviceBySerial(serial)
 	if err != nil {
 		return err
+	}
+
+	if device.NodeID == n.ID && device.Platform == PlatformAndroid {
+		return n.tapLocalAndroid(serial, x, y)
 	}
 
 	if device.NodeID == n.ID {

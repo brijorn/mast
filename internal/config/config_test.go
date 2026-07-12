@@ -28,3 +28,30 @@ func TestApplyValuesUpdatesNodeIDAndRequiresRestart(t *testing.T) {
 		t.Fatalf("restartKeys = %+v, want [node_id]", restartKeys)
 	}
 }
+
+func TestApplyValuesUpdatesDeviceBlacklistAndRequiresRestart(t *testing.T) {
+	cfg := Default()
+
+	got, changed, restartKeys, err := ApplyValues(cfg, map[string]string{
+		"device_blacklist": " ios-2,android-1 ios-2 ",
+	})
+	if err != nil {
+		t.Fatalf("ApplyValues returned error: %v", err)
+	}
+
+	want := []string{"android-1", "ios-2"}
+	if len(got.DeviceBlacklist) != len(want) {
+		t.Fatalf("DeviceBlacklist = %+v, want %+v", got.DeviceBlacklist, want)
+	}
+	for i := range want {
+		if got.DeviceBlacklist[i] != want[i] {
+			t.Fatalf("DeviceBlacklist = %+v, want %+v", got.DeviceBlacklist, want)
+		}
+	}
+	if len(changed) != 1 || changed[0] != "device_blacklist" {
+		t.Fatalf("changed = %+v, want [device_blacklist]", changed)
+	}
+	if len(restartKeys) != 1 || restartKeys[0] != "device_blacklist" {
+		t.Fatalf("restartKeys = %+v, want [device_blacklist]", restartKeys)
+	}
+}

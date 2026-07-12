@@ -20,18 +20,19 @@ const (
 )
 
 type Config struct {
-	NodeID         string            `json:"node_id"`
-	BindAddr       string            `json:"bind_addr"`
-	ProxyAddr      string            `json:"proxy_addr"`
-	APIAddr        string            `json:"api_addr"`
-	AdvertiseHost  string            `json:"advertise_host"`
-	ADBPort        int               `json:"adb_port"`
-	ProgramsDir    string            `json:"programs_dir"`
-	AndroidEnabled bool              `json:"android_enabled"`
-	IOSEnabled     bool              `json:"ios_enabled"`
-	ProxyEnabled   bool              `json:"proxy_enabled"`
-	LockPortrait   bool              `json:"lock_portrait"`
-	Runners        map[string]string `json:"runners,omitempty"`
+	NodeID          string            `json:"node_id"`
+	BindAddr        string            `json:"bind_addr"`
+	ProxyAddr       string            `json:"proxy_addr"`
+	APIAddr         string            `json:"api_addr"`
+	AdvertiseHost   string            `json:"advertise_host"`
+	ADBPort         int               `json:"adb_port"`
+	ProgramsDir     string            `json:"programs_dir"`
+	DeviceBlacklist []string          `json:"device_blacklist,omitempty"`
+	AndroidEnabled  bool              `json:"android_enabled"`
+	IOSEnabled      bool              `json:"ios_enabled"`
+	ProxyEnabled    bool              `json:"proxy_enabled"`
+	LockPortrait    bool              `json:"lock_portrait"`
+	Runners         map[string]string `json:"runners,omitempty"`
 }
 
 type UpdateResult struct {
@@ -77,6 +78,8 @@ func (c *Config) Set(key string, value string) error {
 		c.ADBPort = parsed
 	case "programs_dir":
 		c.ProgramsDir = value
+	case "device_blacklist":
+		c.DeviceBlacklist = ParseDeviceBlacklist(value)
 	case "android_enabled":
 		parsed, err := strconv.ParseBool(value)
 		if err != nil {
@@ -110,6 +113,7 @@ func (c *Config) Set(key string, value string) error {
 
 func (c Config) Clone() Config {
 	clone := c
+	clone.DeviceBlacklist = append([]string(nil), c.DeviceBlacklist...)
 	if c.Runners != nil {
 		clone.Runners = make(map[string]string, len(c.Runners))
 		for key, value := range c.Runners {
@@ -313,6 +317,10 @@ func changedKeys(before Config, after Config, requested []string) []string {
 			if before.ProgramsDir != after.ProgramsDir {
 				changed = append(changed, key)
 			}
+		case "device_blacklist":
+			if strings.Join(NormalizeDeviceBlacklist(before.DeviceBlacklist), "\x00") != strings.Join(NormalizeDeviceBlacklist(after.DeviceBlacklist), "\x00") {
+				changed = append(changed, key)
+			}
 		case "android_enabled":
 			if before.AndroidEnabled != after.AndroidEnabled {
 				changed = append(changed, key)
@@ -338,9 +346,54 @@ func restartRequiredKeys(changed []string) []string {
 	restartKeys := make([]string, 0, len(changed))
 	for _, key := range changed {
 		switch key {
-		case "node_id", "bind_addr", "api_addr", "proxy_addr", "programs_dir":
+		case "node_id", "bind_addr", "api_addr", "proxy_addr", "programs_dir", "device_blacklist":
 			restartKeys = append(restartKeys, key)
 		}
 	}
 	return restartKeys
+}
+
+func ParseDeviceBlacklist(value string) []string {
+	parts := strings.FieldsFunc(value, func(r rune) bool {
+		return r == ',' || r == '\n' || r == '\r' || r == '\t' || r == ' '
+	})
+	return NormalizeDeviceBlacklist(parts)
+}
+
+func FormatDeviceBlacklist(serials []string) string {
+	return strings.Join(NormalizeDeviceBlacklist(serials), ",")
+}
+
+func NormalizeDeviceBlacklist(serials []string) []string {
+	seen := make(map[string]struct{}, len(serials))
+	out := make([]string, 0, len(serials))
+	for _, serial := range serials {
+		serial = strings.TrimSpace(serial)
+		if serial == "" {
+			continue
+		}
+		if _, ok := seen[serial]; ok {
+			continue
+		}
+		seen[serial] = struct{}{}
+		out = append(out, serial)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func AddDeviceBlacklist(serials []string, serial string) []string {
+	return NormalizeDeviceBlacklist(append(append([]string(nil), serials...), serial))
+}
+
+func RemoveDeviceBlacklist(serials []string, serial string) []string {
+	serial = strings.TrimSpace(serial)
+	out := make([]string, 0, len(serials))
+	for _, existing := range NormalizeDeviceBlacklist(serials) {
+		if existing == serial {
+			continue
+		}
+		out = append(out, existing)
+	}
+	return out
 }

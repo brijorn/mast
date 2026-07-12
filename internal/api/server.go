@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"sync"
 	"time"
 
 	mastconfig "github.com/brijorn/mast/internal/config"
@@ -10,6 +11,7 @@ import (
 	"github.com/brijorn/mast/internal/program"
 	streamcfg "github.com/brijorn/mast/internal/stream"
 	"github.com/brijorn/mast/internal/update"
+	"github.com/gorilla/websocket"
 )
 
 type nodeBackend interface {
@@ -17,7 +19,7 @@ type nodeBackend interface {
 	ListDevices() ([]node.DeviceInfo, error)
 	Screenshot(serial string) ([]byte, error)
 	DeviceDNS(serial string) (*node.DeviceDNSStatus, error)
-	ToggleDeviceDNS(serial string) (*node.DeviceDNSStatus, error)
+	SetDeviceDNS(serial string, desired node.DeviceDNSStatus) (*node.DeviceDNSStatus, error)
 	Connect(addr string) error
 	DisconnectPeer(addr string) bool
 	CheckNodeUpdate(ctx context.Context, nodeID string) (*update.CheckResult, error)
@@ -28,6 +30,8 @@ type nodeBackend interface {
 	EnsureStream(serial string, opts streamcfg.Options) (*node.StreamSession, error)
 	StopStream(serial string) error
 	DropStream(serial string, session *node.StreamSession)
+	StreamMJPEG(ctx context.Context, serial string, w http.ResponseWriter) error
+	StreamVideo(ctx context.Context, serial string, conn *websocket.Conn) error
 	Touch(serial string, action string, x, y int) error
 	Tap(serial string, x, y int) error
 	Swipe(serial string, startX, startY, endX, endY int) error
@@ -43,9 +47,17 @@ type restartBackend interface {
 }
 
 type Server struct {
-	node          nodeBackend
-	programs      programBackend
-	updateChecker update.UpdateChecker
+	node              nodeBackend
+	programs          programBackend
+	updateChecker     update.UpdateChecker
+	videoMu           sync.Mutex
+	videoConns        map[videoViewerKey]*websocket.Conn
+	deviceBlacklistMu sync.Mutex
+}
+
+type videoViewerKey struct {
+	serial string
+	viewer string
 }
 
 type programBackend interface {
@@ -63,6 +75,12 @@ type programBackend interface {
 	DeleteProgram(id string) error
 }
 
+type runStopRequester interface {
+	RequestStop(id string) (*program.Run, error)
+	StopRequest(id string) (*program.StopRequest, error)
+	AcknowledgeStop(id string) (*program.Run, error)
+}
+
 func NewServer(n nodeBackend, programs ...programBackend) *Server {
 	var programStore programBackend
 	if len(programs) > 0 {
@@ -72,6 +90,7 @@ func NewServer(n nodeBackend, programs ...programBackend) *Server {
 		node:          n,
 		programs:      programStore,
 		updateChecker: &update.Checker{},
+		videoConns:    make(map[videoViewerKey]*websocket.Conn),
 	}
 }
 
@@ -80,8 +99,9 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /api/devices", s.ListDevices)
 	mux.HandleFunc("GET /api/devices/{serial}/screenshot", s.Screenshot)
+	mux.HandleFunc("GET /api/devices/{serial}/geometry", s.DeviceGeometry)
 	mux.HandleFunc("GET /api/devices/{serial}/dns", s.DeviceDNS)
-	mux.HandleFunc("POST /api/devices/{serial}/dns/toggle", s.ToggleDeviceDNS)
+	mux.HandleFunc("PUT /api/devices/{serial}/dns", s.SetDeviceDNS)
 	mux.HandleFunc("GET /api/nodes", s.ListNodes)
 	mux.HandleFunc("POST /api/peers", s.AddPeer)
 	mux.HandleFunc("DELETE /api/peers", s.RemovePeer)
@@ -89,6 +109,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/nodes/{id}/update", s.ApplyNodeUpdate)
 	mux.HandleFunc("GET /api/nodes/{id}/config", s.GetNodeConfig)
 	mux.HandleFunc("PUT /api/nodes/{id}/config", s.UpdateNodeConfig)
+	mux.HandleFunc("GET /api/nodes/{id}/device-blacklist", s.GetDeviceBlacklist)
+	mux.HandleFunc("PUT /api/nodes/{id}/device-blacklist", s.SetDeviceBlacklist)
+	mux.HandleFunc("POST /api/nodes/{id}/device-blacklist", s.AddDeviceBlacklist)
+	mux.HandleFunc("DELETE /api/nodes/{id}/device-blacklist", s.RemoveDeviceBlacklist)
 
 	mux.HandleFunc("GET /api/update", s.CheckUpdate)
 	mux.HandleFunc("POST /api/update", s.ApplyUpdate)
@@ -105,6 +129,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/runs", s.ListRuns)
 	mux.HandleFunc("POST /api/runs", s.StartRuns)
 	mux.HandleFunc("POST /api/runs/{id}/stop", s.StopRun)
+	mux.HandleFunc("POST /api/runs/{id}/stop-request", s.RequestRunStop)
+	mux.HandleFunc("GET /api/runs/{id}/stop-request", s.GetRunStopRequest)
+	mux.HandleFunc("POST /api/runs/{id}/stop-ack", s.AcknowledgeRunStop)
 	mux.HandleFunc("POST /api/runs/{id}/resume", s.ResumeRun)
 	mux.HandleFunc("PUT /api/runs/{id}/autostart", s.SetRunAutostart)
 	mux.HandleFunc("GET /api/runs/{id}/logs", s.RunLogs)

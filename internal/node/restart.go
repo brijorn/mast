@@ -6,8 +6,9 @@ import (
 
 const restartDelay = 750 * time.Millisecond
 
-var scheduleProcessRestart = scheduleProcessRestartForPlatform
-
 func (n *Node) ScheduleRestart(delay time.Duration) error {
-	return scheduleProcessRestart(delay)
+	if n.scheduleRestart == nil {
+		return scheduleProcessRestartForPlatform(delay)
+	}
+	return n.scheduleRestart(delay)
 }

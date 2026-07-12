@@ -1,10 +1,9 @@
 package api
 
 import (
-	"encoding/binary"
+	"context"
 	"net/http"
 
-	"github.com/brijorn/mast/internal/node"
 	"github.com/gorilla/websocket"
 )
 
@@ -18,47 +17,53 @@ func (s *Server) StreamVideo(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "serial required", http.StatusBadRequest)
 		return
 	}
-
-	stream, err := s.node.GetStream(serial)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	viewer := r.URL.Query().Get("viewer")
+	if viewer == "" {
+		http.Error(w, "viewer required", http.StatusBadRequest)
 		return
 	}
-
-	packets, unsubscribe, err := stream.SubscribeVideo()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer unsubscribe()
 
 	conn, err := videoUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
 	}
 	defer func() { _ = conn.Close() }()
+	key := videoViewerKey{serial: serial, viewer: viewer}
+	s.replaceVideoViewer(key, conn)
+	defer s.releaseVideoViewer(key, conn)
 
-	for packet := range packets {
-		data := encodeVideoPacket(packet)
-		if err := conn.WriteMessage(websocket.BinaryMessage, data); err != nil {
-			return
+	ctx, cancel := context.WithCancel(r.Context())
+	readerDone := make(chan struct{})
+	go func() {
+		defer close(readerDone)
+		defer cancel()
+		for {
+			if _, _, err := conn.NextReader(); err != nil {
+				return
+			}
 		}
+	}()
+
+	_ = s.node.StreamVideo(ctx, serial, conn)
+	cancel()
+	_ = conn.Close()
+	<-readerDone
+}
+
+func (s *Server) replaceVideoViewer(key videoViewerKey, conn *websocket.Conn) {
+	s.videoMu.Lock()
+	previous := s.videoConns[key]
+	s.videoConns[key] = conn
+	s.videoMu.Unlock()
+	if previous != nil && previous != conn {
+		_ = previous.Close()
 	}
 }
 
-func encodeVideoPacket(packet node.VideoPacket) []byte {
-	flags := byte(0)
-	if packet.Config {
-		flags |= 1
+func (s *Server) releaseVideoViewer(key videoViewerKey, conn *websocket.Conn) {
+	s.videoMu.Lock()
+	if s.videoConns[key] == conn {
+		delete(s.videoConns, key)
 	}
-	if packet.Keyframe {
-		flags |= 2
-	}
-
-	buf := make([]byte, 13+len(packet.Data))
-	buf[0] = flags
-	binary.BigEndian.PutUint64(buf[1:9], packet.PTS)
-	binary.BigEndian.PutUint32(buf[9:13], uint32(len(packet.Data)))
-	copy(buf[13:], packet.Data)
-	return buf
+	s.videoMu.Unlock()
 }

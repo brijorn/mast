@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	mastconfig "github.com/brijorn/mast/internal/config"
@@ -22,10 +23,12 @@ type PeerConn struct {
 	Addr           string
 	Target         string
 	ADBPort        int
+	APIAddr        string
 	Version        string
 	Commit         string
 	BuildDate      string
 	DeviceError    string
+	replaced       atomic.Bool
 }
 
 func (p *PeerConn) WriteMessage(messageType int, data []byte) error {
@@ -35,36 +38,39 @@ func (p *PeerConn) WriteMessage(messageType int, data []byte) error {
 }
 
 type Node struct {
-	ID             string
-	AdvertiseHost  string
-	Listener       net.Listener
-	mu             sync.RWMutex
-	Peers          map[string]*PeerConn
-	Client         http.Client
-	Upgrader       websocket.Upgrader
-	ctx            context.Context
-	cancel         context.CancelFunc
-	PingInterval   time.Duration
-	AndroidEnabled bool
-	IOSEnabled     bool
-	ProxyEnabled   bool
-	ADBPort        int
-	adb            adbRunner
-	updateChecker  update.UpdateChecker
-	updateApplier  update.UpdateApplier
-	pendingMu      sync.Mutex
-	pending        map[string]chan peerRPCResponse
-	streams        map[string]*streamEntry
-	streamsMu      sync.RWMutex
-	batteryMu      sync.RWMutex
-	batteryCache   map[string]batterySnapshot
-	configMu       sync.RWMutex
-	configPath     string
-	configState    mastconfig.Config
-	configReady    bool
-	configApplier  RuntimeConfigApplier
-	iosMu          sync.Mutex
-	iosTunnelMgr   *tunnel.TunnelManager
+	ID              string
+	AdvertiseHost   string
+	Listener        net.Listener
+	mu              sync.RWMutex
+	Peers           map[string]*PeerConn
+	Client          http.Client
+	Upgrader        websocket.Upgrader
+	ctx             context.Context
+	cancel          context.CancelFunc
+	PingInterval    time.Duration
+	AndroidEnabled  bool
+	IOSEnabled      bool
+	ProxyEnabled    bool
+	ADBPort         int
+	APIAddr         string
+	adb             adbRunner
+	updateChecker   update.UpdateChecker
+	updateApplier   update.UpdateApplier
+	scheduleRestart func(time.Duration) error
+	pendingMu       sync.Mutex
+	pending         map[string]chan peerRPCResponse
+	streams         map[string]*streamEntry
+	streamsMu       sync.RWMutex
+	batteryMu       sync.RWMutex
+	batteryCache    map[string]batterySnapshot
+	configMu        sync.RWMutex
+	configPath      string
+	configState     mastconfig.Config
+	configReady     bool
+	configApplier   RuntimeConfigApplier
+	deviceBlacklist map[string]struct{}
+	iosMu           sync.Mutex
+	iosTunnelMgr    *tunnel.TunnelManager
 }
 
 func NewNode(id string, addr string, advertiseHost string, androidEnabled bool, iosEnabled bool, proxyEnabled bool) (*Node, error) {
@@ -76,23 +82,26 @@ func NewNode(id string, addr string, advertiseHost string, androidEnabled bool, 
 	ctx, cancel := context.WithCancel(context.Background())
 	updateChecker := &update.Checker{}
 	return &Node{
-		ID:             id,
-		Listener:       ln,
-		Peers:          make(map[string]*PeerConn),
-		ctx:            ctx,
-		cancel:         cancel,
-		AdvertiseHost:  advertiseHost,
-		streams:        make(map[string]*streamEntry),
-		batteryCache:   make(map[string]batterySnapshot),
-		PingInterval:   30 * time.Second,
-		AndroidEnabled: androidEnabled,
-		IOSEnabled:     iosEnabled,
-		ProxyEnabled:   proxyEnabled,
-		ADBPort:        5037,
-		adb:            realADB{},
-		updateChecker:  updateChecker,
-		updateApplier:  &update.Applier{Checker: updateChecker},
-		pending:        make(map[string]chan peerRPCResponse),
+		ID:              id,
+		Listener:        ln,
+		Peers:           make(map[string]*PeerConn),
+		ctx:             ctx,
+		cancel:          cancel,
+		AdvertiseHost:   advertiseHost,
+		streams:         make(map[string]*streamEntry),
+		batteryCache:    make(map[string]batterySnapshot),
+		PingInterval:    30 * time.Second,
+		AndroidEnabled:  androidEnabled,
+		IOSEnabled:      iosEnabled,
+		ProxyEnabled:    proxyEnabled,
+		ADBPort:         5037,
+		APIAddr:         mastconfig.DefaultAPIAddr,
+		adb:             realADB{},
+		updateChecker:   updateChecker,
+		updateApplier:   &update.Applier{Checker: updateChecker},
+		scheduleRestart: scheduleProcessRestartForPlatform,
+		pending:         make(map[string]chan peerRPCResponse),
+		deviceBlacklist: make(map[string]struct{}),
 	}, nil
 }
 

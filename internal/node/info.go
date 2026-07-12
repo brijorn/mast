@@ -10,6 +10,7 @@ type NodeInfo struct {
 	IOSEnabled     bool   `json:"ios_enabled"`
 	ProxyEnabled   bool   `json:"proxy_enabled"`
 	ADBPort        int    `json:"adb_port,omitempty"`
+	APIAddr        string `json:"api_addr,omitempty"`
 	Version        string `json:"version"`
 	Commit         string `json:"commit"`
 	BuildDate      string `json:"build_date"`
@@ -26,6 +27,7 @@ func (n *Node) ListNodes() []NodeInfo {
 			IOSEnabled:     n.IOSEnabled,
 			ProxyEnabled:   n.ProxyEnabled,
 			ADBPort:        n.ADBPort,
+			APIAddr:        n.APIAddr,
 			Version:        version.Version,
 			Commit:         version.Commit,
 			BuildDate:      version.Date,
@@ -43,6 +45,7 @@ func (n *Node) ListNodes() []NodeInfo {
 			IOSEnabled:     peer.IOSEnabled,
 			ProxyEnabled:   peer.ProxyEnabled,
 			ADBPort:        peer.ADBPort,
+			APIAddr:        peer.APIAddr,
 			Version:        peer.Version,
 			Commit:         peer.Commit,
 			BuildDate:      peer.BuildDate,

@@ -1,33 +1,29 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	mastconfig "github.com/brijorn/mast/internal/config"
 	"github.com/brijorn/mast/internal/node"
 )
 
 func TestListDevicesReturnsBatteryHealth(t *testing.T) {
 	battery := 53
-	powerConnected := true
-	currentNow := -479
-	trend := -1.9
 	backend := &fakeBackend{
 		devices: []node.DeviceInfo{
 			{
-				Serial:                     "phone-1",
-				Platform:                   node.PlatformIOS,
-				State:                      "device",
-				NodeID:                     "node-1",
-				BatteryPercent:             &battery,
-				PowerConnected:             &powerConnected,
-				PowerSource:                "usb",
-				BatteryStatus:              "charging",
-				PowerHealth:                "plugged_draining",
-				BatteryCurrentNow:          &currentNow,
-				BatteryTrendPercentPerHour: &trend,
+				Serial:   "phone-1",
+				Platform: node.PlatformIOS,
+				State:    "device",
+				NodeID:   "node-1",
+				Battery: &node.DeviceBattery{
+					Percent: &battery,
+					State:   node.BatteryStatePluggedDraining,
+				},
 			},
 		},
 	}
@@ -49,11 +45,8 @@ func TestListDevicesReturnsBatteryHealth(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("len(response) = %d, want 1", len(got))
 	}
-	if got[0].PowerHealth != "plugged_draining" || got[0].PowerSource != "usb" {
-		t.Fatalf("device = %+v, want plugged-draining usb", got[0])
-	}
-	if got[0].PowerConnected == nil || !*got[0].PowerConnected {
-		t.Fatalf("PowerConnected = %v, want true", got[0].PowerConnected)
+	if got[0].Battery == nil || got[0].Battery.State != node.BatteryStatePluggedDraining {
+		t.Fatalf("device = %+v, want plugged-draining battery", got[0])
 	}
 	if got[0].Platform != node.PlatformIOS {
 		t.Fatalf("Platform = %q, want ios", got[0].Platform)
@@ -83,11 +76,37 @@ func TestScreenshotReturnsPNG(t *testing.T) {
 	}
 }
 
+func TestDeviceGeometryReturnsSeparateCoordinateSpaces(t *testing.T) {
+	backend := &geometryTestBackend{geometry: &node.DeviceGeometry{
+		Serial:           "ios-1",
+		Platform:         node.PlatformIOS,
+		Orientation:      "portrait",
+		ScreenshotWidth:  1179,
+		ScreenshotHeight: 2556,
+		InputWidth:       393,
+		InputHeight:      852,
+	}}
+	server := NewServer(backend)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/devices/ios-1/geometry", nil)
+	server.Handler().ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusOK, res.Body.String())
+	}
+	var got node.DeviceGeometry
+	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.ScreenshotWidth != 1179 || got.InputWidth != 393 || backend.serial != "ios-1" {
+		t.Fatalf("geometry = %+v, requested serial = %q", got, backend.serial)
+	}
+}
+
 func TestDeviceDNSReturnsStatus(t *testing.T) {
 	backend := &fakeBackend{
 		dns: &node.DeviceDNSStatus{
-			Mode:      "opportunistic",
-			Automatic: true,
+			Mode: node.DeviceDNSModeAutomatic,
 		},
 	}
 	server := NewServer(backend)
@@ -108,23 +127,26 @@ func TestDeviceDNSReturnsStatus(t *testing.T) {
 	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if got.Mode != "opportunistic" || !got.Automatic {
-		t.Fatalf("dns status = %+v, want automatic opportunistic", got)
+	if got.Mode != node.DeviceDNSModeAutomatic {
+		t.Fatalf("dns status = %+v, want automatic", got)
 	}
 }
 
-func TestToggleDeviceDNSReturnsUpdatedStatus(t *testing.T) {
+func TestSetDeviceDNSReturnsUpdatedStatus(t *testing.T) {
 	backend := &fakeBackend{
 		dns: &node.DeviceDNSStatus{
-			Mode:      "hostname",
-			Hostname:  "dns.adguard.com",
-			Automatic: false,
+			Mode:     node.DeviceDNSModeHostname,
+			Hostname: "dns.adguard.com",
 		},
 	}
 	server := NewServer(backend)
 
 	res := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/devices/phone-1/dns/toggle", nil)
+	req := httptest.NewRequest(
+		http.MethodPut,
+		"/api/devices/phone-1/dns",
+		bytes.NewReader([]byte(`{"mode":"hostname","hostname":"dns.adguard.com"}`)),
+	)
 
 	server.Handler().ServeHTTP(res, req)
 
@@ -139,8 +161,77 @@ func TestToggleDeviceDNSReturnsUpdatedStatus(t *testing.T) {
 	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if got.Mode != "hostname" || got.Hostname != "dns.adguard.com" || got.Automatic {
+	if got.Mode != node.DeviceDNSModeHostname || got.Hostname != "dns.adguard.com" {
 		t.Fatalf("dns status = %+v, want adguard hostname", got)
+	}
+	if backend.dnsSet == nil || backend.dnsSet.Mode != node.DeviceDNSModeHostname || backend.dnsSet.Hostname != "dns.adguard.com" {
+		t.Fatalf("desired dns = %+v, want adguard hostname", backend.dnsSet)
+	}
+}
+
+func TestGetDeviceBlacklistReturnsConfiguredSerials(t *testing.T) {
+	backend := &configNodeBackend{
+		config: &mastconfig.Config{DeviceBlacklist: []string{"ios-2", "android-1", "ios-2"}},
+	}
+	server := NewServer(backend)
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/nodes/node-a/device-blacklist", nil)
+
+	server.Handler().ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusOK, res.Body.String())
+	}
+	if backend.nodeID != "node-a" {
+		t.Fatalf("nodeID = %q, want node-a", backend.nodeID)
+	}
+
+	var got deviceBlacklistResponse
+	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	want := []string{"android-1", "ios-2"}
+	if len(got.Serials) != len(want) {
+		t.Fatalf("serials = %+v, want %+v", got.Serials, want)
+	}
+	for i := range want {
+		if got.Serials[i] != want[i] {
+			t.Fatalf("serials = %+v, want %+v", got.Serials, want)
+		}
+	}
+}
+
+func TestAddDeviceBlacklistPersistsConfigAndReportsRestartRequired(t *testing.T) {
+	backend := &configNodeBackend{
+		config: &mastconfig.Config{DeviceBlacklist: []string{"android-1"}},
+		result: &mastconfig.UpdateResult{
+			Config:              mastconfig.Config{DeviceBlacklist: []string{"android-1", "ios-2"}},
+			ChangedKeys:         []string{"device_blacklist"},
+			RestartRequired:     true,
+			RestartRequiredKeys: []string{"device_blacklist"},
+		},
+	}
+	server := NewServer(backend)
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/nodes/node-a/device-blacklist", bytes.NewReader([]byte(`{"serial":"ios-2"}`)))
+
+	server.Handler().ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusOK, res.Body.String())
+	}
+	if backend.values["device_blacklist"] != "android-1,ios-2" {
+		t.Fatalf("device_blacklist value = %q, want android-1,ios-2", backend.values["device_blacklist"])
+	}
+
+	var got deviceBlacklistResponse
+	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !got.RestartRequired || len(got.RestartRequiredKeys) != 1 || got.RestartRequiredKeys[0] != "device_blacklist" {
+		t.Fatalf("response = %+v, want restart required for device_blacklist", got)
 	}
 }
 
@@ -153,4 +244,15 @@ type screenshotBackend struct {
 func (b *screenshotBackend) Screenshot(serial string) ([]byte, error) {
 	b.serial = serial
 	return b.png, nil
+}
+
+type geometryTestBackend struct {
+	fakeBackend
+	serial   string
+	geometry *node.DeviceGeometry
+}
+
+func (b *geometryTestBackend) Geometry(serial string) (*node.DeviceGeometry, error) {
+	b.serial = serial
+	return b.geometry, nil
 }

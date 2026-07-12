@@ -208,6 +208,52 @@ func (s *Server) StopRun(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) RequestRunStop(w http.ResponseWriter, r *http.Request) {
+	programs, ok := s.programs.(runStopRequester)
+	if !ok {
+		http.Error(w, "program runner not configured", http.StatusServiceUnavailable)
+		return
+	}
+	run, err := programs.RequestStop(r.PathValue("id"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(run)
+}
+
+func (s *Server) GetRunStopRequest(w http.ResponseWriter, r *http.Request) {
+	programs, ok := s.programs.(runStopRequester)
+	if !ok {
+		http.Error(w, "program runner not configured", http.StatusServiceUnavailable)
+		return
+	}
+	request, err := programs.StopRequest(r.PathValue("id"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(request)
+}
+
+func (s *Server) AcknowledgeRunStop(w http.ResponseWriter, r *http.Request) {
+	programs, ok := s.programs.(runStopRequester)
+	if !ok {
+		http.Error(w, "program runner not configured", http.StatusServiceUnavailable)
+		return
+	}
+	run, err := programs.AcknowledgeStop(r.PathValue("id"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(run)
+}
+
 // ResumeRun handles POST /api/runs/{id}/resume.
 // It re-executes a stopped, failed, exited, or lost run in its existing workspace.
 func (s *Server) ResumeRun(w http.ResponseWriter, r *http.Request) {

@@ -11,9 +11,11 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	mastconfig "github.com/brijorn/mast/internal/config"
 	"github.com/brijorn/mast/internal/scrcpy"
 	streamcfg "github.com/brijorn/mast/internal/stream"
 	"github.com/google/go-cmp/cmp"
@@ -21,12 +23,14 @@ import (
 
 type pushCall struct {
 	Host       string
+	Serial     string
 	LocalPath  string
 	RemotePath string
 }
 
 type reverseCall struct {
 	Host         string
+	Serial       string
 	DeviceSocket string
 	LocalPort    int
 }
@@ -38,6 +42,7 @@ type shellCall struct {
 }
 
 type fakeADB struct {
+	mu                       sync.Mutex
 	outputs                  map[string][]byte
 	errors                   map[string]error
 	shellOutputs             map[string][]byte
@@ -47,6 +52,7 @@ type fakeADB struct {
 	shellCommandErrors       map[string]error
 	execOutOutputs           map[string][]byte
 	execOutErrors            map[string]error
+	deviceWaits              map[string]<-chan struct{}
 	calls                    []string
 	pushCalls                []pushCall
 	reverseCalls             []reverseCall
@@ -56,45 +62,72 @@ type fakeADB struct {
 }
 
 func (a *fakeADB) Devices(ctx context.Context, host string) ([]byte, error) {
+	a.mu.Lock()
 	a.calls = append(a.calls, host)
-	if err := a.errors[host]; err != nil {
+	wait := a.deviceWaits[host]
+	err := a.errors[host]
+	output := append([]byte(nil), a.outputs[host]...)
+	a.mu.Unlock()
+	if wait != nil {
+		select {
+		case <-wait:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	if err != nil {
 		return nil, err
 	}
-	return a.outputs[host], nil
+	return output, nil
 }
 
-func (a *fakeADB) Push(ctx context.Context, host string, localPath string, remotePath string) error {
+func (a *fakeADB) Push(ctx context.Context, host string, serial string, localPath string, remotePath string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.pushCalls = append(a.pushCalls, pushCall{
 		Host:       host,
+		Serial:     serial,
 		LocalPath:  localPath,
 		RemotePath: remotePath,
 	})
 	return nil
 }
 
-func (a *fakeADB) Reverse(ctx context.Context, host string, deviceSocket string, localPort int) error {
+func (a *fakeADB) Reverse(ctx context.Context, host string, serial string, deviceSocket string, localPort int) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.reverseCalls = append(a.reverseCalls, reverseCall{
 		Host:         host,
+		Serial:       serial,
 		DeviceSocket: deviceSocket,
 		LocalPort:    localPort,
 	})
 	return nil
 }
 
-func (a *fakeADB) StartShell(host string, arg ...string) (*exec.Cmd, error) {
+func (a *fakeADB) StartShell(host string, serial string, arg ...string) (*exec.Cmd, error) {
+	a.mu.Lock()
 	a.shellCalls = append(a.shellCalls, shellCall{
-		Host: host,
-		Args: append([]string(nil), arg...),
+		Host:   host,
+		Serial: serial,
+		Args:   append([]string(nil), arg...),
 	})
+	var port int
 	if len(a.reverseCalls) > 0 {
-		port := a.reverseCalls[len(a.reverseCalls)-1].LocalPort
+		port = a.reverseCalls[len(a.reverseCalls)-1].LocalPort
+	}
+	controlMessages := a.controlMessages
+	a.mu.Unlock()
+	if port > 0 {
 		audio, control := fakeScrcpySocketOptions(arg)
-		go writeFakeScrcpySockets(port, audio, control, a.controlMessages)
+		go writeFakeScrcpySockets(port, audio, control, controlMessages)
 	}
 	return nil, nil
 }
 
 func (a *fakeADB) Shell(ctx context.Context, host string, serial string, arg ...string) ([]byte, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.shellOutputCalls = append(a.shellOutputCalls, shellCall{
 		Host:   host,
 		Serial: serial,
@@ -123,6 +156,8 @@ func shellCommandKey(serial string, arg ...string) string {
 }
 
 func (a *fakeADB) ExecOut(ctx context.Context, host string, serial string, arg ...string) ([]byte, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.shellOutputCalls = append(a.shellOutputCalls, shellCall{
 		Host:   host,
 		Serial: serial,
@@ -132,6 +167,16 @@ func (a *fakeADB) ExecOut(ctx context.Context, host string, serial string, arg .
 		return nil, err
 	}
 	return a.execOutOutputs[serial], nil
+}
+
+func (a *fakeADB) shellOutputCallsSnapshot() []shellCall {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	calls := append([]shellCall(nil), a.shellOutputCalls...)
+	for index := range calls {
+		calls[index].Args = append([]string(nil), calls[index].Args...)
+	}
+	return calls
 }
 
 func fakeScrcpySocketOptions(args []string) (bool, bool) {
@@ -265,6 +310,39 @@ func TestParseDevicesOutput(t *testing.T) {
 	}
 }
 
+func TestListLocalDeviceStatesFiltersStartupBlacklist(t *testing.T) {
+	n, err := NewNode("node-a", ":0", "127.0.0.1", true, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = n.Close() }()
+	n.adb = &fakeADB{
+		outputs: map[string][]byte{
+			"": []byte("List of devices attached\nabc123\tdevice\nxyz789\tdevice\n"),
+		},
+		errors: map[string]error{},
+	}
+	cfg := mastconfig.Default()
+	cfg.AndroidEnabled = true
+	cfg.DeviceBlacklist = []string{"abc123"}
+	n.SetConfig("", cfg, nil)
+
+	got, err := n.listLocalDeviceStates()
+	if err != nil {
+		t.Fatalf("listLocalDeviceStates returned error: %v", err)
+	}
+
+	expected := []DeviceInfo{
+		{Serial: "xyz789", Platform: PlatformAndroid, State: "device", NodeID: "node-a"},
+	}
+	if diff := cmp.Diff(expected, got); diff != "" {
+		t.Fatalf("devices mismatch (-want +got):\n%s", diff)
+	}
+	if _, err := n.DeviceBySerial("abc123"); err == nil {
+		t.Fatal("DeviceBySerial returned blacklisted device, want error")
+	}
+}
+
 func TestParseBatteryLevel(t *testing.T) {
 	got, err := parseBatteryLevel("AC powered: false\n  level: 87\nscale: 100\n")
 	if err != nil {
@@ -302,7 +380,7 @@ func TestParseBatterySnapshotCharging(t *testing.T) {
 	if got.PowerConnected == nil || !*got.PowerConnected {
 		t.Fatalf("power connected = %v, want true", got.PowerConnected)
 	}
-	if got.PowerSource != "usb" || got.BatteryStatus != "charging" || got.PowerHealth != "charging" {
+	if got.PowerSource != "usb" || got.BatteryStatus != "charging" || got.BatteryState != BatteryStateCharging {
 		t.Fatalf("snapshot = %+v, want usb charging", got)
 	}
 }
@@ -312,8 +390,8 @@ func TestParseBatterySnapshotUSBPoweredButCurrentDraining(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseBatterySnapshot returned error: %v", err)
 	}
-	if got.PowerHealth != "plugged_draining" {
-		t.Fatalf("PowerHealth = %q, want plugged_draining", got.PowerHealth)
+	if got.BatteryState != BatteryStatePluggedDraining {
+		t.Fatalf("BatteryState = %q, want plugged_draining", got.BatteryState)
 	}
 }
 
@@ -339,8 +417,8 @@ func TestParseBatterySnapshotSamsungHistoryShowsPluggedDraining(t *testing.T) {
 	if got.BatteryCurrentAvg == nil || *got.BatteryCurrentAvg != -183 {
 		t.Fatalf("BatteryCurrentAvg = %v, want -183", got.BatteryCurrentAvg)
 	}
-	if got.PowerHealth != "plugged_draining" {
-		t.Fatalf("PowerHealth = %q, want plugged_draining", got.PowerHealth)
+	if got.BatteryState != BatteryStatePluggedDraining {
+		t.Fatalf("BatteryState = %q, want plugged_draining", got.BatteryState)
 	}
 }
 
@@ -352,7 +430,7 @@ func TestParseBatterySnapshotUnpluggedDischarging(t *testing.T) {
 	if got.PowerConnected == nil || *got.PowerConnected {
 		t.Fatalf("power connected = %v, want false", got.PowerConnected)
 	}
-	if got.PowerSource != "none" || got.PowerHealth != "unplugged_draining" {
+	if got.PowerSource != "none" || got.BatteryState != BatteryStateDischarging {
 		t.Fatalf("snapshot = %+v, want unplugged draining", got)
 	}
 }
@@ -362,7 +440,7 @@ func TestParseBatterySnapshotFull(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseBatterySnapshot returned error: %v", err)
 	}
-	if got.PowerSource != "ac" || got.BatteryStatus != "full" || got.PowerHealth != "full" {
+	if got.PowerSource != "ac" || got.BatteryStatus != "full" || got.BatteryState != BatteryStateFull {
 		t.Fatalf("snapshot = %+v, want ac full", got)
 	}
 }
@@ -412,7 +490,6 @@ func TestListDevicesIncludesLocalDevices(t *testing.T) {
 func TestListDevicesIncludesLocalBattery(t *testing.T) {
 	localADBOutput := []byte("List of devices attached\nlocal-123\tdevice\n")
 	battery := 64
-	powerConnected := true
 	fake := &fakeADB{
 		outputs: map[string][]byte{
 			"": localADBOutput,
@@ -435,15 +512,11 @@ func TestListDevicesIncludesLocalBattery(t *testing.T) {
 
 	expected := []DeviceInfo{
 		{
-			Serial:         "local-123",
-			Platform:       PlatformAndroid,
-			State:          "device",
-			BatteryPercent: &battery,
-			PowerConnected: &powerConnected,
-			PowerSource:    "usb",
-			BatteryStatus:  "charging",
-			PowerHealth:    "charging",
-			NodeID:         "local-node",
+			Serial:   "local-123",
+			Platform: PlatformAndroid,
+			State:    "device",
+			Battery:  &DeviceBattery{Percent: &battery, State: BatteryStateCharging},
+			NodeID:   "local-node",
 		},
 	}
 	if diff := cmp.Diff(expected, got); diff != "" {
@@ -461,7 +534,6 @@ func TestListDevicesIncludesLocalBattery(t *testing.T) {
 func TestListDevicesUsesCachedBatteryWhenBatteryFails(t *testing.T) {
 	localADBOutput := []byte("List of devices attached\nlocal-123\tdevice\n")
 	battery := 64
-	powerConnected := true
 	fake := &fakeADB{
 		outputs: map[string][]byte{
 			"": localADBOutput,
@@ -490,15 +562,11 @@ func TestListDevicesUsesCachedBatteryWhenBatteryFails(t *testing.T) {
 
 	expected := []DeviceInfo{
 		{
-			Serial:         "local-123",
-			Platform:       PlatformAndroid,
-			State:          "device",
-			BatteryPercent: &battery,
-			PowerConnected: &powerConnected,
-			PowerSource:    "usb",
-			BatteryStatus:  "charging",
-			PowerHealth:    "charging",
-			NodeID:         "local-node",
+			Serial:   "local-123",
+			Platform: PlatformAndroid,
+			State:    "device",
+			Battery:  &DeviceBattery{Percent: &battery, State: BatteryStateCharging},
+			NodeID:   "local-node",
 		},
 	}
 	if diff := cmp.Diff(expected, got); diff != "" {
@@ -572,7 +640,7 @@ func TestListDevicesIncludesAndroidEnabledPeerDevices(t *testing.T) {
 
 	expected := []DeviceInfo{
 		{Serial: "local-123", Platform: PlatformAndroid, State: "device", NodeID: "a"},
-		{Serial: "remote-456", Platform: PlatformAndroid, State: "device", BatteryPercent: &remoteBattery, NodeID: "b"},
+		{Serial: "remote-456", Platform: PlatformAndroid, State: "device", Battery: &DeviceBattery{Percent: &remoteBattery, State: BatteryStateUnknown}, NodeID: "b"},
 	}
 	if diff := cmp.Diff(expected, got); diff != "" {
 		t.Fatalf("devices mismatch (-want +got):\n%s", diff)
@@ -627,6 +695,54 @@ func TestListDevicesReturnsLocalDevicesWhenPeerListingFails(t *testing.T) {
 	}
 	if !strings.Contains(nodes[index].DeviceError, expectedErr.Error()) {
 		t.Fatalf("DeviceError = %q, want it to contain %q", nodes[index].DeviceError, expectedErr.Error())
+	}
+}
+
+func TestDeviceBySerialReturnsHealthyPeerBeforeSlowPeer(t *testing.T) {
+	nodeA, nodeB := createNodePair(t)
+	nodeC, err := NewNode("c", ":0", "", false, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = nodeC.Listen() }()
+	defer func() { _ = nodeA.Close() }()
+	defer func() { _ = nodeB.Close() }()
+	defer func() { _ = nodeC.Close() }()
+
+	never := make(chan struct{})
+	nodeB.AndroidEnabled = true
+	nodeB.adb = &fakeADB{
+		deviceWaits: map[string]<-chan struct{}{
+			"": never,
+		},
+	}
+	nodeC.AndroidEnabled = true
+	nodeC.adb = &fakeADB{
+		outputs: map[string][]byte{
+			"": []byte("List of devices attached\nremote-123\tdevice\n"),
+		},
+	}
+
+	connectPeerToNode(t, nodeB, nodeA)
+	connectPeerToNode(t, nodeC, nodeA)
+
+	started := time.Now()
+	device, err := nodeA.DeviceBySerial("remote-123")
+	if err != nil {
+		t.Fatalf("DeviceBySerial returned error: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("DeviceBySerial took %s, want it to skip waiting for the slow peer", elapsed)
+	}
+
+	expected := &DeviceInfo{
+		Serial:   "remote-123",
+		Platform: PlatformAndroid,
+		State:    "device",
+		NodeID:   "c",
+	}
+	if diff := cmp.Diff(expected, device); diff != "" {
+		t.Fatalf("device mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -779,6 +895,9 @@ func TestStartStreamSetsUpLocalDeviceStream(t *testing.T) {
 	if fake.pushCalls[0].Host != "" {
 		t.Fatalf("push host = %q, want local host", fake.pushCalls[0].Host)
 	}
+	if fake.pushCalls[0].Serial != "local-123" {
+		t.Fatalf("push serial = %q, want %q", fake.pushCalls[0].Serial, "local-123")
+	}
 	if fake.pushCalls[0].LocalPath == "" {
 		t.Fatal("push local path is empty")
 	}
@@ -787,7 +906,7 @@ func TestStartStreamSetsUpLocalDeviceStream(t *testing.T) {
 	}
 
 	expectedReverseCalls := []reverseCall{
-		{Host: "", DeviceSocket: scrcpy.DeviceSocket, LocalPort: session.LocalPort},
+		{Host: "", Serial: "local-123", DeviceSocket: scrcpy.DeviceSocket, LocalPort: session.LocalPort},
 	}
 	if diff := cmp.Diff(expectedReverseCalls, fake.reverseCalls); diff != "" {
 		t.Fatalf("reverse calls mismatch (-want +got):\n%s", diff)
@@ -795,7 +914,8 @@ func TestStartStreamSetsUpLocalDeviceStream(t *testing.T) {
 
 	expectedShellCalls := []shellCall{
 		{
-			Host: "",
+			Host:   "",
+			Serial: "local-123",
 			Args: []string{
 				"CLASSPATH=" + scrcpy.RemotePath,
 				"app_process",
@@ -855,12 +975,12 @@ func TestStartStreamTurnsScreenOffAfterControlConnects(t *testing.T) {
 func TestStartStreamRejectsTurnScreenOffWithoutControl(t *testing.T) {
 	node := &Node{}
 
-	_, err := node.startLocalStream("local-123", streamcfg.Options{
+	_, err := node.startLocalAndroidStream("local-123", streamcfg.Options{
 		NoControl:     true,
 		TurnScreenOff: true,
 	})
 	if err == nil || !strings.Contains(err.Error(), "turn_screen_off requires control") {
-		t.Fatalf("startLocalStream error = %v, want turn_screen_off requires control", err)
+		t.Fatalf("startLocalAndroidStream error = %v, want turn_screen_off requires control", err)
 	}
 }
 

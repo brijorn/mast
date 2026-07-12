@@ -40,15 +40,14 @@ func TestApplyNodeUpdateRoutesToPeer(t *testing.T) {
 	nodeA, nodeB := createNodePair(t)
 	defer func() { _ = nodeA.Close() }()
 	defer func() { _ = nodeB.Close() }()
-	originalScheduleRestart := scheduleProcessRestart
-	restartScheduled := false
-	scheduleProcessRestart = func(time.Duration) error {
-		restartScheduled = true
+	restartScheduled := make(chan struct{}, 1)
+	nodeB.scheduleRestart = func(time.Duration) error {
+		select {
+		case restartScheduled <- struct{}{}:
+		default:
+		}
 		return nil
 	}
-	defer func() {
-		scheduleProcessRestart = originalScheduleRestart
-	}()
 
 	nodeB.updateApplier = &fakeUpdateApplier{
 		result: &update.ApplyResult{
@@ -77,7 +76,9 @@ func TestApplyNodeUpdateRoutesToPeer(t *testing.T) {
 	if !nodeB.updateApplier.(*fakeUpdateApplier).restart {
 		t.Fatal("Restart was not forwarded to peer applier")
 	}
-	if !restartScheduled {
+	select {
+	case <-restartScheduled:
+	case <-time.After(time.Second):
 		t.Fatal("restart was not scheduled")
 	}
 }

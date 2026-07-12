@@ -22,11 +22,14 @@ func (f RuntimeConfigApplierFunc) ApplyRuntimeConfig(cfg mastconfig.Config, chan
 
 func (n *Node) SetConfig(path string, cfg mastconfig.Config, applier RuntimeConfigApplier) {
 	n.configMu.Lock()
-	defer n.configMu.Unlock()
 	n.configPath = path
 	n.configState = cfg.Clone()
 	n.configReady = true
 	n.configApplier = applier
+	n.configMu.Unlock()
+
+	n.applyNodeConfig(cfg)
+	n.setDeviceBlacklist(cfg.DeviceBlacklist)
 }
 
 func (n *Node) GetNodeConfig(ctx context.Context, nodeID string) (*mastconfig.Config, error) {
@@ -129,7 +132,24 @@ func (n *Node) applyNodeConfig(cfg mastconfig.Config) {
 	n.IOSEnabled = cfg.IOSEnabled
 	n.ProxyEnabled = cfg.ProxyEnabled
 	n.ADBPort = cfg.ADBPort
+	n.APIAddr = cfg.APIAddr
 	n.AdvertiseHost = cfg.AdvertiseHost
+}
+
+func (n *Node) setDeviceBlacklist(serials []string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.deviceBlacklist = make(map[string]struct{}, len(serials))
+	for _, serial := range mastconfig.NormalizeDeviceBlacklist(serials) {
+		n.deviceBlacklist[serial] = struct{}{}
+	}
+}
+
+func (n *Node) isDeviceBlacklisted(serial string) bool {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	_, ok := n.deviceBlacklist[serial]
+	return ok
 }
 
 func (n *Node) handleConfigGetRequest(peer *PeerConn, req transport.ConfigGetRequest) {

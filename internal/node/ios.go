@@ -22,24 +22,49 @@ const (
 	iosPresetTimeout  = 5 * time.Second
 )
 
+var listIOSDevices = ioslink.ListDevices
+
 func (n *Node) listLocalIOSDevices() ([]DeviceInfo, error) {
-	summaries, err := ioslink.ListDevices()
+	summaries, err := listIOSDevices()
 	if err != nil {
 		return nil, err
 	}
+	return iosDeviceInfos(summaries, n.ID), nil
+}
+
+func iosDeviceInfos(summaries []ioslink.DeviceSummary, nodeID string) []DeviceInfo {
 	devices := make([]DeviceInfo, 0, len(summaries))
+	indexByUDID := make(map[string]int, len(summaries))
+	usbByUDID := make(map[string]bool, len(summaries))
+
 	for _, summary := range summaries {
 		if summary.UDID == "" {
 			continue
 		}
-		devices = append(devices, DeviceInfo{
+		device := DeviceInfo{
 			Serial:   summary.UDID,
 			Platform: PlatformIOS,
 			State:    summary.State,
-			NodeID:   n.ID,
-		})
+			NodeID:   nodeID,
+		}
+		isUSB := isIOSUSBConnection(summary.ConnectionType)
+		if index, ok := indexByUDID[summary.UDID]; ok {
+			if isUSB && !usbByUDID[summary.UDID] {
+				devices[index] = device
+				usbByUDID[summary.UDID] = true
+			}
+			continue
+		}
+
+		indexByUDID[summary.UDID] = len(devices)
+		usbByUDID[summary.UDID] = isUSB
+		devices = append(devices, device)
 	}
-	return devices, nil
+	return devices
+}
+
+func isIOSUSBConnection(connectionType string) bool {
+	return strings.EqualFold(strings.TrimSpace(connectionType), "usb")
 }
 
 func (n *Node) startLocalIOSStream(serial string, _ streamcfg.Options) (*StreamSession, error) {

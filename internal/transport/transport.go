@@ -8,35 +8,35 @@ import (
 )
 
 const (
-	TypeConnectionRequest       = "connection_request"
-	TypeListDevicesRequest      = "list_devices_request"
-	TypeListDevicesResponse     = "list_devices_response"
-	TypeDeviceDNSGetRequest     = "device_dns_get_request"
-	TypeDeviceDNSGetResponse    = "device_dns_get_response"
-	TypeDeviceDNSToggleRequest  = "device_dns_toggle_request"
-	TypeDeviceDNSToggleResponse = "device_dns_toggle_response"
-	TypeScreenshotRequest       = "screenshot_request"
-	TypeScreenshotResponse      = "screenshot_response"
-	TypeStartStreamRequest      = "start_stream_request"
-	TypeStartStreamResponse     = "start_stream_response"
-	TypeStopStreamRequest       = "stop_stream_request"
-	TypeTouchRequest            = "touch_request"
-	TypeTapRequest              = "tap_request"
-	TypeSwipeRequest            = "swipe_request"
-	TypePressKeyRequest         = "press_key_request"
-	TypePressButtonRequest      = "press_button_request"
-	TypeTextInputRequest        = "text_input_request"
-	TypeClipboardGetRequest     = "clipboard_get_request"
-	TypeClipboardGetResponse    = "clipboard_get_response"
-	TypeClipboardSetRequest     = "clipboard_set_request"
-	TypeUpdateCheckRequest      = "update_check_request"
-	TypeUpdateCheckResponse     = "update_check_response"
-	TypeUpdateApplyRequest      = "update_apply_request"
-	TypeUpdateApplyResponse     = "update_apply_response"
-	TypeConfigGetRequest        = "config_get_request"
-	TypeConfigGetResponse       = "config_get_response"
-	TypeConfigUpdateRequest     = "config_update_request"
-	TypeConfigUpdateResponse    = "config_update_response"
+	TypeConnectionRequest    = "connection_request"
+	TypeListDevicesRequest   = "list_devices_request"
+	TypeListDevicesResponse  = "list_devices_response"
+	TypeDeviceDNSGetRequest  = "device_dns_get_request"
+	TypeDeviceDNSGetResponse = "device_dns_get_response"
+	TypeDeviceDNSSetRequest  = "device_dns_set_request"
+	TypeDeviceDNSSetResponse = "device_dns_set_response"
+	TypeScreenshotRequest    = "screenshot_request"
+	TypeScreenshotResponse   = "screenshot_response"
+	TypeStartStreamRequest   = "start_stream_request"
+	TypeStartStreamResponse  = "start_stream_response"
+	TypeStopStreamRequest    = "stop_stream_request"
+	TypeTouchRequest         = "touch_request"
+	TypeTapRequest           = "tap_request"
+	TypeSwipeRequest         = "swipe_request"
+	TypePressKeyRequest      = "press_key_request"
+	TypePressButtonRequest   = "press_button_request"
+	TypeTextInputRequest     = "text_input_request"
+	TypeClipboardGetRequest  = "clipboard_get_request"
+	TypeClipboardGetResponse = "clipboard_get_response"
+	TypeClipboardSetRequest  = "clipboard_set_request"
+	TypeUpdateCheckRequest   = "update_check_request"
+	TypeUpdateCheckResponse  = "update_check_response"
+	TypeUpdateApplyRequest   = "update_apply_request"
+	TypeUpdateApplyResponse  = "update_apply_response"
+	TypeConfigGetRequest     = "config_get_request"
+	TypeConfigGetResponse    = "config_get_response"
+	TypeConfigUpdateRequest  = "config_update_request"
+	TypeConfigUpdateResponse = "config_update_response"
 )
 
 type Message interface {
@@ -69,6 +69,7 @@ type ConnectionRequestPayload struct {
 	IOSEnabled     bool   `json:"ios_enabled"`
 	ProxyEnabled   bool   `json:"proxy_enabled"`
 	ADBPort        int    `json:"adb_port,omitempty"`
+	APIAddr        string `json:"api_addr,omitempty"`
 	Version        string `json:"version"`
 	Commit         string `json:"commit"`
 	BuildDate      string `json:"build_date"`
@@ -84,18 +85,16 @@ type ListDevicesRequest struct {
 }
 
 type DeviceInfoPayload struct {
-	Serial                     string   `json:"serial"`
-	Platform                   string   `json:"platform"`
-	State                      string   `json:"state"`
-	NodeID                     string   `json:"node_id"`
-	BatteryPercent             *int     `json:"battery_percent,omitempty"`
-	PowerConnected             *bool    `json:"power_connected,omitempty"`
-	PowerSource                string   `json:"power_source,omitempty"`
-	BatteryStatus              string   `json:"battery_status,omitempty"`
-	PowerHealth                string   `json:"power_health,omitempty"`
-	BatteryCurrentNow          *int     `json:"battery_current_now,omitempty"`
-	BatteryCurrentAvg          *int     `json:"battery_current_avg,omitempty"`
-	BatteryTrendPercentPerHour *float64 `json:"battery_trend_percent_per_hour,omitempty"`
+	Serial   string                `json:"serial"`
+	Platform string                `json:"platform"`
+	State    string                `json:"state"`
+	NodeID   string                `json:"node_id"`
+	Battery  *DeviceBatteryPayload `json:"battery,omitempty"`
+}
+
+type DeviceBatteryPayload struct {
+	Percent *int   `json:"percent,omitempty"`
+	State   string `json:"state"`
 }
 
 type ListDevicesResponsePayload struct {
@@ -109,9 +108,8 @@ type ListDevicesResponse struct {
 }
 
 type DeviceDNSStatusPayload struct {
-	Mode      string `json:"mode"`
-	Hostname  string `json:"hostname,omitempty"`
-	Automatic bool   `json:"automatic"`
+	Mode     string `json:"mode"`
+	Hostname string `json:"hostname,omitempty"`
 }
 
 type DeviceDNSGetRequestPayload struct {
@@ -133,23 +131,25 @@ type DeviceDNSGetResponse struct {
 	Payload DeviceDNSGetResponsePayload `json:"payload"`
 }
 
-type DeviceDNSToggleRequestPayload struct {
-	Serial string `json:"serial"`
+type DeviceDNSSetRequestPayload struct {
+	Serial   string `json:"serial"`
+	Mode     string `json:"mode"`
+	Hostname string `json:"hostname,omitempty"`
 }
 
-type DeviceDNSToggleRequest struct {
+type DeviceDNSSetRequest struct {
 	RawMessage
-	Payload DeviceDNSToggleRequestPayload `json:"payload"`
+	Payload DeviceDNSSetRequestPayload `json:"payload"`
 }
 
-type DeviceDNSToggleResponsePayload struct {
+type DeviceDNSSetResponsePayload struct {
 	Result *DeviceDNSStatusPayload `json:"result,omitempty"`
 	Error  string                  `json:"error,omitempty"`
 }
 
-type DeviceDNSToggleResponse struct {
+type DeviceDNSSetResponse struct {
 	RawMessage
-	Payload DeviceDNSToggleResponsePayload `json:"payload"`
+	Payload DeviceDNSSetResponsePayload `json:"payload"`
 }
 
 type ScreenshotRequestPayload struct {

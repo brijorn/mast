@@ -20,6 +20,22 @@ type fakeProgramBackend struct {
 	autostartEnabled bool
 	logOffsets       program.LogOffsets
 	uploaded         program.RegisterUploadOptions
+	stopRequested    bool
+	stopAcknowledged bool
+}
+
+func (f *fakeProgramBackend) RequestStop(id string) (*program.Run, error) {
+	f.stopRequested = true
+	return &program.Run{ID: id, Status: "running"}, nil
+}
+
+func (f *fakeProgramBackend) StopRequest(_ string) (*program.StopRequest, error) {
+	return &program.StopRequest{}, nil
+}
+
+func (f *fakeProgramBackend) AcknowledgeStop(id string) (*program.Run, error) {
+	f.stopAcknowledged = true
+	return &program.Run{ID: id, Status: "running"}, nil
 }
 
 func (f *fakeProgramBackend) ListPrograms() []program.Program {
@@ -229,6 +245,23 @@ func TestSetRunAutostartCallsBackend(t *testing.T) {
 	}
 	if !got.Autostart {
 		t.Fatalf("got Autostart = false, want true")
+	}
+}
+
+func TestSoftStopLifecycleEndpointsCallBackend(t *testing.T) {
+	backend := &fakeProgramBackend{}
+	server := NewServer(nil, backend)
+	request := httptest.NewRequest(http.MethodPost, "/api/runs/run-1/stop-request", nil)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !backend.stopRequested {
+		t.Fatalf("request response=%d requested=%v body=%s", response.Code, backend.stopRequested, response.Body.String())
+	}
+	ack := httptest.NewRequest(http.MethodPost, "/api/runs/run-1/stop-ack", nil)
+	ackResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(ackResponse, ack)
+	if ackResponse.Code != http.StatusOK || !backend.stopAcknowledged {
+		t.Fatalf("ack response=%d acknowledged=%v body=%s", ackResponse.Code, backend.stopAcknowledged, ackResponse.Body.String())
 	}
 }
 

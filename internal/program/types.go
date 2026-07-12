@@ -19,8 +19,31 @@ const (
 )
 
 type Entry struct {
-	Command string   `json:"command"`
-	Args    []string `json:"args,omitempty"`
+	Command    string           `json:"command"`
+	Args       []string         `json:"args,omitempty"`
+	Companions []CompanionEntry `json:"companions,omitempty"`
+}
+
+type CompanionCondition struct {
+	Variable string `json:"variable"`
+	Equals   string `json:"equals"`
+}
+
+type CompanionEntry struct {
+	ID          string             `json:"id"`
+	Command     string             `json:"command"`
+	Args        []string           `json:"args,omitempty"`
+	EnabledWhen CompanionCondition `json:"enabled_when"`
+	Required    bool               `json:"required,omitempty"`
+}
+
+type RunProcess struct {
+	ID       string   `json:"id"`
+	Cmd      string   `json:"cmd"`
+	CmdArgs  []string `json:"cmd_args,omitempty"`
+	Required bool     `json:"required,omitempty"`
+	PID      int      `json:"pid,omitempty"`
+	Error    string   `json:"error,omitempty"`
 }
 
 type ConfigMapping struct {
@@ -41,6 +64,8 @@ type Program struct {
 }
 
 type Run struct {
+	SchemaVersion   int               `json:"schema_version"`
+	Revision        uint64            `json:"revision"`
 	ID              string            `json:"id"`
 	ProgramID       string            `json:"program_id"`
 	Serial          string            `json:"serial"`
@@ -54,11 +79,14 @@ type Run struct {
 	Env             map[string]string `json:"env,omitempty"`
 	// Cmd and CmdArgs are the resolved command and arguments used to start this
 	// run. They are persisted so that Resume can re-execute the same process.
-	Cmd         string     `json:"cmd,omitempty"`
-	CmdArgs     []string   `json:"cmd_args,omitempty"`
-	PID         int        `json:"pid,omitempty"`
-	StartedAt   time.Time  `json:"started_at"`
-	CompletedAt *time.Time `json:"completed_at,omitempty"`
+	Cmd                string       `json:"cmd,omitempty"`
+	CmdArgs            []string     `json:"cmd_args,omitempty"`
+	Companions         []RunProcess `json:"companions,omitempty"`
+	PID                int          `json:"pid,omitempty"`
+	StartedAt          time.Time    `json:"started_at"`
+	CompletedAt        *time.Time   `json:"completed_at,omitempty"`
+	StopRequestedAt    *time.Time   `json:"stop_requested_at,omitempty"`
+	StopAcknowledgedAt *time.Time   `json:"stop_acknowledged_at,omitempty"`
 	// WorkspaceCleaned is true after the run's workspace directory has been
 	// removed by CleanupRun.
 	WorkspaceCleaned bool  `json:"workspace_cleaned,omitempty"`
@@ -98,6 +126,11 @@ type ResumeOptions struct {
 type StopOptions struct {
 	ID              string `json:"id,omitempty"`
 	AutostartPaused bool   `json:"autostart_paused,omitempty"`
+}
+
+type StopRequest struct {
+	RequestedAt    *time.Time `json:"requested_at,omitempty"`
+	AcknowledgedAt *time.Time `json:"acknowledged_at,omitempty"`
 }
 
 type LogOffsets struct {

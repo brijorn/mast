@@ -1,7 +1,9 @@
 package node
 
 import (
+	"context"
 	"encoding/binary"
+	"errors"
 	"net"
 	"os"
 	"os/exec"
@@ -118,6 +120,148 @@ func TestStartStreamRoutesRemoteDeviceToPeer(t *testing.T) {
 	}
 	if nodeBADB.reverseCalls[0].Host != "" {
 		t.Fatalf("node B reverse host = %q, want local host", nodeBADB.reverseCalls[0].Host)
+	}
+}
+
+func TestPeerListDevicesNotBlockedBySlowStartStream(t *testing.T) {
+	nodeA, nodeB := createNodePair(t)
+	defer func() { _ = nodeA.Close() }()
+	defer func() { _ = nodeB.Close() }()
+
+	nodeB.AndroidEnabled = true
+	nodeB.adb = &fakeADB{
+		outputs: map[string][]byte{
+			"": []byte("List of devices attached\nremote-123\tdevice\n"),
+		},
+	}
+	blockedStart := &streamEntry{Done: make(chan struct{})}
+	nodeB.streams["remote-123"] = blockedStart
+
+	connectNodePair(t, nodeA, nodeB)
+
+	startDone := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, err := nodeA.startPeerStream(ctx, "b", "remote-123", streamcfg.Options{
+			NoAudio:   true,
+			NoControl: true,
+		})
+		startDone <- err
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	devices, err := nodeA.listPeerDevices(ctx, "b")
+	if err != nil {
+		t.Fatalf("listPeerDevices returned error while start stream was blocked: %v", err)
+	}
+	if len(devices) != 1 || devices[0].Serial != "remote-123" {
+		t.Fatalf("devices = %+v, want remote-123", devices)
+	}
+
+	blockedStart.Session = &StreamSession{
+		ID:           "blocked-stream",
+		DeviceSerial: "remote-123",
+		Platform:     PlatformAndroid,
+		Kind:         "h264",
+	}
+	close(blockedStart.Done)
+
+	select {
+	case err := <-startDone:
+		if err != nil {
+			t.Fatalf("startPeerStream returned error after unblock: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("startPeerStream did not finish after unblock")
+	}
+}
+
+func TestPeerMJPEGURLUsesPeerAPIAddr(t *testing.T) {
+	node := &Node{
+		ID: "local-node",
+		Peers: map[string]*PeerConn{
+			"mac-node": {
+				Addr:    "100.103.16.24",
+				APIAddr: ":7001",
+			},
+		},
+	}
+
+	got, err := node.peerMJPEGURL("mac-node", &StreamSession{
+		Host:     "100.103.16.24",
+		MJPEGURL: "/api/streams/mjpeg?serial=ios-123",
+	})
+	if err != nil {
+		t.Fatalf("peerMJPEGURL returned error: %v", err)
+	}
+
+	want := "http://100.103.16.24:7001/api/streams/mjpeg?serial=ios-123"
+	if got != want {
+		t.Fatalf("peerMJPEGURL = %q, want %q", got, want)
+	}
+}
+
+func TestPeerMJPEGURLDefaultsPeerAPIAddr(t *testing.T) {
+	node := &Node{
+		ID: "local-node",
+		Peers: map[string]*PeerConn{
+			"mac-node": {
+				Addr: "100.103.16.24",
+			},
+		},
+	}
+
+	got, err := node.peerMJPEGURL("mac-node", &StreamSession{
+		Host:     "100.103.16.24",
+		MJPEGURL: "/api/streams/mjpeg?serial=ios-123",
+	})
+	if err != nil {
+		t.Fatalf("peerMJPEGURL returned error: %v", err)
+	}
+
+	want := "http://100.103.16.24:6271/api/streams/mjpeg?serial=ios-123"
+	if got != want {
+		t.Fatalf("peerMJPEGURL = %q, want %q", got, want)
+	}
+}
+
+func TestPeerVideoURLUsesPeerAPIAddr(t *testing.T) {
+	node := &Node{
+		ID: "local-node",
+		Peers: map[string]*PeerConn{
+			"android-node": {
+				Addr:    "100.99.89.88",
+				APIAddr: ":7001",
+			},
+		},
+	}
+
+	got, err := node.peerVideoURL("android-node", &StreamSession{
+		Host:     "100.99.89.88",
+		VideoURL: "/api/streams/video?serial=android-123",
+	})
+	if err != nil {
+		t.Fatalf("peerVideoURL returned error: %v", err)
+	}
+
+	want := "ws://100.99.89.88:7001/api/streams/video?serial=android-123"
+	if got != want {
+		t.Fatalf("peerVideoURL = %q, want %q", got, want)
+	}
+}
+
+func TestVideoViewerURLAddsRequiredViewer(t *testing.T) {
+	got, err := videoViewerURL("ws://100.99.89.88:7001/api/streams/video?serial=android-123", "peer-viewer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "ws://100.99.89.88:7001/api/streams/video?serial=android-123&viewer=peer-viewer"
+	if got != want {
+		t.Fatalf("videoViewerURL = %q, want %q", got, want)
 	}
 }
 
@@ -325,7 +469,84 @@ func TestDropStreamRemovesCurrentSession(t *testing.T) {
 	}
 }
 
-func TestEnsureStreamReusesExistingStreamWithStaleReplayKeyframe(t *testing.T) {
+func TestHandleMJPEGStreamErrorKeepsSessionOnContextCancellation(t *testing.T) {
+	serial := "ios-123"
+	session := &StreamSession{DeviceSerial: serial, Platform: PlatformIOS, Kind: "mjpeg"}
+	node := nodeWithReadyStream(serial, session)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := node.handleMJPEGStreamError(ctx, serial, session, ctx.Err()); err != nil {
+		t.Fatalf("handleMJPEGStreamError returned error: %v", err)
+	}
+
+	assertStreamPresent(t, node, serial, true)
+}
+
+func TestHandleMJPEGStreamErrorKeepsSessionOnViewerDisconnect(t *testing.T) {
+	serial := "ios-123"
+	session := &StreamSession{DeviceSerial: serial, Platform: PlatformIOS, Kind: "mjpeg"}
+	node := nodeWithReadyStream(serial, session)
+	err := errors.New("write tcp 127.0.0.1:6271->127.0.0.1:52000: write: broken pipe")
+
+	if gotErr := node.handleMJPEGStreamError(context.Background(), serial, session, err); gotErr != nil {
+		t.Fatalf("handleMJPEGStreamError returned error: %v", gotErr)
+	}
+
+	assertStreamPresent(t, node, serial, true)
+}
+
+func TestHandleMJPEGStreamErrorKeepsSessionOnStreamClosed(t *testing.T) {
+	serial := "ios-123"
+	session := &StreamSession{DeviceSerial: serial, Platform: PlatformIOS, Kind: "mjpeg"}
+	node := nodeWithReadyStream(serial, session)
+	err := errors.New("stream closed")
+
+	if gotErr := node.handleMJPEGStreamError(context.Background(), serial, session, err); gotErr != nil {
+		t.Fatalf("handleMJPEGStreamError returned error: %v", gotErr)
+	}
+
+	assertStreamPresent(t, node, serial, true)
+}
+
+func TestHandleMJPEGStreamErrorDropsSessionOnStreamFailure(t *testing.T) {
+	serial := "ios-123"
+	session := &StreamSession{DeviceSerial: serial, Platform: PlatformIOS, Kind: "mjpeg"}
+	node := nodeWithReadyStream(serial, session)
+	streamErr := errors.New("mjpeg upstream failed")
+
+	if err := node.handleMJPEGStreamError(context.Background(), serial, session, streamErr); !errors.Is(err, streamErr) {
+		t.Fatalf("handleMJPEGStreamError returned %v, want %v", err, streamErr)
+	}
+
+	assertStreamPresent(t, node, serial, false)
+}
+
+func nodeWithReadyStream(serial string, session *StreamSession) *Node {
+	done := make(chan struct{})
+	close(done)
+	return &Node{
+		streams: map[string]*streamEntry{
+			serial: {
+				Session: session,
+				Done:    done,
+			},
+		},
+	}
+}
+
+func assertStreamPresent(t *testing.T, node *Node, serial string, want bool) {
+	t.Helper()
+
+	node.streamsMu.RLock()
+	_, ok := node.streams[serial]
+	node.streamsMu.RUnlock()
+	if ok != want {
+		t.Fatalf("stream present = %t, want %t", ok, want)
+	}
+}
+
+func TestEnsureStreamReusesExistingStreamWithCachedGOP(t *testing.T) {
 	node := &Node{
 		streams: make(map[string]*streamEntry),
 	}
@@ -334,7 +555,6 @@ func TestEnsureStreamReusesExistingStreamWithStaleReplayKeyframe(t *testing.T) {
 
 	broadcaster := newVideoBroadcaster()
 	broadcaster.broadcast(VideoPacket{PTS: 1, Keyframe: true, Data: []byte{1}})
-	broadcaster.latestKeyframe.receivedAt = time.Now().Add(-videoReplayKeyframeMaxAge - time.Second)
 
 	existing := &StreamSession{
 		ID:               "existing-stream",
@@ -359,6 +579,53 @@ func TestEnsureStreamReusesExistingStreamWithStaleReplayKeyframe(t *testing.T) {
 	}
 	if startCalls != 0 {
 		t.Fatalf("start calls = %d, want 0", startCalls)
+	}
+}
+
+func TestEnsureStreamReplacesStalledAndroidVideo(t *testing.T) {
+	node := &Node{streams: make(map[string]*streamEntry)}
+	done := make(chan struct{})
+	close(done)
+
+	existing := &StreamSession{
+		ID:               "stalled-stream",
+		DeviceSerial:     "local-123",
+		Platform:         PlatformAndroid,
+		Kind:             "h264",
+		videoBroadcaster: newVideoBroadcaster(),
+		videoStartedAt:   time.Now().Add(-androidVideoStallTimeout - time.Second),
+	}
+	node.streams["local-123"] = &streamEntry{Session: existing, Done: done}
+
+	fresh := &StreamSession{ID: "fresh-stream"}
+	startCalls := 0
+	got, err := node.ensureStream("local-123", streamcfg.Options{NoControl: true}, func(string, streamcfg.Options) (*StreamSession, error) {
+		startCalls++
+		return fresh, nil
+	})
+	if err != nil {
+		t.Fatalf("ensureStream returned error: %v", err)
+	}
+	if got != fresh {
+		t.Fatalf("ensureStream returned %p, want fresh stream %p", got, fresh)
+	}
+	if startCalls != 1 {
+		t.Fatalf("start calls = %d, want 1", startCalls)
+	}
+}
+
+func TestAndroidVideoHealthUsesLatestPacket(t *testing.T) {
+	broadcaster := newVideoBroadcaster()
+	session := &StreamSession{
+		Platform:         PlatformAndroid,
+		Kind:             "h264",
+		videoBroadcaster: broadcaster,
+		videoStartedAt:   time.Now().Add(-androidVideoStallTimeout - time.Second),
+	}
+
+	broadcaster.broadcast(VideoPacket{PTS: 1, Keyframe: true, Data: []byte{1}})
+	if session.isUnhealthyAndroidVideo(time.Now()) {
+		t.Fatal("isUnhealthyAndroidVideo = true after a current packet, want false")
 	}
 }
 

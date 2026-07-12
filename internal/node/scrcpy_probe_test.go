@@ -36,7 +36,7 @@ func TestProbeScrcpyHandshake(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := n.pushScrcpyServer(host); err != nil {
+	if err := n.pushScrcpyServer(host, serial); err != nil {
 		t.Fatal(err)
 	}
 
@@ -50,11 +50,11 @@ func TestProbeScrcpyHandshake(t *testing.T) {
 		}
 	}()
 
-	if err := n.createScrcpyReverse(host, port); err != nil {
+	if err := n.createScrcpyReverse(host, serial, port); err != nil {
 		t.Fatal(err)
 	}
 
-	cmd, err := n.startScrcpyProcess(host, streamcfg.Options{NoAudio: true})
+	cmd, err := n.startScrcpyProcess(host, serial, streamcfg.Options{NoAudio: true})
 	if err != nil {
 		t.Fatal(err)
 	}

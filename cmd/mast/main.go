@@ -15,6 +15,7 @@ var cli struct {
 	Start   mastcli.StartCmd   `cmd:""`
 	Service mastcli.ServiceCmd `cmd:""`
 	Config  mastcli.ConfigCmd  `cmd:""`
+	Device  mastcli.DeviceCmd  `cmd:""`
 	Version mastcli.VersionCmd `cmd:""`
 	Peer    mastcli.PeerCmd    `cmd:""`
 	Update  mastcli.UpdateCmd  `cmd:""`

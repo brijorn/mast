@@ -5,20 +5,31 @@ import (
 	"math"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/brijorn/mast/internal/scrcpy"
+	"github.com/google/go-cmp/cmp"
 )
 
 type recordingConn struct {
+	mu   sync.Mutex
 	data []byte
 }
 
 func (c *recordingConn) Read([]byte) (int, error) { return 0, nil }
 func (c *recordingConn) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.data = append(c.data, p...)
 	return len(p), nil
+}
+
+func (c *recordingConn) dataSnapshot() []byte {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]byte(nil), c.data...)
 }
 func (c *recordingConn) Close() error                     { return nil }
 func (c *recordingConn) LocalAddr() net.Addr              { return fakeAddr("local") }
@@ -42,7 +53,7 @@ func TestTapLocalWritesControlMessage(t *testing.T) {
 		controlConn:  controlConn,
 	})
 
-	if err := node.Tap("local-123", 12, 34); err != nil {
+	if err := node.tapLocal("local-123", 12, 34); err != nil {
 		t.Fatalf("Tap returned error: %v", err)
 	}
 
@@ -63,7 +74,7 @@ func TestTapLocalWritesControlMessage(t *testing.T) {
 func TestTapLocalRequiresStartedStream(t *testing.T) {
 	node := newControlTestNode("local-node", "local-123")
 
-	err := node.Tap("local-123", 12, 34)
+	err := node.tapLocal("local-123", 12, 34)
 	if err == nil || !strings.Contains(err.Error(), "stream not found") {
 		t.Fatalf("Tap error = %v, want stream not found", err)
 	}
@@ -77,7 +88,7 @@ func TestTapLocalRequiresControlConnection(t *testing.T) {
 		Height:       1080,
 	})
 
-	err := node.Tap("local-123", 12, 34)
+	err := node.tapLocal("local-123", 12, 34)
 	if err == nil || !strings.Contains(err.Error(), "stream control connection not available") {
 		t.Fatalf("Tap error = %v, want missing control connection", err)
 	}
@@ -93,20 +104,13 @@ func TestTapRemoteSendsPeerRequest(t *testing.T) {
 			"": []byte("List of devices attached\n"),
 		},
 	}
-	nodeB.adb = &fakeADB{
+	remoteADB := &fakeADB{
 		outputs: map[string][]byte{
 			"": []byte("List of devices attached\nremote-123\tdevice\n"),
 		},
 	}
+	nodeB.adb = remoteADB
 	nodeB.AndroidEnabled = true
-	controlConn := &recordingConn{}
-	nodeB.streams["remote-123"] = readyStreamEntry(&StreamSession{
-		DeviceSerial: "remote-123",
-		Width:        944,
-		Height:       1080,
-		controlConn:  controlConn,
-	})
-
 	connectNodePair(t, nodeA, nodeB)
 
 	if err := nodeA.Tap("remote-123", 12, 34); err != nil {
@@ -114,13 +118,54 @@ func TestTapRemoteSendsPeerRequest(t *testing.T) {
 	}
 
 	waitFor(t, time.Second, func() bool {
-		return len(controlConn.data) == 64
+		return findADBTapCall(remoteADB.shellOutputCallsSnapshot()) != nil
 	})
-	if len(controlConn.data) != 64 {
-		t.Fatalf("tap wrote %d bytes, want 64", len(controlConn.data))
+	remoteCalls := remoteADB.shellOutputCallsSnapshot()
+	if call := findADBTapCall(remoteCalls); call == nil || !cmp.Equal(call.Args, []string{"input", "tap", "12", "34"}) {
+		t.Fatalf("ADB tap calls = %+v", remoteCalls)
 	}
-	if controlConn.data[0] != scrcpy.InjectTouchEvent {
-		t.Fatalf("down message type = %d, want %d", controlConn.data[0], scrcpy.InjectTouchEvent)
+}
+
+func findADBTapCall(calls []shellCall) *shellCall {
+	for index := range calls {
+		if len(calls[index].Args) >= 2 && calls[index].Args[0] == "input" && calls[index].Args[1] == "tap" {
+			return &calls[index]
+		}
+	}
+	return nil
+}
+
+func TestTapAndroidUsesADBWithoutStream(t *testing.T) {
+	node := newControlTestNode("local-node", "local-123")
+	adb := node.adb.(*fakeADB)
+	if err := node.Tap("local-123", 12, 34); err != nil {
+		t.Fatal(err)
+	}
+	if len(adb.shellOutputCalls) != 1 || !cmp.Equal(adb.shellOutputCalls[0].Args, []string{"input", "tap", "12", "34"}) {
+		t.Fatalf("ADB tap calls = %+v", adb.shellOutputCalls)
+	}
+}
+
+func TestTapAndroidPrefersStreamControl(t *testing.T) {
+	controlConn := &recordingConn{}
+	node := newControlTestNode("local-node", "local-123")
+	adb := node.adb.(*fakeADB)
+	node.streams["local-123"] = readyStreamEntry(&StreamSession{
+		DeviceSerial: "local-123",
+		Platform:     PlatformAndroid,
+		Width:        944,
+		Height:       1080,
+		controlConn:  controlConn,
+	})
+
+	if err := node.Tap("local-123", 12, 34); err != nil {
+		t.Fatal(err)
+	}
+	if len(controlConn.data) != 64 {
+		t.Fatalf("tap wrote %d control bytes, want 64", len(controlConn.data))
+	}
+	if len(adb.shellOutputCalls) != 0 {
+		t.Fatalf("ADB calls = %+v, want none", adb.shellOutputCalls)
 	}
 }
 
@@ -183,13 +228,14 @@ func TestSwipeRemoteSendsPeerRequest(t *testing.T) {
 	}
 
 	waitFor(t, time.Second, func() bool {
-		return len(controlConn.data) == 320
+		return len(controlConn.dataSnapshot()) == 320
 	})
-	if len(controlConn.data) != 320 {
-		t.Fatalf("swipe wrote %d bytes, want 320", len(controlConn.data))
+	data := controlConn.dataSnapshot()
+	if len(data) != 320 {
+		t.Fatalf("swipe wrote %d bytes, want 320", len(data))
 	}
-	if controlConn.data[1] != scrcpy.ActionDown {
-		t.Fatalf("down action = %d, want %d", controlConn.data[1], scrcpy.ActionDown)
+	if data[1] != scrcpy.ActionDown {
+		t.Fatalf("down action = %d, want %d", data[1], scrcpy.ActionDown)
 	}
 }
 
@@ -293,10 +339,10 @@ func TestTypeTextRemoteSendsPeerRequest(t *testing.T) {
 	}
 
 	waitFor(t, time.Second, func() bool {
-		return len(controlConn.data) == 10
+		return len(controlConn.dataSnapshot()) == 10
 	})
 	want := []byte{scrcpy.InjectText, 0, 0, 0, 5, 'h', 'e', 'l', 'l', 'o'}
-	if got := controlConn.data; string(got) != string(want) {
+	if got := controlConn.dataSnapshot(); string(got) != string(want) {
 		t.Fatalf("text control message = %v, want %v", got, want)
 	}
 }

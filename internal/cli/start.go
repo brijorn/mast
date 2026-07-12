@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -68,8 +69,16 @@ func (s *StartCmd) Run() error {
 	if err != nil {
 		return err
 	}
+	apiBase, err := normalizeHTTPBase(cfg.APIAddr)
+	if err != nil {
+		return err
+	}
+	programStore.SetMastAPIURL(apiBase)
 	programStore.SetRunners(cfg.Runners)
-	mastNode.SetConfig(s.ConfigPath, *cfg, &runtimeConfigApplier{programs: programStore, proxy: proxyRuntime})
+	mastNode.SetConfig(s.ConfigPath, *cfg, &runtimeConfigApplier{node: mastNode, programs: programStore, proxy: proxyRuntime})
+	if err := mastNode.EnsureADBServer(context.Background()); err != nil {
+		return err
+	}
 	apiServer := api.NewServer(mastNode, programStore)
 	var shuttingDown atomic.Bool
 	stopSignals := make(chan os.Signal, 1)
@@ -118,6 +127,9 @@ func resolveNodeID(cfg Config) (string, error) {
 }
 
 type runtimeConfigApplier struct {
+	node interface {
+		EnsureADBServerForConfig(context.Context, Config) error
+	}
 	programs interface {
 		SetRunners(map[string]string)
 	}
@@ -128,10 +140,26 @@ func (a *runtimeConfigApplier) ApplyRuntimeConfig(cfg Config, changedKeys []stri
 	if a.programs != nil {
 		a.programs.SetRunners(cfg.Runners)
 	}
+	if a.node != nil && cfg.AndroidEnabled && hasChangedKey(changedKeys, "android_enabled", "adb_port", "advertise_host") {
+		if err := a.node.EnsureADBServerForConfig(context.Background(), cfg); err != nil {
+			return err
+		}
+	}
 	if a.proxy != nil {
 		return a.proxy.SetEnabled(cfg.ProxyEnabled, cfg.ProxyAddr)
 	}
 	return nil
+}
+
+func hasChangedKey(changedKeys []string, targets ...string) bool {
+	for _, key := range changedKeys {
+		for _, target := range targets {
+			if key == target {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 type runtimeProxy struct {

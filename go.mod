@@ -9,6 +9,7 @@ require github.com/google/uuid v1.6.0 // direct
 require (
 	github.com/alecthomas/kong v1.15.0
 	github.com/brijorn/ioslink v0.0.0
+	github.com/danielpaulus/go-ios v1.0.204
 	github.com/google/go-cmp v0.7.0
 )
 
@@ -17,7 +18,6 @@ replace github.com/brijorn/ioslink => ../ioslink
 require (
 	github.com/Masterminds/semver v1.5.0 // indirect
 	github.com/cenkalti/backoff v2.2.1+incompatible // indirect
-	github.com/danielpaulus/go-ios v1.0.204 // indirect
 	github.com/go-task/slim-sprig v0.0.0-20230315185526-52ccab3ef572 // indirect
 	github.com/google/btree v1.1.3 // indirect
 	github.com/google/pprof v0.0.0-20210407192527-94a9f03dee38 // indirect
@@ -32,6 +32,7 @@ require (
 	github.com/rogpeppe/go-internal v1.15.0 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8 // indirect
+	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/tadglines/go-pkgs v0.0.0-20210623144937-b983b20f54f9 // indirect
 	go.mozilla.org/pkcs7 v0.9.0 // indirect
 	go.uber.org/mock v0.6.0 // indirect

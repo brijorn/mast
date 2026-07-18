@@ -67,6 +67,35 @@ func TestReadScrcpyVideoMetadata(t *testing.T) {
 	}
 }
 
+func TestViewerStreamKeepsStaticAndroidSession(t *testing.T) {
+	done := make(chan struct{})
+	close(done)
+	broadcaster := newVideoBroadcaster()
+	broadcaster.broadcastAt(
+		VideoPacket{PTS: 1, Keyframe: true, Data: annexBNAL(5, 1)},
+		time.Now().Add(-time.Hour),
+	)
+	session := &StreamSession{
+		DeviceSerial:     "local-123",
+		Platform:         PlatformAndroid,
+		Kind:             "h264",
+		videoBroadcaster: broadcaster,
+	}
+	node := &Node{
+		streams: map[string]*streamEntry{
+			"local-123": {Session: session, Done: done},
+		},
+	}
+
+	got, err := node.viewerStream("local-123")
+	if err != nil {
+		t.Fatalf("viewerStream returned error: %v", err)
+	}
+	if got != session {
+		t.Fatalf("viewerStream returned %p, want static session %p", got, session)
+	}
+}
+
 func TestStartStreamRoutesRemoteDeviceToPeer(t *testing.T) {
 	nodeA, nodeB := createNodePair(t)
 	defer func() { _ = nodeA.Close() }()
@@ -191,10 +220,7 @@ func TestPeerMJPEGURLUsesPeerAPIAddr(t *testing.T) {
 		},
 	}
 
-	got, err := node.peerMJPEGURL("mac-node", &StreamSession{
-		Host:     "100.103.16.24",
-		MJPEGURL: "/api/streams/mjpeg?serial=ios-123",
-	})
+	got, err := node.peerMJPEGURL("mac-node", "ios-123")
 	if err != nil {
 		t.Fatalf("peerMJPEGURL returned error: %v", err)
 	}
@@ -215,10 +241,7 @@ func TestPeerMJPEGURLDefaultsPeerAPIAddr(t *testing.T) {
 		},
 	}
 
-	got, err := node.peerMJPEGURL("mac-node", &StreamSession{
-		Host:     "100.103.16.24",
-		MJPEGURL: "/api/streams/mjpeg?serial=ios-123",
-	})
+	got, err := node.peerMJPEGURL("mac-node", "ios-123")
 	if err != nil {
 		t.Fatalf("peerMJPEGURL returned error: %v", err)
 	}
@@ -240,10 +263,7 @@ func TestPeerVideoURLUsesPeerAPIAddr(t *testing.T) {
 		},
 	}
 
-	got, err := node.peerVideoURL("android-node", &StreamSession{
-		Host:     "100.99.89.88",
-		VideoURL: "/api/streams/video?serial=android-123",
-	})
+	got, err := node.peerVideoURL("android-node", "android-123")
 	if err != nil {
 		t.Fatalf("peerVideoURL returned error: %v", err)
 	}
@@ -582,50 +602,58 @@ func TestEnsureStreamReusesExistingStreamWithCachedGOP(t *testing.T) {
 	}
 }
 
-func TestEnsureStreamReplacesStalledAndroidVideo(t *testing.T) {
+func TestEnsureStreamKeepsStaticAndroidVideo(t *testing.T) {
 	node := &Node{streams: make(map[string]*streamEntry)}
 	done := make(chan struct{})
 	close(done)
+	broadcaster := newVideoBroadcaster()
+	broadcaster.broadcastAt(
+		VideoPacket{PTS: 1, Keyframe: true, Data: annexBNAL(5, 1)},
+		time.Now().Add(-time.Hour),
+	)
 
 	existing := &StreamSession{
-		ID:               "stalled-stream",
+		ID:               "static-stream",
 		DeviceSerial:     "local-123",
 		Platform:         PlatformAndroid,
 		Kind:             "h264",
-		videoBroadcaster: newVideoBroadcaster(),
-		videoStartedAt:   time.Now().Add(-androidVideoStallTimeout - time.Second),
+		videoBroadcaster: broadcaster,
 	}
 	node.streams["local-123"] = &streamEntry{Session: existing, Done: done}
 
-	fresh := &StreamSession{ID: "fresh-stream"}
 	startCalls := 0
 	got, err := node.ensureStream("local-123", streamcfg.Options{NoControl: true}, func(string, streamcfg.Options) (*StreamSession, error) {
 		startCalls++
-		return fresh, nil
+		return &StreamSession{ID: "fresh-stream"}, nil
 	})
 	if err != nil {
 		t.Fatalf("ensureStream returned error: %v", err)
 	}
-	if got != fresh {
-		t.Fatalf("ensureStream returned %p, want fresh stream %p", got, fresh)
+	if got != existing {
+		t.Fatalf("ensureStream returned %p, want static stream %p", got, existing)
 	}
-	if startCalls != 1 {
-		t.Fatalf("start calls = %d, want 1", startCalls)
+	if startCalls != 0 {
+		t.Fatalf("start calls = %d, want 0", startCalls)
 	}
 }
 
-func TestAndroidVideoHealthUsesLatestPacket(t *testing.T) {
+func TestWaitForInitialVideoWakesDisplayBeforeRetry(t *testing.T) {
 	broadcaster := newVideoBroadcaster()
-	session := &StreamSession{
-		Platform:         PlatformAndroid,
-		Kind:             "h264",
-		videoBroadcaster: broadcaster,
-		videoStartedAt:   time.Now().Add(-androidVideoStallTimeout - time.Second),
+	packets, unsubscribe := broadcaster.Subscribe()
+	defer unsubscribe()
+	wakeCalls := 0
+	wakeDisplay := func() error {
+		wakeCalls++
+		broadcaster.broadcast(VideoPacket{PTS: 1, Config: true, Data: annexBNAL(7, 1)})
+		broadcaster.broadcast(VideoPacket{PTS: 2, Keyframe: true, Data: annexBNAL(5, 2)})
+		return nil
 	}
 
-	broadcaster.broadcast(VideoPacket{PTS: 1, Keyframe: true, Data: []byte{1}})
-	if session.isUnhealthyAndroidVideo(time.Now()) {
-		t.Fatal("isUnhealthyAndroidVideo = true after a current packet, want false")
+	if err := waitForInitialVideo(context.Background(), packets, wakeDisplay, time.Nanosecond, time.Second); err != nil {
+		t.Fatalf("waitForInitialVideo returned error: %v", err)
+	}
+	if wakeCalls != 1 {
+		t.Fatalf("wake calls = %d, want 1", wakeCalls)
 	}
 }
 

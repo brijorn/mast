@@ -49,7 +49,6 @@ type StreamSession struct {
 
 	videoConn        net.Conn
 	videoBroadcaster *videoBroadcaster
-	videoStartedAt   time.Time
 
 	controlConn net.Conn
 	controlMu   sync.Mutex
@@ -76,7 +75,10 @@ type iosTouchPoint struct {
 
 const (
 	peerStreamRPCTimeout     = 30 * time.Second
-	androidVideoStallTimeout = 10 * time.Second
+	videoStartupInitialWait  = 500 * time.Millisecond
+	videoStartupWakeWait     = 5 * time.Second
+	videoWriteTimeout        = 2 * time.Second
+	VideoCloseStreamNotFound = 4004
 )
 
 var ErrStreamNotFound = errors.New("stream not found")
@@ -178,14 +180,14 @@ func (s *StreamSession) acceptScrcpyConnection(opts streamcfg.Options) error {
 	return nil
 }
 
-func (s *StreamSession) turnScreenOff() error {
+func (s *StreamSession) setDisplayPower(on bool) error {
 	s.controlMu.Lock()
 	defer s.controlMu.Unlock()
 
 	if s.controlConn == nil {
-		return errors.New("turn_screen_off requires control")
+		return errors.New("display power requires control")
 	}
-	return scrcpy.WriteSetDisplayPower(s.controlConn, false)
+	return scrcpy.WriteSetDisplayPower(s.controlConn, on)
 }
 
 func (n *Node) applyStreamOptions(session *StreamSession, opts streamcfg.Options) error {
@@ -195,7 +197,53 @@ func (n *Node) applyStreamOptions(session *StreamSession, opts streamcfg.Options
 	if session.Platform == PlatformIOS {
 		return nil
 	}
-	return session.turnScreenOff()
+	return session.setDisplayPower(false)
+}
+
+func waitForVideoKeyframe(ctx context.Context, packets *videoSubscription) error {
+	for {
+		packet, ok, err := packets.NextContext(ctx, 0)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return errors.New("video source ended before the first keyframe")
+		}
+		if packet.Keyframe {
+			return nil
+		}
+	}
+}
+
+func waitForInitialVideo(
+	ctx context.Context,
+	packets *videoSubscription,
+	wakeDisplay func() error,
+	initialWait time.Duration,
+	wakeWait time.Duration,
+) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	initialCtx, cancelInitial := context.WithTimeout(ctx, initialWait)
+	err := waitForVideoKeyframe(initialCtx, packets)
+	cancelInitial()
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	if err := wakeDisplay(); err != nil {
+		return fmt.Errorf("wake display for video startup: %w", err)
+	}
+
+	wakeCtx, cancelWake := context.WithTimeout(ctx, wakeWait)
+	defer cancelWake()
+	if err := waitForVideoKeyframe(wakeCtx, packets); err != nil {
+		return fmt.Errorf("wait for video keyframe after waking display: %w", err)
+	}
+	return nil
 }
 
 func acceptScrcpySocket(ln net.Listener) (net.Conn, error) {
@@ -353,7 +401,7 @@ func (n *Node) startLocalAndroidStreamWithDeviceCheck(serial string, opts stream
 	}
 
 	n.configMu.RLock()
-	lockPortrait := n.configReady && n.configState.LockPortrait
+	lockPortrait := n.configReady && n.configState.LockPortrait && !opts.PreserveOrientation
 	n.configMu.RUnlock()
 
 	if lockPortrait {
@@ -414,13 +462,14 @@ func (n *Node) startLocalAndroidStreamWithDeviceCheck(serial string, opts stream
 		_ = session.Stop()
 		return nil, err
 	}
-	if err := n.applyStreamOptions(session, opts); err != nil {
+
+	session.videoBroadcaster = newVideoBroadcaster()
+	startupPackets, unsubscribeStartup, err := session.SubscribeVideo()
+	if err != nil {
 		_ = session.Stop()
 		return nil, err
 	}
-
-	session.videoBroadcaster = newVideoBroadcaster()
-	session.videoStartedAt = time.Now()
+	defer unsubscribeStartup()
 	go session.broadcastVideo(func() {
 		n.streamsMu.Lock()
 		entry, ok := n.streams[serial]
@@ -429,6 +478,29 @@ func (n *Node) startLocalAndroidStreamWithDeviceCheck(serial string, opts stream
 		}
 		n.streamsMu.Unlock()
 	})
+
+	wakeDisplay := func() error {
+		log.Printf("video startup for %s produced no keyframe; waking the display", serial)
+		if session.controlConn != nil {
+			return session.setDisplayPower(true)
+		}
+		_, err := n.adb.Shell(n.ctx, host, serial, "input", "keyevent", "KEYCODE_WAKEUP")
+		return err
+	}
+	if err := waitForInitialVideo(
+		n.ctx,
+		startupPackets,
+		wakeDisplay,
+		videoStartupInitialWait,
+		videoStartupWakeWait,
+	); err != nil {
+		_ = session.Stop()
+		return nil, fmt.Errorf("start video for %s: %w%s", serial, err, session.getStderrDiagnostics())
+	}
+	if err := n.applyStreamOptions(session, opts); err != nil {
+		_ = session.Stop()
+		return nil, err
+	}
 
 	return session, nil
 }
@@ -565,7 +637,7 @@ func (n *Node) ensureStream(serial string, opts streamcfg.Options, start func(st
 			if entry.Session == nil {
 				return nil, errors.New("internal error: stream session is nil")
 			}
-			if entry.Session.isUnhealthyIOS() || entry.Session.isUnhealthyAndroidVideo(time.Now()) {
+			if entry.Session.isUnhealthyIOS() {
 				n.streamsMu.Lock()
 				current, stillCurrent := n.streams[serial]
 				if stillCurrent && current == entry {
@@ -618,18 +690,6 @@ func (s *StreamSession) isUnhealthyIOS() bool {
 	return !s.iosDevice.Status().Ready
 }
 
-func (s *StreamSession) isUnhealthyAndroidVideo(now time.Time) bool {
-	if s.Platform != PlatformAndroid || s.Kind != "h264" || s.videoStartedAt.IsZero() || s.videoBroadcaster == nil {
-		return false
-	}
-
-	latestPacketAt := s.videoBroadcaster.latestPacketTime()
-	if latestPacketAt.IsZero() {
-		latestPacketAt = s.videoStartedAt
-	}
-	return now.Sub(latestPacketAt) > androidVideoStallTimeout
-}
-
 func (n *Node) GetStream(serial string) (*StreamSession, error) {
 	n.streamsMu.RLock()
 	entry, ok := n.streams[serial]
@@ -648,6 +708,18 @@ func (n *Node) GetStream(serial string) (*StreamSession, error) {
 	return entry.Session, nil
 }
 
+func (n *Node) viewerStream(serial string) (*StreamSession, error) {
+	stream, err := n.GetStream(serial)
+	if err != nil {
+		return nil, err
+	}
+	if stream.isUnhealthyIOS() {
+		n.DropStream(serial, stream)
+		return nil, streamNotFoundError(serial)
+	}
+	return stream, nil
+}
+
 func (n *Node) StreamMJPEG(ctx context.Context, serial string, w http.ResponseWriter) error {
 	device, err := n.deviceBySerial(serial)
 	if err != nil {
@@ -658,7 +730,7 @@ func (n *Node) StreamMJPEG(ctx context.Context, serial string, w http.ResponseWr
 		return n.proxyPeerMJPEG(ctx, device.NodeID, serial, w)
 	}
 
-	stream, err := n.GetStream(serial)
+	stream, err := n.viewerStream(serial)
 	if err != nil {
 		return err
 	}
@@ -710,7 +782,7 @@ func (n *Node) StreamVideo(ctx context.Context, serial string, conn *websocket.C
 		return n.proxyPeerVideo(ctx, device.NodeID, serial, conn)
 	}
 
-	stream, err := n.EnsureStream(serial, streamcfg.Options{})
+	stream, err := n.viewerStream(serial)
 	if err != nil {
 		return err
 	}
@@ -734,9 +806,18 @@ func (n *Node) StreamVideo(ctx context.Context, serial string, conn *websocket.C
 	}()
 
 	for {
-		packet, ok := packets.Next()
+		packet, ok, err := packets.NextContext(ctx, 0)
+		if err != nil {
+			return err
+		}
 		if !ok {
-			return nil
+			if ctx.Err() != nil {
+				return nil
+			}
+			return streamNotFoundError(serial)
+		}
+		if err := conn.SetWriteDeadline(time.Now().Add(videoWriteTimeout)); err != nil {
+			return err
 		}
 		if err := conn.WriteMessage(websocket.BinaryMessage, encodeVideoPacket(&packet)); err != nil {
 			return err
@@ -745,15 +826,7 @@ func (n *Node) StreamVideo(ctx context.Context, serial string, conn *websocket.C
 }
 
 func (n *Node) proxyPeerVideo(ctx context.Context, nodeID string, serial string, conn *websocket.Conn) error {
-	stream, err := n.EnsureStream(serial, streamcfg.Options{})
-	if err != nil {
-		return err
-	}
-	if stream.Kind != "h264" {
-		return errors.New("active stream is not H.264")
-	}
-
-	streamURL, err := n.peerVideoURL(nodeID, stream)
+	streamURL, err := n.peerVideoURL(nodeID, serial)
 	if err != nil {
 		return err
 	}
@@ -780,10 +853,16 @@ func (n *Node) proxyPeerVideo(ctx context.Context, nodeID string, serial string,
 	for {
 		messageType, data, err := peerConn.ReadMessage()
 		if err != nil {
+			if websocket.IsCloseError(err, VideoCloseStreamNotFound) {
+				return streamNotFoundError(serial)
+			}
 			return err
 		}
 		if messageType != websocket.BinaryMessage {
 			continue
+		}
+		if err := conn.SetWriteDeadline(time.Now().Add(videoWriteTimeout)); err != nil {
+			return err
 		}
 		if err := conn.WriteMessage(websocket.BinaryMessage, data); err != nil {
 			return err
@@ -792,15 +871,7 @@ func (n *Node) proxyPeerVideo(ctx context.Context, nodeID string, serial string,
 }
 
 func (n *Node) proxyPeerMJPEG(ctx context.Context, nodeID string, serial string, w http.ResponseWriter) error {
-	stream, err := n.EnsureStream(serial, streamcfg.Options{})
-	if err != nil {
-		return err
-	}
-	if stream.Kind != "mjpeg" {
-		return errors.New("active stream is not MJPEG")
-	}
-
-	streamURL, err := n.peerMJPEGURL(nodeID, stream)
+	streamURL, err := n.peerMJPEGURL(nodeID, serial)
 	if err != nil {
 		return err
 	}
@@ -821,6 +892,9 @@ func (n *Node) proxyPeerMJPEG(ctx context.Context, nodeID string, serial string,
 		if message == "" {
 			message = res.Status
 		}
+		if res.StatusCode == http.StatusNotFound {
+			return streamNotFoundError(serial)
+		}
 		return fmt.Errorf("peer mjpeg stream returned %s: %s", res.Status, message)
 	}
 
@@ -829,28 +903,13 @@ func (n *Node) proxyPeerMJPEG(ctx context.Context, nodeID string, serial string,
 	return copyStreamResponse(w, res.Body)
 }
 
-func (n *Node) peerMJPEGURL(nodeID string, stream *StreamSession) (string, error) {
-	if stream == nil {
-		return "", errors.New("stream session not found")
-	}
-	if stream.MJPEGURL == "" {
-		return "", errors.New("stream missing MJPEG URL")
-	}
-	if parsed, err := url.Parse(stream.MJPEGURL); err == nil && parsed.IsAbs() {
-		return stream.MJPEGURL, nil
-	}
-
+func (n *Node) peerMJPEGURL(nodeID string, serial string) (string, error) {
 	peer, ok := n.GetPeer(nodeID)
 	if !ok {
 		return "", errors.New("peer not found: " + nodeID)
 	}
 
-	host := stream.Host
-	if host == "" {
-		host = peer.Addr
-	}
-
-	base, err := peerAPIBaseURL(host, peer.APIAddr)
+	base, err := peerAPIBaseURL(peer.Addr, peer.APIAddr)
 	if err != nil {
 		return "", err
 	}
@@ -858,35 +917,20 @@ func (n *Node) peerMJPEGURL(nodeID string, stream *StreamSession) (string, error
 	if err != nil {
 		return "", err
 	}
-	streamPath, err := url.Parse(stream.MJPEGURL)
-	if err != nil {
-		return "", err
-	}
+	streamPath := &url.URL{Path: "/api/streams/mjpeg"}
+	query := streamPath.Query()
+	query.Set("serial", serial)
+	streamPath.RawQuery = query.Encode()
 	return baseURL.ResolveReference(streamPath).String(), nil
 }
 
-func (n *Node) peerVideoURL(nodeID string, stream *StreamSession) (string, error) {
-	if stream == nil {
-		return "", errors.New("stream session not found")
-	}
-	if stream.VideoURL == "" {
-		return "", errors.New("stream missing video URL")
-	}
-	if parsed, err := url.Parse(stream.VideoURL); err == nil && parsed.IsAbs() {
-		return websocketURLFromHTTPURL(parsed), nil
-	}
-
+func (n *Node) peerVideoURL(nodeID string, serial string) (string, error) {
 	peer, ok := n.GetPeer(nodeID)
 	if !ok {
 		return "", errors.New("peer not found: " + nodeID)
 	}
 
-	host := stream.Host
-	if host == "" {
-		host = peer.Addr
-	}
-
-	base, err := peerAPIBaseURL(host, peer.APIAddr)
+	base, err := peerAPIBaseURL(peer.Addr, peer.APIAddr)
 	if err != nil {
 		return "", err
 	}
@@ -894,10 +938,10 @@ func (n *Node) peerVideoURL(nodeID string, stream *StreamSession) (string, error
 	if err != nil {
 		return "", err
 	}
-	streamPath, err := url.Parse(stream.VideoURL)
-	if err != nil {
-		return "", err
-	}
+	streamPath := &url.URL{Path: "/api/streams/video"}
+	query := streamPath.Query()
+	query.Set("serial", serial)
+	streamPath.RawQuery = query.Encode()
 	return websocketURLFromHTTPURL(baseURL.ResolveReference(streamPath)), nil
 }
 

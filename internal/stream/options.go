@@ -3,13 +3,14 @@ package stream
 import "strconv"
 
 type Options struct {
-	NoAudio           bool   `json:"no_audio"`
-	NoControl         bool   `json:"no_control"`
-	TurnScreenOff     bool   `json:"turn_screen_off"`
-	StayAwake         bool   `json:"stay_awake"`
-	MaxSize           int    `json:"max_size"`
-	VideoBitrate      int    `json:"video_bitrate"`
-	VideoCodecOptions string `json:"video_codec_options"`
+	NoAudio             bool   `json:"no_audio"`
+	NoControl           bool   `json:"no_control"`
+	PreserveOrientation bool   `json:"preserve_orientation"`
+	TurnScreenOff       bool   `json:"turn_screen_off"`
+	StayAwake           bool   `json:"stay_awake"`
+	MaxSize             int    `json:"max_size"`
+	VideoBitrate        int    `json:"video_bitrate"`
+	VideoCodecOptions   string `json:"video_codec_options"`
 }
 
 func (s Options) WithDefaults() Options {

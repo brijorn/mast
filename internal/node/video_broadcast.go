@@ -1,6 +1,8 @@
 package node
 
 import (
+	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -9,16 +11,20 @@ import (
 )
 
 const (
-	videoSubscriberMaxQueuedBytes = 4 << 20
-	videoReplayMaxQueuedBytes     = 4 << 20
+	videoSubscriberMaxLatency     = 500 * time.Millisecond
+	videoSubscriberMaxQueuedBytes = 1 << 20
+	videoReplayMaxQueuedBytes     = 1 << 20
 )
 
+var errVideoPacketWaitTimeout = errors.New("video packet wait timeout")
+
 type VideoPacket struct {
-	PTS      uint64
-	Config   bool
-	Keyframe bool
-	Data     []byte
-	encoded  []byte
+	PTS        uint64
+	Config     bool
+	Keyframe   bool
+	Data       []byte
+	encoded    []byte
+	receivedAt time.Time
 }
 
 func encodeVideoPacket(packet *VideoPacket) []byte {
@@ -101,6 +107,19 @@ func newVideoSubscription(initial []VideoPacket, waitingForKeyframe bool) *video
 }
 
 func (s *videoSubscription) Next() (VideoPacket, bool) {
+	packet, ok, _ := s.NextContext(context.Background(), 0)
+	return packet, ok
+}
+
+func (s *videoSubscription) NextContext(ctx context.Context, maxWait time.Duration) (VideoPacket, bool, error) {
+	var timeout <-chan time.Time
+	var timer *time.Timer
+	if maxWait > 0 {
+		timer = time.NewTimer(maxWait)
+		timeout = timer.C
+		defer timer.Stop()
+	}
+
 	for {
 		s.mu.Lock()
 		if s.head < len(s.queue) {
@@ -113,28 +132,56 @@ func (s *videoSubscription) Next() (VideoPacket, bool) {
 				s.head = 0
 			}
 			s.mu.Unlock()
-			return packet, true
+			return packet, true, nil
 		}
 		if s.closed {
 			s.mu.Unlock()
-			return VideoPacket{}, false
+			return VideoPacket{}, false, nil
 		}
 		s.mu.Unlock()
-		<-s.ready
+
+		select {
+		case <-s.ready:
+		case <-ctx.Done():
+			return VideoPacket{}, false, ctx.Err()
+		case <-timeout:
+			return VideoPacket{}, false, errVideoPacketWaitTimeout
+		}
 	}
 }
 
 func (s *videoSubscription) enqueueDelta(packet VideoPacket) {
+	s.enqueueDeltaAt(packet, time.Now())
+}
+
+func (s *videoSubscription) enqueueDeltaAt(packet VideoPacket, now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed || s.waitingForKeyframe {
 		return
 	}
+	if packet.receivedAt.IsZero() {
+		packet.receivedAt = now
+	}
 
 	s.appendLocked(packet)
-	if s.queuedBytes > videoSubscriberMaxQueuedBytes {
+	if s.queuedBytes > videoSubscriberMaxQueuedBytes || s.queuedMediaAgeLocked(now) > videoSubscriberMaxLatency {
 		s.replaceLocked(nil, true)
 	}
+}
+
+func (s *videoSubscription) queuedMediaAgeLocked(now time.Time) time.Duration {
+	for i := s.head; i < len(s.queue); i++ {
+		packet := s.queue[i]
+		if packet.Config && !packet.Keyframe {
+			continue
+		}
+		if packet.receivedAt.IsZero() {
+			return 0
+		}
+		return now.Sub(packet.receivedAt)
+	}
+	return 0
 }
 
 func (s *videoSubscription) enqueueConfig(packet VideoPacket) {
@@ -211,7 +258,6 @@ type videoBroadcaster struct {
 	latestConfig    *VideoPacket
 	currentGOP      []VideoPacket
 	currentGOPBytes int
-	latestPacketAt  time.Time
 	closed          bool
 }
 
@@ -224,7 +270,14 @@ func newVideoBroadcaster() *videoBroadcaster {
 func (b *videoBroadcaster) Subscribe() (*videoSubscription, func()) {
 	b.mu.Lock()
 	initial := b.replayPacketsLocked()
-	subscription := newVideoSubscription(initial, len(b.currentGOP) == 0)
+	waitingForKeyframe := true
+	for i := range initial {
+		if initial[i].Keyframe {
+			waitingForKeyframe = false
+			break
+		}
+	}
+	subscription := newVideoSubscription(initial, waitingForKeyframe)
 	if b.closed {
 		subscription.close()
 	} else {
@@ -243,15 +296,34 @@ func (b *videoBroadcaster) Subscribe() (*videoSubscription, func()) {
 }
 
 func (b *videoBroadcaster) broadcast(packet VideoPacket) {
+	b.broadcastAt(packet, time.Now())
+}
+
+func (b *videoBroadcaster) broadcastAt(packet VideoPacket, now time.Time) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.closed {
 		return
 	}
-	b.latestPacketAt = time.Now()
+	packet.receivedAt = now
 
 	if packet.Config {
-		b.latestConfig = videoConfigPacket(packet)
+		nextConfig := videoConfigPacket(packet)
+		configChanged := b.latestConfig == nil || !bytes.Equal(b.latestConfig.Data, nextConfig.Data)
+		if configChanged {
+			b.latestConfig = nextConfig
+		}
+		if !packet.Keyframe {
+			if !configChanged {
+				return
+			}
+			b.currentGOP = nil
+			b.currentGOPBytes = 0
+			for subscription := range b.subscribers {
+				subscription.enqueueConfig(*b.latestConfig)
+			}
+			return
+		}
 	}
 	if packet.Keyframe {
 		if len(packet.Data) <= videoReplayMaxQueuedBytes {
@@ -266,14 +338,6 @@ func (b *videoBroadcaster) broadcast(packet VideoPacket) {
 		}
 		return
 	}
-	if packet.Config {
-		b.currentGOP = nil
-		b.currentGOPBytes = 0
-		for subscription := range b.subscribers {
-			subscription.enqueueConfig(*b.latestConfig)
-		}
-		return
-	}
 	if len(b.currentGOP) > 0 {
 		if b.currentGOPBytes+len(packet.Data) <= videoReplayMaxQueuedBytes {
 			b.currentGOP = append(b.currentGOP, packet)
@@ -284,14 +348,8 @@ func (b *videoBroadcaster) broadcast(packet VideoPacket) {
 		}
 	}
 	for subscription := range b.subscribers {
-		subscription.enqueueDelta(packet)
+		subscription.enqueueDeltaAt(packet, now)
 	}
-}
-
-func (b *videoBroadcaster) latestPacketTime() time.Time {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.latestPacketAt
 }
 
 func (b *videoBroadcaster) replayPacketsLocked() []VideoPacket {
@@ -314,7 +372,9 @@ func keyframeReplay(config *VideoPacket, keyframe VideoPacket) []VideoPacket {
 	if keyframe.Config || config == nil {
 		return []VideoPacket{keyframe}
 	}
-	return []VideoPacket{*config, keyframe}
+	replayConfig := *config
+	replayConfig.receivedAt = keyframe.receivedAt
+	return []VideoPacket{replayConfig, keyframe}
 }
 
 func videoConfigPacket(packet VideoPacket) *VideoPacket {

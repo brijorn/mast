@@ -190,6 +190,28 @@ func TestStreamVideoClientCloseCancelsViewer(t *testing.T) {
 	}
 }
 
+func TestStreamVideoMissingStreamUsesTypedCloseCode(t *testing.T) {
+	backend := &fakeBackend{err: node.ErrStreamNotFound}
+	server := httptest.NewServer(NewServer(backend).Handler())
+	defer server.Close()
+
+	url := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/streams/video?serial=phone-1&viewer=viewer-1"
+	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		t.Fatalf("dial video websocket: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	_, _, err = conn.ReadMessage()
+	var closeErr *websocket.CloseError
+	if !errors.As(err, &closeErr) {
+		t.Fatalf("ReadMessage error = %v, want websocket close error", err)
+	}
+	if closeErr.Code != node.VideoCloseStreamNotFound {
+		t.Fatalf("close code = %d, want %d", closeErr.Code, node.VideoCloseStreamNotFound)
+	}
+}
+
 func TestStreamVideoNewViewerReplacesPreviousViewer(t *testing.T) {
 	backend := &fakeBackend{
 		videoStarts:  make(chan string, 2),
@@ -313,7 +335,7 @@ func TestStartStreamStartsStream(t *testing.T) {
 	}
 	server := NewServer(backend)
 
-	body := []byte(`{"serial":"local-123","options":{"no_audio":true,"max_size":1080}}`)
+	body := []byte(`{"serial":"local-123","options":{"no_audio":true,"max_size":1080,"preserve_orientation":true}}`)
 	res := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/streams", bytes.NewReader(body))
 
@@ -344,8 +366,8 @@ func TestStartStreamStartsStream(t *testing.T) {
 	if backend.callCount() != 1 {
 		t.Fatalf("EnsureStream calls = %d, want 1", backend.callCount())
 	}
-	if got := backend.options[0]; !got.NoAudio || got.MaxSize != 1080 || !got.TurnScreenOff {
-		t.Fatalf("options = %+v, want no_audio=true, max_size=1080, and turn_screen_off=true", got)
+	if got := backend.options[0]; !got.NoAudio || got.MaxSize != 1080 || !got.TurnScreenOff || !got.PreserveOrientation {
+		t.Fatalf("options = %+v, want no_audio=true, max_size=1080, turn_screen_off=true, and preserve_orientation=true", got)
 	}
 }
 
@@ -414,6 +436,19 @@ func TestStreamMJPEGDelegatesToBackend(t *testing.T) {
 	}
 	if len(backend.serials) != 1 || backend.serials[0] != "ios-123" {
 		t.Fatalf("serials = %+v, want ios-123", backend.serials)
+	}
+}
+
+func TestStreamMJPEGMissingStreamReturnsNotFound(t *testing.T) {
+	backend := &fakeBackend{err: node.ErrStreamNotFound}
+	server := NewServer(backend)
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/streams/mjpeg?serial=ios-123", nil)
+	server.Handler().ServeHTTP(res, req)
+
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusNotFound, res.Body.String())
 	}
 }
 

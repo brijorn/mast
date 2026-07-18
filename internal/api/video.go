@@ -3,7 +3,9 @@ package api
 import (
 	"context"
 	"net/http"
+	"time"
 
+	"github.com/brijorn/mast/internal/node"
 	"github.com/gorilla/websocket"
 )
 
@@ -44,7 +46,14 @@ func (s *Server) StreamVideo(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	_ = s.node.StreamVideo(ctx, serial, conn)
+	streamErr := s.node.StreamVideo(ctx, serial, conn)
+	if node.IsStreamNotFound(streamErr) {
+		_ = conn.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(node.VideoCloseStreamNotFound, "stream not found"),
+			time.Now().Add(time.Second),
+		)
+	}
 	cancel()
 	_ = conn.Close()
 	<-readerDone

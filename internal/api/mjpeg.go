@@ -4,6 +4,8 @@ import (
 	"errors"
 	"log"
 	"net/http"
+
+	"github.com/brijorn/mast/internal/node"
 )
 
 func (s *Server) StreamMJPEG(w http.ResponseWriter, r *http.Request) {
@@ -17,7 +19,11 @@ func (s *Server) StreamMJPEG(w http.ResponseWriter, r *http.Request) {
 	if err := s.node.StreamMJPEG(r.Context(), serial, tracked); err != nil && !errors.Is(err, r.Context().Err()) {
 		log.Printf("mjpeg stream %s: %v", serial, err)
 		if !tracked.wrote {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			status := http.StatusInternalServerError
+			if node.IsStreamNotFound(err) {
+				status = http.StatusNotFound
+			}
+			http.Error(w, err.Error(), status)
 		}
 	}
 }

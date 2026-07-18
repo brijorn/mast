@@ -114,6 +114,129 @@ func TestVideoBroadcasterBoundsGOPWithoutKeyframes(t *testing.T) {
 	assertVideoPTS(t, queuedVideoPackets(subscription), 1, 5)
 }
 
+func TestVideoSubscriptionDropsPacketsPastLatencyBudget(t *testing.T) {
+	startedAt := time.Unix(1_000, 0)
+	subscription := newVideoSubscription(nil, false)
+
+	subscription.enqueueDeltaAt(VideoPacket{
+		PTS:        1,
+		Data:       annexBNAL(1, 1),
+		receivedAt: startedAt,
+	}, startedAt)
+	subscription.enqueueDeltaAt(VideoPacket{
+		PTS:        2,
+		Data:       annexBNAL(1, 2),
+		receivedAt: startedAt.Add(videoSubscriberMaxLatency + time.Millisecond),
+	}, startedAt.Add(videoSubscriberMaxLatency+time.Millisecond))
+
+	if got := queuedVideoPackets(subscription); len(got) != 0 {
+		t.Fatalf("queued packets after latency limit = %+v, want none", got)
+	}
+	if !subscription.waitingForKeyframe {
+		t.Fatal("waitingForKeyframe = false, want true after dropping stale queue")
+	}
+}
+
+func TestVideoSubscriptionLatencyTracksCurrentQueueHead(t *testing.T) {
+	startedAt := time.Unix(2_000, 0)
+	subscription := newVideoSubscription(nil, false)
+	subscription.enqueueDeltaAt(VideoPacket{
+		PTS:        1,
+		Data:       annexBNAL(1, 1),
+		receivedAt: startedAt,
+	}, startedAt)
+	subscription.enqueueDeltaAt(VideoPacket{
+		PTS:        2,
+		Data:       annexBNAL(1, 2),
+		receivedAt: startedAt.Add(400 * time.Millisecond),
+	}, startedAt.Add(400*time.Millisecond))
+
+	assertVideoPTS(t, takeVideoPackets(t, subscription, 1), 1)
+	subscription.enqueueDeltaAt(VideoPacket{
+		PTS:        3,
+		Data:       annexBNAL(1, 3),
+		receivedAt: startedAt.Add(600 * time.Millisecond),
+	}, startedAt.Add(600*time.Millisecond))
+
+	assertVideoPTS(t, queuedVideoPackets(subscription), 2, 3)
+}
+
+func TestVideoBroadcasterReplaysStaticGOPAfterWallClockDelay(t *testing.T) {
+	startedAt := time.Unix(3_000, 0)
+	broadcaster := newVideoBroadcaster()
+	broadcaster.broadcastAt(VideoPacket{PTS: 1, Config: true, Data: annexBNAL(7, 1)}, startedAt)
+	broadcaster.broadcastAt(VideoPacket{PTS: 2, Keyframe: true, Data: annexBNAL(5, 2)}, startedAt)
+	broadcaster.broadcastAt(VideoPacket{PTS: 3, Data: annexBNAL(1, 3)}, startedAt.Add(100*time.Millisecond))
+
+	subscription, unsubscribe := broadcaster.Subscribe()
+	defer unsubscribe()
+
+	assertVideoPTS(t, queuedVideoPackets(subscription), 1, 2, 3)
+	if subscription.waitingForKeyframe {
+		t.Fatal("waitingForKeyframe = true, want the last static frame to remain replayable")
+	}
+}
+
+func TestVideoBroadcasterKeepsStaticGOPAfterDuplicateConfig(t *testing.T) {
+	broadcaster := newVideoBroadcaster()
+	config := annexBNAL(7, 1)
+	broadcaster.broadcast(VideoPacket{PTS: 1, Config: true, Data: config})
+	broadcaster.broadcast(VideoPacket{PTS: 2, Keyframe: true, Data: annexBNAL(5, 2)})
+	broadcaster.broadcast(VideoPacket{PTS: 3, Data: annexBNAL(1, 3)})
+
+	current, unsubscribeCurrent := broadcaster.Subscribe()
+	defer unsubscribeCurrent()
+	takeVideoPackets(t, current, 3)
+
+	broadcaster.broadcast(VideoPacket{PTS: 4, Config: true, Data: append([]byte(nil), config...)})
+	if got := queuedVideoPackets(current); len(got) != 0 {
+		t.Fatalf("duplicate config queued for current viewer = %+v, want none", got)
+	}
+	if current.waitingForKeyframe {
+		t.Fatal("current viewer is waiting for a keyframe after duplicate config")
+	}
+
+	late, unsubscribeLate := broadcaster.Subscribe()
+	defer unsubscribeLate()
+	assertVideoPTS(t, queuedVideoPackets(late), 1, 2, 3)
+	if late.waitingForKeyframe {
+		t.Fatal("late viewer is waiting for a keyframe after duplicate config")
+	}
+}
+
+func TestVideoBroadcasterInvalidatesStaticGOPAfterChangedConfig(t *testing.T) {
+	broadcaster := newVideoBroadcaster()
+	broadcaster.broadcast(VideoPacket{PTS: 1, Config: true, Data: annexBNAL(7, 1)})
+	broadcaster.broadcast(VideoPacket{PTS: 2, Keyframe: true, Data: annexBNAL(5, 2)})
+	broadcaster.broadcast(VideoPacket{PTS: 3, Config: true, Data: annexBNAL(7, 3)})
+
+	subscription, unsubscribe := broadcaster.Subscribe()
+	defer unsubscribe()
+	assertVideoPTS(t, queuedVideoPackets(subscription), 3)
+	if !subscription.waitingForKeyframe {
+		t.Fatal("viewer is not waiting for a keyframe after codec config changed")
+	}
+}
+
+func TestVideoBroadcasterKeepsSparseGOPAcrossWallClockGap(t *testing.T) {
+	startedAt := time.Unix(4_000, 0)
+	broadcaster := newVideoBroadcaster()
+	broadcaster.broadcastAt(VideoPacket{PTS: 1, Config: true, Data: annexBNAL(7, 1)}, startedAt)
+	broadcaster.broadcastAt(VideoPacket{PTS: 2, Keyframe: true, Data: annexBNAL(5, 2)}, startedAt)
+	broadcaster.broadcastAt(
+		VideoPacket{PTS: 3, Data: annexBNAL(1, 3)},
+		startedAt.Add(time.Hour),
+	)
+
+	subscription, unsubscribe := broadcaster.Subscribe()
+	defer unsubscribe()
+
+	assertVideoPTS(t, queuedVideoPackets(subscription), 1, 2, 3)
+	if subscription.waitingForKeyframe {
+		t.Fatal("waitingForKeyframe = true after a sparse frame that remained within the byte budget")
+	}
+}
+
 func TestVideoBroadcasterBoundsRetainedGOPWithoutBlockingCurrentViewer(t *testing.T) {
 	broadcaster := newVideoBroadcaster()
 	broadcaster.broadcast(VideoPacket{PTS: 1, Config: true, Data: annexBNAL(7, 1)})

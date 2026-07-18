@@ -352,6 +352,13 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				break
 			}
 			go n.handleDeviceDNSSetRequest(peer, req)
+		case transport.TypeDeviceOrientationSetRequest:
+			var req transport.DeviceOrientationSetRequest
+			if err := json.Unmarshal(message, &req); err != nil {
+				log.Println("decode device orientation set request:", err)
+				break
+			}
+			go n.handleDeviceOrientationSetRequest(peer, req)
 		case transport.TypeStartStreamRequest:
 			var req transport.StartStreamRequest
 			if err := json.Unmarshal(message, &req); err != nil {

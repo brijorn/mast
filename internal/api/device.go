@@ -112,3 +112,39 @@ func (s *Server) SetDeviceDNS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
+
+type setDeviceOrientationRequest struct {
+	Orientation node.DeviceOrientation `json:"orientation"`
+}
+
+func (s *Server) SetDeviceOrientation(w http.ResponseWriter, r *http.Request) {
+	serial := r.PathValue("serial")
+	if serial == "" {
+		http.Error(w, "serial required", http.StatusBadRequest)
+		return
+	}
+
+	var desired setDeviceOrientationRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&desired); err != nil {
+		http.Error(w, "invalid orientation configuration: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if desired.Orientation != node.DeviceOrientationPortrait && desired.Orientation != node.DeviceOrientationLandscape {
+		http.Error(w, "orientation must be portrait or landscape", http.StatusBadRequest)
+		return
+	}
+
+	status, err := s.node.SetDeviceOrientation(serial, desired.Orientation)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	if err := json.NewEncoder(w).Encode(status); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}

@@ -126,6 +126,41 @@ func TestTapRemoteSendsPeerRequest(t *testing.T) {
 	}
 }
 
+func TestTapRemoteAndroidPrefersOwningPeerStreamControl(t *testing.T) {
+	nodeA, nodeB := createNodePair(t)
+	defer func() { _ = nodeA.Close() }()
+	defer func() { _ = nodeB.Close() }()
+
+	nodeA.adb = &fakeADB{outputs: map[string][]byte{
+		"": []byte("List of devices attached\n"),
+	}}
+	remoteADB := &fakeADB{outputs: map[string][]byte{
+		"": []byte("List of devices attached\nremote-123\tdevice\n"),
+	}}
+	nodeB.adb = remoteADB
+	nodeB.AndroidEnabled = true
+	controlConn := &recordingConn{}
+	nodeB.streams["remote-123"] = readyStreamEntry(&StreamSession{
+		DeviceSerial: "remote-123",
+		Platform:     PlatformAndroid,
+		Width:        498,
+		Height:       1080,
+		controlConn:  controlConn,
+	})
+	connectNodePair(t, nodeA, nodeB)
+
+	if err := nodeA.Tap("remote-123", 249, 540); err != nil {
+		t.Fatalf("Tap returned error: %v", err)
+	}
+
+	waitFor(t, time.Second, func() bool {
+		return len(controlConn.dataSnapshot()) == 64
+	})
+	if calls := remoteADB.shellOutputCallsSnapshot(); findADBTapCall(calls) != nil {
+		t.Fatalf("peer ADB unexpectedly received tap: %+v", calls)
+	}
+}
+
 func findADBTapCall(calls []shellCall) *shellCall {
 	for index := range calls {
 		if len(calls[index].Args) >= 2 && calls[index].Args[0] == "input" && calls[index].Args[1] == "tap" {

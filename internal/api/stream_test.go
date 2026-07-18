@@ -22,15 +22,17 @@ import (
 type fakeBackend struct {
 	mu sync.Mutex
 
-	session *node.StreamSession
-	err     error
-	devices []node.DeviceInfo
-	dns     *node.DeviceDNSStatus
-	dnsSet  *node.DeviceDNSStatus
-	calls   int
-	serials []string
-	options []streamcfg.Options
-	stopped []string
+	session        *node.StreamSession
+	err            error
+	devices        []node.DeviceInfo
+	dns            *node.DeviceDNSStatus
+	dnsSet         *node.DeviceDNSStatus
+	orientation    *node.DeviceOrientationStatus
+	orientationSet node.DeviceOrientation
+	calls          int
+	serials        []string
+	options        []streamcfg.Options
+	stopped        []string
 
 	started      chan struct{}
 	release      chan struct{}
@@ -59,6 +61,14 @@ func (f *fakeBackend) SetDeviceDNS(serial string, desired node.DeviceDNSStatus) 
 	f.serials = append(f.serials, serial)
 	f.dnsSet = &desired
 	return f.dns, f.err
+}
+
+func (f *fakeBackend) SetDeviceOrientation(serial string, orientation node.DeviceOrientation) (*node.DeviceOrientationStatus, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.serials = append(f.serials, serial)
+	f.orientationSet = orientation
+	return f.orientation, f.err
 }
 
 func (f *fakeBackend) ListNodes() []node.NodeInfo {

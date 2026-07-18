@@ -20,6 +20,7 @@ type nodeBackend interface {
 	Screenshot(serial string) ([]byte, error)
 	DeviceDNS(serial string) (*node.DeviceDNSStatus, error)
 	SetDeviceDNS(serial string, desired node.DeviceDNSStatus) (*node.DeviceDNSStatus, error)
+	SetDeviceOrientation(serial string, orientation node.DeviceOrientation) (*node.DeviceOrientationStatus, error)
 	Connect(addr string) error
 	DisconnectPeer(addr string) bool
 	CheckNodeUpdate(ctx context.Context, nodeID string) (*update.CheckResult, error)
@@ -102,6 +103,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/devices/{serial}/geometry", s.DeviceGeometry)
 	mux.HandleFunc("GET /api/devices/{serial}/dns", s.DeviceDNS)
 	mux.HandleFunc("PUT /api/devices/{serial}/dns", s.SetDeviceDNS)
+	mux.HandleFunc("PUT /api/devices/{serial}/orientation", s.SetDeviceOrientation)
 	mux.HandleFunc("GET /api/nodes", s.ListNodes)
 	mux.HandleFunc("POST /api/peers", s.AddPeer)
 	mux.HandleFunc("DELETE /api/peers", s.RemovePeer)

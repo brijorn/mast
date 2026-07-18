@@ -169,6 +169,59 @@ func TestSetDeviceDNSReturnsUpdatedStatus(t *testing.T) {
 	}
 }
 
+func TestSetDeviceOrientationReturnsUpdatedStatus(t *testing.T) {
+	backend := &fakeBackend{
+		orientation: &node.DeviceOrientationStatus{
+			Serial:      "phone-1",
+			Platform:    node.PlatformAndroid,
+			Orientation: node.DeviceOrientationLandscape,
+		},
+	}
+	server := NewServer(backend)
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodPut,
+		"/api/devices/phone-1/orientation",
+		bytes.NewReader([]byte(`{"orientation":"landscape"}`)),
+	)
+	server.Handler().ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusOK, res.Body.String())
+	}
+	if backend.orientationSet != node.DeviceOrientationLandscape {
+		t.Fatalf("orientation = %q, want landscape", backend.orientationSet)
+	}
+	var got node.DeviceOrientationStatus
+	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.Serial != "phone-1" || got.Orientation != node.DeviceOrientationLandscape {
+		t.Fatalf("orientation status = %+v, want phone-1 landscape", got)
+	}
+}
+
+func TestSetDeviceOrientationRejectsInvalidValue(t *testing.T) {
+	backend := &fakeBackend{}
+	server := NewServer(backend)
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodPut,
+		"/api/devices/phone-1/orientation",
+		bytes.NewReader([]byte(`{"orientation":"sideways"}`)),
+	)
+	server.Handler().ServeHTTP(res, req)
+
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusBadRequest, res.Body.String())
+	}
+	if len(backend.serials) != 0 {
+		t.Fatalf("backend serials = %+v, want no orientation call", backend.serials)
+	}
+}
+
 func TestGetDeviceBlacklistReturnsConfiguredSerials(t *testing.T) {
 	backend := &configNodeBackend{
 		config: &mastconfig.Config{DeviceBlacklist: []string{"ios-2", "android-1", "ios-2"}},

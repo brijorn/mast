@@ -631,6 +631,14 @@ func (n *Node) Geometry(serial string) (*DeviceGeometry, error) {
 			return nil, err
 		}
 		inputWidth, inputHeight = stream.Width, stream.Height
+	} else if stream, streamErr := n.GetStream(serial); streamErr == nil &&
+		stream.Width > 0 && stream.Height > 0 &&
+		(device.NodeID != n.ID || stream.controlConn != nil) {
+		// scrcpy touch messages are expressed in the encoded video size, which
+		// can be smaller than Android's physical screenshot after max-size
+		// scaling. Geometry must advertise the coordinate space accepted by the
+		// active control path rather than the framebuffer size.
+		inputWidth, inputHeight = stream.Width, stream.Height
 	}
 
 	data, err := n.Screenshot(serial)

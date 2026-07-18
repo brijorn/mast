@@ -1,9 +1,12 @@
 package node
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
+	"image"
+	"image/png"
 	"io"
 	"net"
 	"os"
@@ -194,7 +197,9 @@ func fakeScrcpySocketOptions(args []string) (bool, bool) {
 }
 
 func writeFakeScrcpySockets(port int, audio bool, control bool, controlMessages chan<- []byte) {
-	writeFakeScrcpyVideoMetadata(port)
+	videoConnected := make(chan struct{})
+	go writeFakeScrcpyVideoMetadata(port, videoConnected)
+	<-videoConnected
 	if audio {
 		conn, err := net.Dial("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 		if err == nil {
@@ -217,11 +222,13 @@ func writeFakeScrcpySockets(port int, audio bool, control bool, controlMessages 
 	}
 }
 
-func writeFakeScrcpyVideoMetadata(port int) {
+func writeFakeScrcpyVideoMetadata(port int, connected chan<- struct{}) {
 	conn, err := net.Dial("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 	if err != nil {
+		close(connected)
 		return
 	}
+	close(connected)
 	defer func() { _ = conn.Close() }()
 
 	deviceName := make([]byte, 64)
@@ -235,6 +242,14 @@ func writeFakeScrcpyVideoMetadata(port int) {
 
 	_, _ = conn.Write(deviceName)
 	_, _ = conn.Write(streamMeta)
+
+	keyframe := []byte{0, 0, 0, 1, 0x65, 1}
+	header := make([]byte, 12)
+	binary.BigEndian.PutUint64(header[:8], 1<<62)
+	binary.BigEndian.PutUint32(header[8:12], uint32(len(keyframe)))
+	_, _ = conn.Write(header)
+	_, _ = conn.Write(keyframe)
+	_, _ = io.Copy(io.Discard, conn)
 }
 
 func TestCommandErrorIncludesCommandAndOutput(t *testing.T) {
@@ -1010,6 +1025,65 @@ func TestScreenshotLocalUsesExecOut(t *testing.T) {
 	if call.Serial != "local-123" || strings.Join(call.Args, " ") != "exec-out screencap -p" {
 		t.Fatalf("exec-out call = %+v", call)
 	}
+}
+
+func TestGeometryAndroidUsesActiveScrcpyControlSize(t *testing.T) {
+	node := newControlTestNode("node-a", "local-123")
+	node.adb = &fakeADB{
+		outputs: map[string][]byte{
+			"": []byte("List of devices attached\nlocal-123\tdevice\n"),
+		},
+		execOutOutputs: map[string][]byte{
+			"local-123": testPNG(t, 2340, 1080),
+		},
+	}
+	node.streams["local-123"] = readyStreamEntry(&StreamSession{
+		DeviceSerial: "local-123",
+		Platform:     PlatformAndroid,
+		Width:        1080,
+		Height:       498,
+		controlConn:  &recordingConn{},
+	})
+
+	geometry, err := node.Geometry("local-123")
+	if err != nil {
+		t.Fatalf("Geometry returned error: %v", err)
+	}
+	if geometry.ScreenshotWidth != 2340 || geometry.ScreenshotHeight != 1080 {
+		t.Fatalf("screenshot geometry = %dx%d, want 2340x1080", geometry.ScreenshotWidth, geometry.ScreenshotHeight)
+	}
+	if geometry.InputWidth != 1080 || geometry.InputHeight != 498 {
+		t.Fatalf("input geometry = %dx%d, want 1080x498", geometry.InputWidth, geometry.InputHeight)
+	}
+}
+
+func TestGeometryAndroidUsesScreenshotSizeWithoutControlStream(t *testing.T) {
+	node := newControlTestNode("node-a", "local-123")
+	node.adb = &fakeADB{
+		outputs: map[string][]byte{
+			"": []byte("List of devices attached\nlocal-123\tdevice\n"),
+		},
+		execOutOutputs: map[string][]byte{
+			"local-123": testPNG(t, 2340, 1080),
+		},
+	}
+
+	geometry, err := node.Geometry("local-123")
+	if err != nil {
+		t.Fatalf("Geometry returned error: %v", err)
+	}
+	if geometry.InputWidth != 2340 || geometry.InputHeight != 1080 {
+		t.Fatalf("input geometry = %dx%d, want 2340x1080", geometry.InputWidth, geometry.InputHeight)
+	}
+}
+
+func testPNG(t *testing.T, width, height int) []byte {
+	t.Helper()
+	var output bytes.Buffer
+	if err := png.Encode(&output, image.NewRGBA(image.Rect(0, 0, width, height))); err != nil {
+		t.Fatalf("encode test PNG: %v", err)
+	}
+	return output.Bytes()
 }
 
 func TestScreenshotRemoteRoutesToPeerOwner(t *testing.T) {

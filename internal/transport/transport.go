@@ -8,35 +8,37 @@ import (
 )
 
 const (
-	TypeConnectionRequest    = "connection_request"
-	TypeListDevicesRequest   = "list_devices_request"
-	TypeListDevicesResponse  = "list_devices_response"
-	TypeDeviceDNSGetRequest  = "device_dns_get_request"
-	TypeDeviceDNSGetResponse = "device_dns_get_response"
-	TypeDeviceDNSSetRequest  = "device_dns_set_request"
-	TypeDeviceDNSSetResponse = "device_dns_set_response"
-	TypeScreenshotRequest    = "screenshot_request"
-	TypeScreenshotResponse   = "screenshot_response"
-	TypeStartStreamRequest   = "start_stream_request"
-	TypeStartStreamResponse  = "start_stream_response"
-	TypeStopStreamRequest    = "stop_stream_request"
-	TypeTouchRequest         = "touch_request"
-	TypeTapRequest           = "tap_request"
-	TypeSwipeRequest         = "swipe_request"
-	TypePressKeyRequest      = "press_key_request"
-	TypePressButtonRequest   = "press_button_request"
-	TypeTextInputRequest     = "text_input_request"
-	TypeClipboardGetRequest  = "clipboard_get_request"
-	TypeClipboardGetResponse = "clipboard_get_response"
-	TypeClipboardSetRequest  = "clipboard_set_request"
-	TypeUpdateCheckRequest   = "update_check_request"
-	TypeUpdateCheckResponse  = "update_check_response"
-	TypeUpdateApplyRequest   = "update_apply_request"
-	TypeUpdateApplyResponse  = "update_apply_response"
-	TypeConfigGetRequest     = "config_get_request"
-	TypeConfigGetResponse    = "config_get_response"
-	TypeConfigUpdateRequest  = "config_update_request"
-	TypeConfigUpdateResponse = "config_update_response"
+	TypeConnectionRequest            = "connection_request"
+	TypeListDevicesRequest           = "list_devices_request"
+	TypeListDevicesResponse          = "list_devices_response"
+	TypeDeviceDNSGetRequest          = "device_dns_get_request"
+	TypeDeviceDNSGetResponse         = "device_dns_get_response"
+	TypeDeviceDNSSetRequest          = "device_dns_set_request"
+	TypeDeviceDNSSetResponse         = "device_dns_set_response"
+	TypeDeviceOrientationSetRequest  = "device_orientation_set_request"
+	TypeDeviceOrientationSetResponse = "device_orientation_set_response"
+	TypeScreenshotRequest            = "screenshot_request"
+	TypeScreenshotResponse           = "screenshot_response"
+	TypeStartStreamRequest           = "start_stream_request"
+	TypeStartStreamResponse          = "start_stream_response"
+	TypeStopStreamRequest            = "stop_stream_request"
+	TypeTouchRequest                 = "touch_request"
+	TypeTapRequest                   = "tap_request"
+	TypeSwipeRequest                 = "swipe_request"
+	TypePressKeyRequest              = "press_key_request"
+	TypePressButtonRequest           = "press_button_request"
+	TypeTextInputRequest             = "text_input_request"
+	TypeClipboardGetRequest          = "clipboard_get_request"
+	TypeClipboardGetResponse         = "clipboard_get_response"
+	TypeClipboardSetRequest          = "clipboard_set_request"
+	TypeUpdateCheckRequest           = "update_check_request"
+	TypeUpdateCheckResponse          = "update_check_response"
+	TypeUpdateApplyRequest           = "update_apply_request"
+	TypeUpdateApplyResponse          = "update_apply_response"
+	TypeConfigGetRequest             = "config_get_request"
+	TypeConfigGetResponse            = "config_get_response"
+	TypeConfigUpdateRequest          = "config_update_request"
+	TypeConfigUpdateResponse         = "config_update_response"
 )
 
 type Message interface {
@@ -150,6 +152,32 @@ type DeviceDNSSetResponsePayload struct {
 type DeviceDNSSetResponse struct {
 	RawMessage
 	Payload DeviceDNSSetResponsePayload `json:"payload"`
+}
+
+type DeviceOrientationStatusPayload struct {
+	Serial      string `json:"serial"`
+	Platform    string `json:"platform"`
+	Orientation string `json:"orientation"`
+}
+
+type DeviceOrientationSetRequestPayload struct {
+	Serial      string `json:"serial"`
+	Orientation string `json:"orientation"`
+}
+
+type DeviceOrientationSetRequest struct {
+	RawMessage
+	Payload DeviceOrientationSetRequestPayload `json:"payload"`
+}
+
+type DeviceOrientationSetResponsePayload struct {
+	Result *DeviceOrientationStatusPayload `json:"result,omitempty"`
+	Error  string                          `json:"error,omitempty"`
+}
+
+type DeviceOrientationSetResponse struct {
+	RawMessage
+	Payload DeviceOrientationSetResponsePayload `json:"payload"`
 }
 
 type ScreenshotRequestPayload struct {

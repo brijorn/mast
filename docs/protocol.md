@@ -163,6 +163,43 @@ Mode is `off`, `automatic`, or `hostname`; hostname mode requires `hostname`.
 }
 ```
 
+## device_orientation_set_request
+
+Forces a local Android device on the destination node into portrait or
+landscape. The response confirms the requested orientation after the Android
+settings commands complete.
+
+```json
+{
+  "type": "device_orientation_set_request",
+  "id": "message-id",
+  "from": "node-a",
+  "to": "node-b",
+  "timestamp": "2026-06-22T17:00:00Z",
+  "payload": {
+    "serial": "remote-123",
+    "orientation": "landscape"
+  }
+}
+```
+
+```json
+{
+  "type": "device_orientation_set_response",
+  "id": "message-id",
+  "from": "node-b",
+  "to": "node-a",
+  "timestamp": "2026-06-22T17:00:01Z",
+  "payload": {
+    "result": {
+      "serial": "remote-123",
+      "platform": "android",
+      "orientation": "landscape"
+    }
+  }
+}
+```
+
 ## screenshot_request
 
 Requests a PNG screenshot from a device owned by the destination node.
@@ -201,7 +238,8 @@ If capture fails, `payload.error` contains the error string.
 ## start_stream_request
 
 Requests that the device owner start a scrcpy stream. If `no_control` is false
-or omitted, `turn_screen_off` defaults to true.
+or omitted, `turn_screen_off` defaults to true. `preserve_orientation` bypasses
+the owner's configured portrait lock for this start.
 
 ```json
 {
@@ -215,6 +253,7 @@ or omitted, `turn_screen_off` defaults to true.
     "options": {
       "no_audio": true,
       "no_control": false,
+      "preserve_orientation": true,
       "turn_screen_off": true,
       "stay_awake": true,
       "max_size": 1080,
@@ -245,6 +284,12 @@ The response uses the same message ID:
 ```
 
 If startup fails, `payload.error` contains the error string.
+
+Video viewers do not send `start_stream_request`. They connect to the owning
+node's HTTP video endpoint after a successful explicit start. A coordinator
+routes a peer viewer directly to that owner and does not synthesize a default
+stream when the owner's stream is missing; the HTTP websocket reports that
+condition with close code `4004` so the client can repeat the configured start.
 
 ## stop_stream_request
 

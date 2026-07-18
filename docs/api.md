@@ -13,6 +13,7 @@ network.
 | `GET` | `/api/devices/{serial}/geometry` | Read screenshot-pixel and input-coordinate geometry. |
 | `GET` | `/api/devices/{serial}/dns` | Read Android private DNS mode for a device. |
 | `PUT` | `/api/devices/{serial}/dns` | Set Android private DNS explicitly. |
+| `PUT` | `/api/devices/{serial}/orientation` | Force an Android device into portrait or landscape. |
 | `GET` | `/api/nodes` | List the local node and connected peers. |
 | `GET` | `/api/nodes/{id}/config` | Read local or peer node config. |
 | `PUT` | `/api/nodes/{id}/config` | Update local or peer node config. |
@@ -150,9 +151,11 @@ GET /api/devices/{serial}/geometry
 ```
 
 Returns the platform, orientation, screenshot pixel size, and input coordinate
-size for a local or peer-owned device. Android commonly reports matching
-spaces. iOS screenshots may be physical pixels while ioslink/WDA inputs use
-logical coordinates.
+size for a local or peer-owned device. Android reports the active scrcpy
+control surface when a controllable stream exists; max-size scaling can make
+that surface smaller than the physical screenshot. Without a control stream,
+Android uses screenshot-sized coordinates for its ADB fallback. iOS screenshots
+may be physical pixels while ioslink/WDA inputs use logical coordinates.
 
 ```json
 {
@@ -170,8 +173,31 @@ Successful response:
 
 ```http
 200 OK
-Content-Type: image/png
+Content-Type: application/json
 Cache-Control: no-store
+```
+
+## Device Orientation
+
+```http
+PUT /api/devices/{serial}/orientation
+Content-Type: application/json
+
+{"orientation":"landscape"}
+```
+
+Forces a local or peer-owned Android device into `portrait` or `landscape`.
+Mast disables accelerometer rotation, allows the requested display orientation,
+and writes Android's user rotation. This changes the real device framebuffer;
+subsequent geometry and stream frames report the new dimensions. iOS returns an
+unsupported error.
+
+```json
+{
+  "serial": "android-serial",
+  "platform": "android",
+  "orientation": "landscape"
+}
 ```
 
 ## Device DNS
@@ -477,9 +503,15 @@ POST /api/streams
 Starts a scrcpy stream for a device serial. Only one stream start is allowed per
 serial at a time; concurrent requests for the same serial wait for the same
 startup result. If `no_control` is false or omitted, `turn_screen_off` defaults
-to true.
-Android H.264 sessions that stop producing packets for ten seconds are treated
-as unhealthy and replaced on the next start or video-subscription request.
+to true. `preserve_orientation` skips the node's optional portrait lock for
+that stream start, allowing a caller that already set device orientation to
+restart the encoder in landscape.
+Android startup does not succeed until Mast receives the first keyframe. If an
+encoder produces no keyframe within 500 milliseconds, Mast briefly wakes the
+display and waits up to five more seconds before failing the start. This handles
+devices whose encoder does not emit while an already-static display is asleep.
+Viewer requests never create or replace a stream, because they do not carry the
+original encoder options.
 
 Request body:
 
@@ -489,6 +521,7 @@ Request body:
   "options": {
     "no_audio": true,
     "no_control": false,
+    "preserve_orientation": true,
     "turn_screen_off": true,
     "stay_awake": true,
     "max_size": 1080,
@@ -540,8 +573,22 @@ bytes 9-12  big-endian payload size
 bytes 13+   H.264 payload
 ```
 
-New subscribers receive the latest cached codec config and a recent keyframe
-when available, then live packets.
+New subscribers receive the latest cached codec config and current GOP, then
+live packets. A static screen remains replayable regardless of wall-clock age;
+the retained GOP is bounded to one MiB, so a sparse frame arriving after a long
+static interval does not invalidate otherwise decodable history. Each viewer
+queue is bounded by both age and bytes, so a slow viewer drops its queued deltas
+and waits for a fresh keyframe instead of accumulating playback latency.
+Repeated identical codec-config packets do not invalidate the retained GOP or
+force connected viewers to wait for another keyframe. A changed codec config
+does invalidate the old GOP because its frames may no longer be decodable.
+
+The endpoint never starts a stream. If the stream is absent or its source ends
+while the viewer is connected, Mast closes the websocket with application close
+code `4004` and reason `stream not found`. The caller must restart the stream
+through `POST /api/streams` so its encoder options are applied again. Ordinary
+transport closes use their normal websocket code. Packet silence alone is not
+failure because scrcpy may emit nothing while the display remains static.
 
 ## Tap
 
@@ -549,8 +596,10 @@ when available, then live packets.
 POST /api/control/tap
 ```
 
-Sends a tap command to a device. The stream for that serial must already be
-started so Mast has a scrcpy control socket.
+Sends a tap command to a device. Android uses the active scrcpy control socket
+when one exists, keeping interactive taps in stream coordinates and avoiding a
+separate ADB shell command. Without an active controlled stream, Android falls
+back to serial-scoped ADB input. iOS uses the active ioslink control session.
 
 Request body:
 

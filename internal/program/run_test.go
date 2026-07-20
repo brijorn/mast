@@ -74,11 +74,11 @@ printf 'ARGS=%s\n' "$*"
 	registered, err := registerTestProgram(t, store, source, RegisterUploadOptions{
 		Name:       "test runner",
 		ConfigFile: "config.ini",
-		Entry:      Entry{Command: "/bin/sh", Args: []string{"run.sh", "--license", "{{license_key}}"}},
+		Entry:      Entry{Command: "/bin/sh", Args: []string{"run.sh"}},
 		ConfigMappings: []ConfigMapping{
 			{Section: "Settings", Key: "DEVICE_ID", Value: "{{phone.serial}}"},
 			{Section: "Settings", Key: "RESOLUTION", Value: "{{resolution}}"},
-			{Section: "LICENSE", Key: "LICENSE_KEY", Value: "{{license_key}}"},
+			{Section: "LICENSE", Key: "LICENSE_KEY", Value: "{{program.secret.LICENSE_KEY}}"},
 		},
 	})
 	if err != nil {
@@ -89,9 +89,9 @@ printf 'ARGS=%s\n' "$*"
 		ProgramID: registered.ID,
 		Serials:   []string{"remote-123"},
 		Variables: map[string]string{
-			"resolution":  "720x1600",
-			"license_key": "abc-123",
+			"resolution": "720x1600",
 		},
+		SecretVariables: map[string]string{"LICENSE_KEY": "abc-123"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -124,11 +124,41 @@ printf 'ARGS=%s\n' "$*"
 		"MAST_API_URL=http://127.0.0.1:6271",
 		"MAST_RUN_ID=" + runs[0].ID,
 		"PYTHONUNBUFFERED=1",
-		"ARGS=--license abc-123",
+		"ARGS=",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout missing %q:\n%s", want, stdout)
 		}
+	}
+	if strings.Contains(runs[0].Env["LICENSE_KEY"], "abc-123") {
+		t.Fatalf("secret leaked into run env: %+v", runs[0].Env)
+	}
+	secretData, err := os.ReadFile(secretVariablesPath(runs[0].Workspace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(secretData, []byte("abc-123")) {
+		t.Fatal("workspace secret variables did not preserve the license for resume")
+	}
+	secretInfo, err := os.Stat(secretVariablesPath(runs[0].Workspace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := secretInfo.Mode().Perm(); got != 0600 {
+		t.Fatalf("secret variables mode = %o, want 600", got)
+	}
+
+	resumed, err := store.Resume(ResumeOptions{ID: runs[0].ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, store, resumed.ID)
+	stdout, stderr, err = store.Logs(resumed.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stderr != "" || !strings.Contains(stdout, "LICENSE_KEY = abc-123") {
+		t.Fatalf("resumed logs = stdout %q stderr %q, want preserved secret", stdout, stderr)
 	}
 }
 

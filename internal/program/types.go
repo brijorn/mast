@@ -113,14 +113,16 @@ type RegisterUploadOptions struct {
 }
 
 type StartOptions struct {
-	ProgramID string            `json:"program_id"`
-	Serials   []string          `json:"serials"`
-	Variables map[string]string `json:"variables,omitempty"`
+	ProgramID       string            `json:"program_id"`
+	Serials         []string          `json:"serials"`
+	Variables       map[string]string `json:"variables,omitempty"`
+	SecretVariables map[string]string `json:"secret_variables,omitempty"`
 }
 
 type ResumeOptions struct {
-	ID        string            `json:"id,omitempty"`
-	Variables map[string]string `json:"variables,omitempty"`
+	ID              string            `json:"id,omitempty"`
+	Variables       map[string]string `json:"variables,omitempty"`
+	SecretVariables map[string]string `json:"secret_variables,omitempty"`
 }
 
 type StopOptions struct {

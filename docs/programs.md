@@ -338,6 +338,30 @@ Any other token, such as `{{license_key}}` or `{{resolution}}`, represents a
 custom variable. Clients can collect those values before starting or resuming a
 run and pass them in the `variables` object.
 
+Sensitive config values use `secret_variables`, never ordinary `variables` or
+literal program mappings. Mast uses them while rendering the workspace config,
+stores them only in the workspace's mode-`0600` private state so Resume and
+autostart preserve the same value, and excludes them from the returned run
+`env` and program registry. A safe mapping uses a non-secret placeholder:
+
+```json
+{
+  "section": "LICENSE",
+  "key": "LICENSE_KEY",
+  "value": "{{program.secret.LICENSE_KEY}}"
+}
+```
+
+The start request supplies the value separately:
+
+```json
+{
+  "secret_variables": {
+    "LICENSE_KEY": "write-only-value"
+  }
+}
+```
+
 For config-backed fields, the mapping value is the default value used for runs
 unless the run provides an override. Config mappings may include an optional
 `comment` for help text.

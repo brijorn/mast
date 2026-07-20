@@ -854,6 +854,10 @@ Start run request:
 }
 ```
 
+Licensed or otherwise sensitive config fields use the sibling
+`secret_variables` object. Values are rendered into the private workspace but
+are not returned in run `env` or stored on the public program record.
+
 Resume run request:
 
 ```json

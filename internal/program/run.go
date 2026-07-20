@@ -112,7 +112,7 @@ func (s *Store) Start(opts StartOptions) ([]Run, error) {
 			return nil, err
 		}
 
-		run, err := s.startOne(p, *device, nodes, opts.Variables)
+		run, err := s.startOne(p, *device, nodes, opts.Variables, opts.SecretVariables)
 		if err != nil {
 			return nil, err
 		}
@@ -320,6 +320,40 @@ func configTemplatePath(workspace string, configFile string) string {
 	return filepath.Join(workspace, ".mast", "config-templates", configFile)
 }
 
+func secretVariablesPath(workspace string) string {
+	return filepath.Join(workspace, ".mast", "secret-variables.json")
+}
+
+func readSecretVariables(workspace string) (map[string]string, error) {
+	data, err := os.ReadFile(secretVariablesPath(workspace))
+	if errors.Is(err, os.ErrNotExist) {
+		return map[string]string{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var variables map[string]string
+	if err := json.Unmarshal(data, &variables); err != nil {
+		return nil, err
+	}
+	return variables, nil
+}
+
+func writeSecretVariables(workspace string, variables map[string]string) error {
+	if len(variables) == 0 {
+		return nil
+	}
+	path := secretVariablesPath(workspace)
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	data, err := json.Marshal(variables)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0600)
+}
+
 func buildRunVariables(mappings []ConfigMapping, overrides map[string]string, device node.DeviceInfo) map[string]string {
 	variables := make(map[string]string)
 	for _, mapping := range mappings {
@@ -500,6 +534,15 @@ func (s *Store) Resume(opts ResumeOptions) (*Run, error) {
 
 	p := s.programForRun(run)
 	variables := mergeVariables(run.Env, opts.Variables)
+	secretVariables, err := readSecretVariables(run.Workspace)
+	if err != nil {
+		return nil, err
+	}
+	secretVariables = mergeVariables(secretVariables, opts.SecretVariables)
+	if err := writeSecretVariables(run.Workspace, secretVariables); err != nil {
+		return nil, err
+	}
+	renderVariables := mergeVariables(variables, secretVariables)
 	if p.ConfigFile != "" {
 		configPath := filepath.Join(run.Workspace, p.ConfigFile)
 		templatePath := configTemplatePath(run.Workspace, p.ConfigFile)
@@ -519,7 +562,7 @@ func (s *Store) Resume(opts ResumeOptions) (*Run, error) {
 				return nil, err
 			}
 		}
-		if err := applyConfigReplacements(configPath, p.ConfigMappings, variables, device); err != nil {
+		if err := applyConfigReplacements(configPath, p.ConfigMappings, renderVariables, device); err != nil {
 			return nil, err
 		}
 	}
@@ -616,13 +659,17 @@ func (s *Store) CleanupRun(id string) (*Run, error) {
 	return run, nil
 }
 
-func (s *Store) startOne(p Program, device node.DeviceInfo, nodes []node.NodeInfo, variables map[string]string) (*Run, error) {
+func (s *Store) startOne(p Program, device node.DeviceInfo, nodes []node.NodeInfo, variables map[string]string, secretVariables map[string]string) (*Run, error) {
 	id := uuid.NewString()
 	workspace := filepath.Join(s.instanceDir(), id)
 	if err := copyDir(s.bundlePath(p.ID), workspace); err != nil {
 		return nil, err
 	}
 	runVariables := buildRunVariables(p.ConfigMappings, variables, device)
+	if err := writeSecretVariables(workspace, secretVariables); err != nil {
+		return nil, err
+	}
+	renderVariables := mergeVariables(runVariables, secretVariables)
 	if p.ConfigFile != "" {
 		configPath := filepath.Join(workspace, p.ConfigFile)
 		templatePath := configTemplatePath(workspace, p.ConfigFile)
@@ -632,7 +679,7 @@ func (s *Store) startOne(p Program, device node.DeviceInfo, nodes []node.NodeInf
 		if err := copyFile(configPath, templatePath, 0600); err != nil {
 			return nil, err
 		}
-		if err := applyConfigReplacements(configPath, p.ConfigMappings, runVariables, device); err != nil {
+		if err := applyConfigReplacements(configPath, p.ConfigMappings, renderVariables, device); err != nil {
 			return nil, err
 		}
 	}

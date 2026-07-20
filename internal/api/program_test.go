@@ -114,7 +114,7 @@ func TestStartRunsCallsBackend(t *testing.T) {
 	programs := &fakeProgramBackend{}
 	server := NewServer(&fakeBackend{}, programs)
 
-	body := []byte(`{"program_id":"sha256-test","serials":["phone-1"],"variables":{"license_key":"abc"}}`)
+	body := []byte(`{"program_id":"sha256-test","serials":["phone-1"],"variables":{"mode":"normal"},"secret_variables":{"LICENSE_KEY":"abc"}}`)
 	res := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/runs", bytes.NewReader(body))
 
@@ -125,6 +125,9 @@ func TestStartRunsCallsBackend(t *testing.T) {
 	}
 	if programs.started.ProgramID != "sha256-test" || programs.started.Serials[0] != "phone-1" {
 		t.Fatalf("started = %+v", programs.started)
+	}
+	if programs.started.SecretVariables["LICENSE_KEY"] != "abc" {
+		t.Fatalf("secret variables = %+v", programs.started.SecretVariables)
 	}
 }
 

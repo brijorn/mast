@@ -66,6 +66,7 @@ func (s *Server) StopStream(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 func writeStartStreamResponse(w http.ResponseWriter, serial string, stream *node.StreamSession) {
+	width, height := stream.Dimensions()
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(startStreamResponse{
 		ID:        stream.ID,
@@ -76,8 +77,8 @@ func writeStartStreamResponse(w http.ResponseWriter, serial string, stream *node
 		LocalPort: stream.LocalPort,
 		VideoURL:  stream.VideoURL,
 		MJPEGURL:  stream.MJPEGURL,
-		Width:     stream.Width,
-		Height:    stream.Height,
+		Width:     width,
+		Height:    height,
 	}); err != nil {
 		return
 	}

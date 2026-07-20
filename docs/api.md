@@ -510,6 +510,10 @@ Android startup does not succeed until Mast receives the first keyframe. If an
 encoder produces no keyframe within 500 milliseconds, Mast briefly wakes the
 display and waits up to five more seconds before failing the start. This handles
 devices whose encoder does not emit while an already-static display is asleep.
+Mast consumes scrcpy v4 session metadata when the encoded dimensions change,
+updates the stream's input coordinate space, and forwards only complete H.264
+media packets to viewers. Rotation, folding, and display resizing therefore do
+not leak scrcpy frame headers into the browser decoder.
 Viewer requests never create or replace a stream, because they do not carry the
 original encoder options.
 

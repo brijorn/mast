@@ -52,7 +52,8 @@ func (n *Node) touchLocal(serial string, action string, x int, y int) error {
 	session.controlMu.Lock()
 	defer session.controlMu.Unlock()
 
-	return scrcpy.WriteTouch(session.controlConn, touchAction, x, y, session.Width, session.Height)
+	width, height := session.Dimensions()
+	return scrcpy.WriteTouch(session.controlConn, touchAction, x, y, width, height)
 }
 
 func (n *Node) Touch(serial string, action string, x int, y int) error {
@@ -96,7 +97,8 @@ func (n *Node) tapLocal(serial string, x int, y int) error {
 	session.controlMu.Lock()
 	defer session.controlMu.Unlock()
 
-	if err := scrcpy.WriteTap(session.controlConn, x, y, session.Width, session.Height); err != nil {
+	width, height := session.Dimensions()
+	if err := scrcpy.WriteTap(session.controlConn, x, y, width, height); err != nil {
 		return err
 	}
 
@@ -390,7 +392,8 @@ func (n *Node) swipeLocal(serial string, startX, startY, endX, endY int) error {
 	session.controlMu.Lock()
 	defer session.controlMu.Unlock()
 
-	return scrcpy.WriteSwipe(session.controlConn, startX, startY, endX, endY, session.Width, session.Height)
+	width, height := session.Dimensions()
+	return scrcpy.WriteSwipe(session.controlConn, startX, startY, endX, endY, width, height)
 }
 
 func (n *Node) controlSession(serial string) (*StreamSession, error) {

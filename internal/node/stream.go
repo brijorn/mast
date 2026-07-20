@@ -53,14 +53,30 @@ type StreamSession struct {
 	controlConn net.Conn
 	controlMu   sync.Mutex
 
-	Width  int
-	Height int
-	cmd    *exec.Cmd
+	dimensionsMu sync.RWMutex
+	Width        int
+	Height       int
+	cmd          *exec.Cmd
 
 	iosDevice  *ioslink.Device
 	iosCleanup func()
 	iosTouchMu sync.Mutex
 	iosTouch   *iosTouchState
+}
+
+// Dimensions returns the current encoded video coordinate space. scrcpy may
+// update it while a stream is running after a rotation or display resize.
+func (s *StreamSession) Dimensions() (int, int) {
+	s.dimensionsMu.RLock()
+	defer s.dimensionsMu.RUnlock()
+	return s.Width, s.Height
+}
+
+func (s *StreamSession) setDimensions(width int, height int) {
+	s.dimensionsMu.Lock()
+	defer s.dimensionsMu.Unlock()
+	s.Width = width
+	s.Height = height
 }
 
 type iosTouchState struct {
@@ -154,8 +170,7 @@ func (s *StreamSession) acceptScrcpyConnection(opts streamcfg.Options) error {
 		return fmt.Errorf("read scrcpy video metadata: %w%s", err, s.getStderrDiagnostics())
 	}
 
-	s.Width = width
-	s.Height = height
+	s.setDimensions(width, height)
 	s.videoConn = videoConn
 	_ = deviceName
 
@@ -553,6 +568,7 @@ func streamSessionPayload(session *StreamSession) *transport.StartStreamResultPa
 	if session == nil {
 		return nil
 	}
+	width, height := session.Dimensions()
 	return &transport.StartStreamResultPayload{
 		ID:        session.ID,
 		Serial:    session.DeviceSerial,
@@ -562,8 +578,8 @@ func streamSessionPayload(session *StreamSession) *transport.StartStreamResultPa
 		LocalPort: session.LocalPort,
 		VideoURL:  session.VideoURL,
 		MJPEGURL:  session.MJPEGURL,
-		Width:     session.Width,
-		Height:    session.Height,
+		Width:     width,
+		Height:    height,
 	}
 }
 

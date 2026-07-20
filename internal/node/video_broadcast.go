@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"sync"
 	"time"
@@ -14,6 +15,10 @@ const (
 	videoSubscriberMaxLatency     = 500 * time.Millisecond
 	videoSubscriberMaxQueuedBytes = 1 << 20
 	videoReplayMaxQueuedBytes     = 1 << 20
+	scrcpyPacketFlagSession       = uint64(1) << 63
+	scrcpyPacketFlagConfig        = uint64(1) << 62
+	scrcpyPacketFlagKeyFrame      = uint64(1) << 61
+	scrcpyPacketPTSMask           = scrcpyPacketFlagKeyFrame - 1
 )
 
 var errVideoPacketWaitTimeout = errors.New("video packet wait timeout")
@@ -52,39 +57,50 @@ func writeVideoPacketHeader(buf []byte, packet VideoPacket) {
 }
 
 func (s *StreamSession) readVideoPacket() (*VideoPacket, error) {
-	header := make([]byte, 12)
-	_, err := io.ReadFull(s.videoConn, header)
-	if err != nil {
-		return nil, err
+	for {
+		header := make([]byte, 12)
+		_, err := io.ReadFull(s.videoConn, header)
+		if err != nil {
+			return nil, err
+		}
+
+		ptsAndFlags := binary.BigEndian.Uint64(header[:8])
+		if ptsAndFlags&scrcpyPacketFlagSession != 0 {
+			width := int(binary.BigEndian.Uint32(header[4:8]))
+			height := int(binary.BigEndian.Uint32(header[8:12]))
+			if width <= 0 || height <= 0 {
+				return nil, fmt.Errorf("invalid scrcpy video session dimensions %dx%d", width, height)
+			}
+			s.setDimensions(width, height)
+			continue
+		}
+
+		size := binary.BigEndian.Uint32(header[8:12])
+		config := ptsAndFlags&scrcpyPacketFlagConfig != 0
+		keyFrame := ptsAndFlags&scrcpyPacketFlagKeyFrame != 0
+		pts := ptsAndFlags & scrcpyPacketPTSMask
+
+		encoded := make([]byte, 13+size)
+		data := encoded[13:]
+		_, err = io.ReadFull(s.videoConn, data)
+		if err != nil {
+			return nil, err
+		}
+
+		nalTypes := h264NALTypes(data)
+		config = config || containsNALType(nalTypes, 7) || containsNALType(nalTypes, 8)
+		keyFrame = keyFrame || containsNALType(nalTypes, 5)
+
+		packet := &VideoPacket{
+			PTS:      pts,
+			Config:   config,
+			Keyframe: keyFrame,
+			Data:     data,
+			encoded:  encoded,
+		}
+		writeVideoPacketHeader(encoded, *packet)
+		return packet, nil
 	}
-
-	ptsAndFlags := binary.BigEndian.Uint64(header[:8])
-	size := binary.BigEndian.Uint32(header[8:12])
-
-	config := ptsAndFlags&(1<<63) != 0
-	keyFrame := ptsAndFlags&(1<<62) != 0
-	pts := ptsAndFlags & ((1 << 62) - 1)
-
-	encoded := make([]byte, 13+size)
-	data := encoded[13:]
-	_, err = io.ReadFull(s.videoConn, data)
-	if err != nil {
-		return nil, err
-	}
-
-	nalTypes := h264NALTypes(data)
-	config = config || containsNALType(nalTypes, 7) || containsNALType(nalTypes, 8)
-	keyFrame = keyFrame || containsNALType(nalTypes, 5)
-
-	packet := &VideoPacket{
-		PTS:      pts,
-		Config:   config,
-		Keyframe: keyFrame,
-		Data:     data,
-		encoded:  encoded,
-	}
-	writeVideoPacketHeader(encoded, *packet)
-	return packet, nil
 }
 
 type videoSubscription struct {

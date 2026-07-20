@@ -1,10 +1,69 @@
 package node
 
 import (
+	"bytes"
 	"encoding/binary"
+	"net"
 	"testing"
 	"time"
 )
+
+func TestReadVideoPacketSkipsScrcpySessionResize(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	payload := annexBNAL(1, 9)
+	stream := &StreamSession{videoConn: client, Width: 498, Height: 1080}
+	go writeScrcpyVideoTestData(t, server,
+		scrcpySessionHeader(1080, 498),
+		scrcpyMediaPacket(scrcpyPacketFlagKeyFrame|42, payload),
+	)
+
+	packet, err := stream.readVideoPacket()
+	if err != nil {
+		t.Fatalf("readVideoPacket() error = %v", err)
+	}
+	if packet.PTS != 42 || packet.Config || !packet.Keyframe || !bytes.Equal(packet.Data, payload) {
+		t.Fatalf("packet = %+v, want PTS 42 keyframe with unmodified payload", packet)
+	}
+	if width, height := stream.Dimensions(); width != 1080 || height != 498 {
+		t.Fatalf("stream dimensions = %dx%d, want 1080x498", width, height)
+	}
+}
+
+func TestReadVideoPacketUsesScrcpyV4ConfigFlag(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	payload := annexBNAL(1, 7)
+	stream := &StreamSession{videoConn: client}
+	go writeScrcpyVideoTestData(t, server,
+		scrcpyMediaPacket(scrcpyPacketFlagConfig, payload),
+	)
+
+	packet, err := stream.readVideoPacket()
+	if err != nil {
+		t.Fatalf("readVideoPacket() error = %v", err)
+	}
+	if !packet.Config || packet.Keyframe || packet.PTS != 0 || !bytes.Equal(packet.Data, payload) {
+		t.Fatalf("packet = %+v, want config packet with unmodified payload", packet)
+	}
+}
+
+func TestReadVideoPacketRejectsInvalidScrcpySessionDimensions(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	stream := &StreamSession{videoConn: client}
+	go writeScrcpyVideoTestData(t, server, scrcpySessionHeader(1080, 0))
+
+	if _, err := stream.readVideoPacket(); err == nil {
+		t.Fatal("readVideoPacket() error = nil, want invalid session dimensions error")
+	}
+}
 
 func TestVideoBroadcasterReplaysCompleteCurrentGOP(t *testing.T) {
 	broadcaster := newVideoBroadcaster()
@@ -336,4 +395,29 @@ func assertVideoPTS(t *testing.T, packets []VideoPacket, want ...uint64) {
 
 func annexBNAL(typ byte, payload byte) []byte {
 	return []byte{0, 0, 0, 1, typ, payload}
+}
+
+func scrcpySessionHeader(width int, height int) []byte {
+	header := make([]byte, 12)
+	binary.BigEndian.PutUint64(header[:8], scrcpyPacketFlagSession|uint64(uint32(width)))
+	binary.BigEndian.PutUint32(header[8:12], uint32(height))
+	return header
+}
+
+func scrcpyMediaPacket(ptsAndFlags uint64, payload []byte) []byte {
+	packet := make([]byte, 12+len(payload))
+	binary.BigEndian.PutUint64(packet[:8], ptsAndFlags)
+	binary.BigEndian.PutUint32(packet[8:12], uint32(len(payload)))
+	copy(packet[12:], payload)
+	return packet
+}
+
+func writeScrcpyVideoTestData(t *testing.T, conn net.Conn, chunks ...[]byte) {
+	t.Helper()
+	for _, chunk := range chunks {
+		if _, err := conn.Write(chunk); err != nil {
+			t.Errorf("write test video data: %v", err)
+			return
+		}
+	}
 }

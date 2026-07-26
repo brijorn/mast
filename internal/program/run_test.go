@@ -1206,3 +1206,222 @@ func TestAutostartReconnectResumesAfterDeviceReturns(t *testing.T) {
 		t.Fatalf("Autostart = false, want true")
 	}
 }
+
+func TestAutostartRestartDelayBacksOffAndCaps(t *testing.T) {
+	first := autostartRestartDelay(1)
+	if first != autostartRestartBaseDelay {
+		t.Fatalf("first delay = %s, want %s", first, autostartRestartBaseDelay)
+	}
+	if second := autostartRestartDelay(2); second != 2*autostartRestartBaseDelay {
+		t.Fatalf("second delay = %s, want %s", second, 2*autostartRestartBaseDelay)
+	}
+	previous := time.Duration(0)
+	for attempts := 1; attempts <= autostartRestartMaxAttempts; attempts++ {
+		delay := autostartRestartDelay(attempts)
+		if delay < previous {
+			t.Fatalf("delay for attempt %d went backwards: %s after %s", attempts, delay, previous)
+		}
+		if delay > autostartRestartMaxDelay {
+			t.Fatalf("delay for attempt %d = %s, exceeds cap %s", attempts, delay, autostartRestartMaxDelay)
+		}
+		previous = delay
+	}
+	if autostartRestartDelay(64) != autostartRestartMaxDelay {
+		t.Fatalf("far-out attempt did not saturate at %s", autostartRestartMaxDelay)
+	}
+}
+
+// A program that exits on its own leaves the device connected, so no ready-state
+// transition occurs and the reconnect watch never fires. Without a separate
+// restart the phone stays idle.
+func TestAutostartRestartsRunThatExitedWhileDeviceStayedOnline(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("/bin/sh is not available on Windows")
+	}
+
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "run.sh"), []byte("#!/bin/sh\nexit 1\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	devices := &mutableFakeDevices{
+		devices: []node.DeviceInfo{{Serial: "phone-1", State: "device", NodeID: "node-1"}},
+	}
+	store, err := NewStore(filepath.Join(root, "programs"), devices)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Shutdown()
+	registered, err := registerTestProgram(t, store, source, RegisterUploadOptions{
+		Name:  "autostart crash runner",
+		Entry: Entry{Command: "/bin/sh", Args: []string{"run.sh"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := store.Start(StartOptions{ProgramID: registered.ID, Serials: []string{"phone-1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := started[0].ID
+	if _, err := store.SetRunAutostart(id, true); err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, store, id)
+
+	crashed := findRun(t, store, id)
+	if crashed.Status != RunStatusFailed && crashed.Status != RunStatusExited {
+		t.Fatalf("Status = %q, want failed or exited", crashed.Status)
+	}
+
+	// The device never left, so the reconnect watch must not act on this.
+	store.checkAutostartReconnects()
+	if findRun(t, store, id).Status == RunStatusRunning {
+		t.Fatal("reconnect watch resumed a run whose device never disconnected")
+	}
+
+	// The first observed crash schedules a backoff rather than restarting now.
+	store.checkAutostartRestarts()
+	store.mu.Lock()
+	restart := store.autostartRestarts[id]
+	store.mu.Unlock()
+	if restart == nil {
+		t.Fatal("crashed autostart run was not tracked for restart")
+	}
+	if restart.attempts != 0 {
+		t.Fatalf("attempts = %d before the backoff elapsed, want 0", restart.attempts)
+	}
+
+	// Once it elapses the run is resumed, and the attempt is counted.
+	store.mu.Lock()
+	store.autostartRestarts[id].nextAttempt = time.Now().Add(-time.Second)
+	store.mu.Unlock()
+	store.checkAutostartRestarts()
+
+	store.mu.Lock()
+	attempts := store.autostartRestarts[id].attempts
+	store.mu.Unlock()
+	if attempts != 1 {
+		t.Fatalf("attempts = %d after the backoff elapsed, want 1", attempts)
+	}
+}
+
+// A program that dies instantly must not be restarted forever.
+func TestAutostartRestartStopsAfterMaxAttempts(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("/bin/sh is not available on Windows")
+	}
+
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "run.sh"), []byte("#!/bin/sh\nexit 1\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	devices := &mutableFakeDevices{
+		devices: []node.DeviceInfo{{Serial: "phone-1", State: "device", NodeID: "node-1"}},
+	}
+	store, err := NewStore(filepath.Join(root, "programs"), devices)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Shutdown()
+	registered, err := registerTestProgram(t, store, source, RegisterUploadOptions{
+		Name:  "autostart crash loop runner",
+		Entry: Entry{Command: "/bin/sh", Args: []string{"run.sh"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := store.Start(StartOptions{ProgramID: registered.ID, Serials: []string{"phone-1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := started[0].ID
+	if _, err := store.SetRunAutostart(id, true); err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, store, id)
+
+	// Collapse every backoff so the cap, not the clock, is what stops this.
+	for i := 0; i < autostartRestartMaxAttempts*3; i++ {
+		store.mu.Lock()
+		if state := store.autostartRestarts[id]; state != nil {
+			state.nextAttempt = time.Now().Add(-time.Second)
+		}
+		store.mu.Unlock()
+		store.checkAutostartRestarts()
+		waitForRun(t, store, id)
+	}
+
+	store.mu.Lock()
+	state := store.autostartRestarts[id]
+	store.mu.Unlock()
+	if state == nil {
+		t.Fatal("crash-looping run lost its restart state")
+	}
+	if state.attempts > autostartRestartMaxAttempts {
+		t.Fatalf("attempts = %d, exceeded cap %d", state.attempts, autostartRestartMaxAttempts)
+	}
+	if !state.exhausted {
+		t.Fatal("a run crashing instantly never became exhausted and would restart forever")
+	}
+}
+
+// A phone runs at most one program. This watch previously had no per-serial
+// guard, so on its first pass it resumed every historical failure in the store:
+// phones running healthy work picked up a second run, and long-dead legacy runs
+// came back on phones that had moved on.
+func TestAutostartRestartSkipsSerialsAlreadyWorkingAndStaleHistory(t *testing.T) {
+	completed := time.Now()
+	stale := completed.Add(-24 * time.Hour)
+	store := &Store{
+		runs:              map[string]*runState{},
+		autostartRestarts: map[string]*autostartRestartState{},
+		devices: &mutableFakeDevices{
+			devices: []node.DeviceInfo{
+				{Serial: "phone-busy", State: "device", NodeID: "n"},
+				{Serial: "phone-idle", State: "device", NodeID: "n"},
+			},
+		},
+	}
+	// A healthy run plus an older crash on the same phone.
+	store.runs["live"] = &runState{run: &Run{
+		ID: "live", Serial: "phone-busy", Status: RunStatusRunning,
+		Autostart: true, Cmd: "/bin/sh", StartedAt: completed,
+	}}
+	store.runs["crashed-beside-live"] = &runState{run: &Run{
+		ID: "crashed-beside-live", Serial: "phone-busy", Status: RunStatusFailed,
+		Autostart: true, Cmd: "/bin/sh",
+		StartedAt: completed.Add(-time.Minute), CompletedAt: &completed,
+	}}
+	// A long-dead run on an idle phone.
+	store.runs["ancient"] = &runState{run: &Run{
+		ID: "ancient", Serial: "phone-idle", Status: RunStatusFailed,
+		Autostart: true, Cmd: "/bin/sh",
+		StartedAt: stale.Add(-time.Minute), CompletedAt: &stale,
+	}}
+	// A deliberately stopped run must not be revived by the crash watch.
+	store.runs["stopped"] = &runState{run: &Run{
+		ID: "stopped", Serial: "phone-idle", Status: RunStatusStopped,
+		Autostart: true, Cmd: "/bin/sh",
+		StartedAt: completed.Add(-time.Minute), CompletedAt: &completed,
+	}}
+
+	store.checkAutostartRestarts()
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	for _, id := range []string{"crashed-beside-live", "ancient", "stopped"} {
+		if state := store.autostartRestarts[id]; state != nil && state.attempts > 0 {
+			t.Fatalf("run %s was restarted; it should have been skipped", id)
+		}
+	}
+}

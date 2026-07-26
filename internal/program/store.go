@@ -26,6 +26,7 @@ type Store struct {
 	monitorCtx          context.Context
 	monitorCancel       context.CancelFunc
 	observedDeviceReady map[string]bool
+	autostartRestarts   map[string]*autostartRestartState
 }
 
 func (s *Store) SetMastAPIURL(value string) {
@@ -80,6 +81,7 @@ func NewStore(root string, devices deviceLister) (*Store, error) {
 		monitorCtx:          monitorCtx,
 		monitorCancel:       monitorCancel,
 		observedDeviceReady: make(map[string]bool),
+		autostartRestarts:   make(map[string]*autostartRestartState),
 	}
 	if err := os.MkdirAll(s.bundleDir(), 0700); err != nil {
 		return nil, err

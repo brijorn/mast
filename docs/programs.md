@@ -235,8 +235,25 @@ sets the corresponding reset flag.
 ```
 
 When Mast starts, it automatically resumes autostart-enabled runs that are
-`stopped` or `lost`, using the same run ID and instance workspace. Normal
-`exited` and `failed` runs are not restarted automatically.
+`stopped` or `lost`, using the same run ID and instance workspace.
+
+While Mast is running, two watches resume autostart-enabled runs, both using
+that same run ID and workspace:
+
+- **Device reconnect.** A run whose device leaves and returns is resumed on the
+  ready-state transition.
+- **Ended on its own.** A run that reached `failed` or `exited` while its device
+  stayed connected produces no such transition, so it is resumed on a backoff
+  instead. Without this the phone stays idle until a human notices, because the
+  reconnect watch never fires for a program that simply exited.
+
+The backoff starts at 30 seconds and doubles per consecutive attempt to a
+15-minute ceiling. A run that stayed up for 10 minutes before ending is treated
+as healthy work and its next failure starts a fresh streak. After 8 consecutive
+attempts that never reach that healthy runtime the run is left alone and logged,
+since it is failing on something a restart cannot fix. Runs that are
+`autostart_paused`, workspace-cleaned, or not autostart-enabled are never
+resumed by either watch, and neither watch acts while the device is not ready.
 
 Manual `POST /api/runs/{id}/stop` preserves autostart for that run. Clients can
 send `{"autostart_paused": true}` with the stop request when a run should stay

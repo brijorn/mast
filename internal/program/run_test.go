@@ -1425,3 +1425,63 @@ func TestAutostartRestartSkipsSerialsAlreadyWorkingAndStaleHistory(t *testing.T)
 		}
 	}
 }
+
+// A crash loop must escalate. The streak used to be cleared the moment a resumed
+// run reached Running, so a run that died after a few seconds started again from
+// attempt one on every pass: the backoff never grew, the cap never fired, and one
+// phone was restarted every thirty seconds for an hour while every log line read
+// "attempt 1/8".
+func TestAutostartRestartStreakSurvivesShortLivedRuns(t *testing.T) {
+	now := time.Now()
+	store := &Store{
+		runs:              map[string]*runState{},
+		autostartRestarts: map[string]*autostartRestartState{},
+		devices: &mutableFakeDevices{
+			devices: []node.DeviceInfo{{Serial: "phone-1", State: "device", NodeID: "n"}},
+		},
+	}
+	run := &Run{
+		ID: "run-1", Serial: "phone-1", Status: RunStatusFailed,
+		Autostart: true, Cmd: "/bin/sh",
+		StartedAt: now.Add(-20 * time.Second), CompletedAt: &now,
+	}
+	store.runs["run-1"] = &runState{run: run}
+
+	// Observe the crash. The backoff is in the future, so nothing is resumed.
+	store.checkAutostartRestarts()
+	store.mu.Lock()
+	state := store.autostartRestarts["run-1"]
+	if state == nil {
+		store.mu.Unlock()
+		t.Fatal("crashed run was not tracked")
+	}
+	// Stand in for several restarts already spent on this loop.
+	state.attempts = 3
+	store.mu.Unlock()
+
+	// The run comes up and is still Running when the next tick lands, which is
+	// what happens in production every five seconds.
+	run.Status = RunStatusRunning
+	run.StartedAt = time.Now()
+	store.checkAutostartRestarts()
+
+	store.mu.Lock()
+	state = store.autostartRestarts["run-1"]
+	store.mu.Unlock()
+	if state == nil {
+		t.Fatal("a run that had only just started lost its backoff streak")
+	}
+	if state.attempts != 3 {
+		t.Fatalf("attempts reset to %d while the run was briefly up, want 3", state.attempts)
+	}
+
+	// A run that stays up past the healthy runtime has genuinely recovered.
+	run.StartedAt = time.Now().Add(-2 * autostartRestartHealthyRuntime)
+	store.checkAutostartRestarts()
+	store.mu.Lock()
+	cleared := store.autostartRestarts["run-1"] == nil
+	store.mu.Unlock()
+	if !cleared {
+		t.Fatal("a run up well past the healthy runtime kept its streak")
+	}
+}

@@ -103,8 +103,14 @@ func (s *Store) checkAutostartRestarts() {
 	for id, state := range s.runs {
 		run := state.run
 		if !autostartRunEligibleForCrashRestart(run) {
-			// Healthy or ineligible runs must not keep a stale backoff streak.
-			if run.Status == RunStatusRunning || run.Status == RunStatusStarting {
+			// Only a run that has actually stayed up has recovered. Clearing the
+			// streak as soon as it reaches Running lets a crash loop reset its own
+			// backoff and attempt count on every pass: the run is Running for a few
+			// seconds, this tick forgets it, and the next crash starts again from
+			// attempt one, so the cap never fires and the phone is restarted every
+			// thirty seconds indefinitely.
+			if (run.Status == RunStatusRunning || run.Status == RunStatusStarting) &&
+				time.Since(run.StartedAt) >= autostartRestartHealthyRuntime {
 				delete(s.autostartRestarts, id)
 			}
 			continue

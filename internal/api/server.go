@@ -18,6 +18,7 @@ type nodeBackend interface {
 	ListNodes() []node.NodeInfo
 	ListDevices() ([]node.DeviceInfo, error)
 	Screenshot(serial string) ([]byte, error)
+	DeviceAccounts(serial string) (*node.DeviceAccounts, error)
 	DeviceDNS(serial string) (*node.DeviceDNSStatus, error)
 	SetDeviceDNS(serial string, desired node.DeviceDNSStatus) (*node.DeviceDNSStatus, error)
 	SetDeviceOrientation(serial string, orientation node.DeviceOrientation) (*node.DeviceOrientationStatus, error)
@@ -101,6 +102,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/devices", s.ListDevices)
 	mux.HandleFunc("GET /api/devices/{serial}/screenshot", s.Screenshot)
 	mux.HandleFunc("GET /api/devices/{serial}/geometry", s.DeviceGeometry)
+	mux.HandleFunc("GET /api/devices/{serial}/accounts", s.DeviceAccounts)
 	mux.HandleFunc("GET /api/devices/{serial}/dns", s.DeviceDNS)
 	mux.HandleFunc("PUT /api/devices/{serial}/dns", s.SetDeviceDNS)
 	mux.HandleFunc("PUT /api/devices/{serial}/orientation", s.SetDeviceOrientation)

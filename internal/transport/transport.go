@@ -15,6 +15,8 @@ const (
 	TypeDeviceDNSGetResponse         = "device_dns_get_response"
 	TypeDeviceDNSSetRequest          = "device_dns_set_request"
 	TypeDeviceDNSSetResponse         = "device_dns_set_response"
+	TypeDeviceAccountsGetRequest     = "device_accounts_get_request"
+	TypeDeviceAccountsGetResponse    = "device_accounts_get_response"
 	TypeDeviceOrientationSetRequest  = "device_orientation_set_request"
 	TypeDeviceOrientationSetResponse = "device_orientation_set_response"
 	TypeScreenshotRequest            = "screenshot_request"
@@ -131,6 +133,35 @@ type DeviceDNSGetResponsePayload struct {
 type DeviceDNSGetResponse struct {
 	RawMessage
 	Payload DeviceDNSGetResponsePayload `json:"payload"`
+}
+
+type DeviceAccountPayload struct {
+	Email    string `json:"email"`
+	UserID   int    `json:"user_id"`
+	UserName string `json:"user_name,omitempty"`
+}
+
+type DeviceAccountsPayload struct {
+	Accounts []DeviceAccountPayload `json:"accounts"`
+}
+
+type DeviceAccountsGetRequestPayload struct {
+	Serial string `json:"serial"`
+}
+
+type DeviceAccountsGetRequest struct {
+	RawMessage
+	Payload DeviceAccountsGetRequestPayload `json:"payload"`
+}
+
+type DeviceAccountsGetResponsePayload struct {
+	Result *DeviceAccountsPayload `json:"result,omitempty"`
+	Error  string                 `json:"error,omitempty"`
+}
+
+type DeviceAccountsGetResponse struct {
+	RawMessage
+	Payload DeviceAccountsGetResponsePayload `json:"payload"`
 }
 
 type DeviceDNSSetRequestPayload struct {

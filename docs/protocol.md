@@ -95,6 +95,43 @@ The response uses the same message ID:
 
 If the listing fails, `payload.error` contains the error string.
 
+## device_accounts_get_request
+
+Requests the Google accounts signed in on a local Android device on the
+destination node.
+
+```json
+{
+  "type": "device_accounts_get_request",
+  "id": "message-id",
+  "from": "node-a",
+  "to": "node-b",
+  "timestamp": "2026-06-22T17:00:00Z",
+  "payload": {
+    "serial": "remote-123"
+  }
+}
+```
+
+```json
+{
+  "type": "device_accounts_get_response",
+  "id": "message-id",
+  "from": "node-b",
+  "to": "node-a",
+  "timestamp": "2026-06-22T17:00:01Z",
+  "payload": {
+    "result": {
+      "accounts": [
+        { "email": "owner@gmail.com", "user_id": 0, "user_name": "Owner" }
+      ]
+    }
+  }
+}
+```
+
+If the read fails, `payload.error` contains the error string.
+
 ## device_dns_get_request
 
 Requests normalized Android private DNS state for a local device on the destination node.

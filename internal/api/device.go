@@ -67,6 +67,26 @@ func (s *Server) DeviceGeometry(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) DeviceAccounts(w http.ResponseWriter, r *http.Request) {
+	serial := r.PathValue("serial")
+	if serial == "" {
+		http.Error(w, "serial required", http.StatusBadRequest)
+		return
+	}
+
+	accounts, err := s.node.DeviceAccounts(serial)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	if err := json.NewEncoder(w).Encode(accounts); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
 func (s *Server) DeviceDNS(w http.ResponseWriter, r *http.Request) {
 	serial := r.PathValue("serial")
 	if serial == "" {

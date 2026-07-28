@@ -345,6 +345,13 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				break
 			}
 			go n.handleDeviceDNSGetRequest(peer, req)
+		case transport.TypeDeviceAccountsGetRequest:
+			var req transport.DeviceAccountsGetRequest
+			if err := json.Unmarshal(message, &req); err != nil {
+				log.Println("decode device accounts get request:", err)
+				break
+			}
+			go n.handleDeviceAccountsGetRequest(peer, req)
 		case transport.TypeDeviceDNSSetRequest:
 			var req transport.DeviceDNSSetRequest
 			if err := json.Unmarshal(message, &req); err != nil {

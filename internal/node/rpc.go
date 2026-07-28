@@ -104,6 +104,7 @@ func (n *Node) sendPeerRPC(ctx context.Context, peerID string, messageType strin
 func (n *Node) deliverPeerRPCResponse(raw transport.RawMessage, message []byte) bool {
 	switch raw.MessageType() {
 	case transport.TypeListDevicesResponse,
+		transport.TypeDeviceAccountsGetResponse,
 		transport.TypeDeviceDNSGetResponse,
 		transport.TypeDeviceDNSSetResponse,
 		transport.TypeDeviceOrientationSetResponse,

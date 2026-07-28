@@ -11,6 +11,7 @@ network.
 | `GET` | `/api/devices` | List local and peer Android and iOS devices. |
 | `GET` | `/api/devices/{serial}/screenshot` | Capture a PNG screenshot from a device. |
 | `GET` | `/api/devices/{serial}/geometry` | Read screenshot-pixel and input-coordinate geometry. |
+| `GET` | `/api/devices/{serial}/accounts` | Read Google accounts signed in on an Android device. |
 | `GET` | `/api/devices/{serial}/dns` | Read Android private DNS mode for a device. |
 | `PUT` | `/api/devices/{serial}/dns` | Set Android private DNS explicitly. |
 | `PUT` | `/api/devices/{serial}/orientation` | Force an Android device into portrait or landscape. |
@@ -199,6 +200,32 @@ unsupported error.
   "orientation": "landscape"
 }
 ```
+
+## Device Accounts
+
+```http
+GET /api/devices/{serial}/accounts
+```
+
+Returns the Google accounts signed in on a local or peer-owned Android device,
+read from `dumpsys account`. Accounts keep the order AccountManager reports,
+which is insertion order, so the first account of an Android user is its oldest
+and the one that user signed in with at setup. Accounts belonging to a secondary
+Android user carry that user's id and name.
+
+```json
+{
+  "accounts": [
+    { "email": "owner@gmail.com", "user_id": 0, "user_name": "Owner" },
+    { "email": "second@gmail.com", "user_id": 0, "user_name": "Owner" }
+  ]
+}
+```
+
+Only the exact `com.google` account type is reported. Other authenticators whose
+type merely shares that prefix, such as `com.google.android.apps.tachyon`, are
+not Google accounts and are excluded. iOS devices have no equivalent listing and
+return an explicit unsupported error rather than an empty list.
 
 ## Device DNS
 

@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"regexp"
 	"sync"
 	"time"
@@ -36,6 +37,41 @@ type launchAppRequest struct {
 // Package names reach an adb shell argument, so only plain Android
 // application-id characters are accepted.
 var launchPackagePattern = regexp.MustCompile(`^[A-Za-z0-9._]+$`)
+
+type openURLRequest struct {
+	Serial string `json:"serial"`
+	URL    string `json:"url"`
+}
+
+type devToolsRequest struct {
+	Serial string `json:"serial"`
+	Port   int    `json:"port,omitempty"`
+}
+
+type devToolsResponse struct {
+	Serial string `json:"serial"`
+	Port   int    `json:"port"`
+}
+
+// The URL is single-quoted into a device shell command, so a single quote
+// would end that quoting; control characters and whitespace cannot appear in a
+// URL at all. Only https is accepted: a payout page is not worth opening over
+// a transport that can be rewritten in flight.
+var openURLDisallowedPattern = regexp.MustCompile(`['\s\x00-\x1f]`)
+
+func validOpenURL(raw string) bool {
+	if raw == "" || len(raw) > 2000 {
+		return false
+	}
+	if openURLDisallowedPattern.MatchString(raw) {
+		return false
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	return parsed.Scheme == "https" && parsed.Host != ""
+}
 
 type touchRequest struct {
 	Serial    string  `json:"serial"`
@@ -338,6 +374,81 @@ func (s *Server) LaunchApp(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.node.LaunchApp(req.Serial, req.Package); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) OpenURL(w http.ResponseWriter, r *http.Request) {
+	var req openURLRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.Serial == "" {
+		http.Error(w, "serial required", http.StatusBadRequest)
+		return
+	}
+
+	if !validOpenURL(req.URL) {
+		http.Error(w, "valid https url required", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.node.OpenURL(req.Serial, req.URL); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) DevToolsForward(w http.ResponseWriter, r *http.Request) {
+	var req devToolsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.Serial == "" {
+		http.Error(w, "serial required", http.StatusBadRequest)
+		return
+	}
+
+	port, err := s.node.DevToolsForward(req.Serial)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	if err := json.NewEncoder(w).Encode(devToolsResponse{Serial: req.Serial, Port: port}); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func (s *Server) DevToolsForwardRemove(w http.ResponseWriter, r *http.Request) {
+	var req devToolsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.Serial == "" {
+		http.Error(w, "serial required", http.StatusBadRequest)
+		return
+	}
+
+	if req.Port <= 0 {
+		http.Error(w, "port required", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.node.DevToolsForwardRemove(req.Serial, req.Port); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

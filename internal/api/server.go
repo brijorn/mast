@@ -42,6 +42,9 @@ type nodeBackend interface {
 	PressButton(serial string, name string) error
 	TypeText(serial string, text string) error
 	LaunchApp(serial string, packageName string) error
+	OpenURL(serial string, url string) error
+	DevToolsForward(serial string) (int, error)
+	DevToolsForwardRemove(serial string, port int) error
 	GetClipboard(serial string) (string, error)
 	SetClipboard(serial string, text string) error
 }
@@ -153,6 +156,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/control/button", s.PressButton)
 	mux.HandleFunc("POST /api/control/text", s.TypeText)
 	mux.HandleFunc("POST /api/control/launch", s.LaunchApp)
+	mux.HandleFunc("POST /api/control/open-url", s.OpenURL)
+	mux.HandleFunc("POST /api/control/devtools", s.DevToolsForward)
+	mux.HandleFunc("POST /api/control/devtools/remove", s.DevToolsForwardRemove)
 	mux.HandleFunc("POST /api/control/clipboard/get", s.GetClipboard)
 	mux.HandleFunc("POST /api/control/clipboard/set", s.SetClipboard)
 	return mux

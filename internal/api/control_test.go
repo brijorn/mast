@@ -2,9 +2,11 @@ package api
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -244,6 +246,95 @@ func TestLaunchAppCallsBackend(t *testing.T) {
 	}
 }
 
+func TestOpenURLCallsBackend(t *testing.T) {
+	backend := &controlBackend{}
+	server := NewServer(backend)
+
+	body := []byte(`{"serial":"local-123","url":"https://www.tremendous.com/rewards/payout/abc-123?x=1&y=2"}`)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/control/open-url", bytes.NewReader(body))
+
+	server.OpenURL(res, req)
+
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusNoContent, res.Body.String())
+	}
+	if backend.openURLSerial != "local-123" {
+		t.Fatalf("open url serial = %q", backend.openURLSerial)
+	}
+	if backend.openURL != "https://www.tremendous.com/rewards/payout/abc-123?x=1&y=2" {
+		t.Fatalf("open url = %q", backend.openURL)
+	}
+}
+
+func TestOpenURLRejectsUnsafeURLs(t *testing.T) {
+	// A single quote would close the quoting the device shell relies on, and a
+	// non-https scheme is refused outright.
+	for _, raw := range []string{
+		`https://evil.example/'; rm -rf /; echo '`,
+		`http://www.tremendous.com/rewards/payout/abc`,
+		`file:///etc/passwd`,
+		`https://example.com/a b`,
+		``,
+	} {
+		backend := &controlBackend{}
+		server := NewServer(backend)
+
+		body := []byte(`{"serial":"local-123","url":` + strconv.Quote(raw) + `}`)
+		res := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/control/open-url", bytes.NewReader(body))
+
+		server.OpenURL(res, req)
+
+		if res.Code != http.StatusBadRequest {
+			t.Fatalf("url %q: status = %d, want %d", raw, res.Code, http.StatusBadRequest)
+		}
+		if backend.openURLSerial != "" {
+			t.Fatalf("url %q reached the backend", raw)
+		}
+	}
+}
+
+func TestDevToolsForwardReportsPort(t *testing.T) {
+	backend := &controlBackend{devToolsPort: 41234}
+	server := NewServer(backend)
+
+	body := []byte(`{"serial":"local-123"}`)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/control/devtools", bytes.NewReader(body))
+
+	server.DevToolsForward(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusOK, res.Body.String())
+	}
+	var decoded devToolsResponse
+	if err := json.Unmarshal(res.Body.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if decoded.Port != 41234 || decoded.Serial != "local-123" {
+		t.Fatalf("response = %+v", decoded)
+	}
+}
+
+func TestDevToolsForwardRemoveRequiresPort(t *testing.T) {
+	backend := &controlBackend{}
+	server := NewServer(backend)
+
+	body := []byte(`{"serial":"local-123"}`)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/control/devtools/remove", bytes.NewReader(body))
+
+	server.DevToolsForwardRemove(res, req)
+
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", res.Code, http.StatusBadRequest)
+	}
+	if backend.devToolsRemovedPort != 0 {
+		t.Fatalf("backend removed port %d without one being given", backend.devToolsRemovedPort)
+	}
+}
+
 func TestLaunchAppRejectsInvalidPackage(t *testing.T) {
 	backend := &controlBackend{}
 	server := NewServer(backend)
@@ -435,6 +526,13 @@ type controlBackend struct {
 	endY        int
 	pointerID   uint64
 
+	openURLSerial string
+	openURL       string
+
+	devToolsSerial      string
+	devToolsPort        int
+	devToolsRemovedPort int
+
 	keySerial string
 	keycode   uint32
 
@@ -518,6 +616,26 @@ func (b *controlBackend) PressButton(serial string, name string) error {
 func (b *controlBackend) LaunchApp(serial string, packageName string) error {
 	b.launchSerial = serial
 	b.launchPackage = packageName
+	return b.err
+}
+
+func (b *controlBackend) OpenURL(serial string, url string) error {
+	b.openURLSerial = serial
+	b.openURL = url
+	return b.err
+}
+
+func (b *controlBackend) DevToolsForward(serial string) (int, error) {
+	b.devToolsSerial = serial
+	if b.err != nil {
+		return 0, b.err
+	}
+	return b.devToolsPort, nil
+}
+
+func (b *controlBackend) DevToolsForwardRemove(serial string, port int) error {
+	b.devToolsSerial = serial
+	b.devToolsRemovedPort = port
 	return b.err
 }
 

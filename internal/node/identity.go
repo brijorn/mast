@@ -349,6 +349,14 @@ func (n *Node) adbReverse(ctx context.Context, host string, serial string, devic
 	return n.adb.Reverse(ctx, host, n.deviceAddress(serial), deviceSocket, localPort)
 }
 
+func (n *Node) adbForward(ctx context.Context, host string, serial string, localSpec string, deviceSocket string) ([]byte, error) {
+	return n.adb.Forward(ctx, host, n.deviceAddress(serial), localSpec, deviceSocket)
+}
+
+func (n *Node) adbForwardRemove(ctx context.Context, host string, serial string, localSpec string) error {
+	return n.adb.ForwardRemove(ctx, host, n.deviceAddress(serial), localSpec)
+}
+
 func (n *Node) adbStartShell(host string, serial string, arg ...string) (*exec.Cmd, error) {
 	return n.adb.StartShell(host, n.deviceAddress(serial), arg...)
 }

@@ -38,6 +38,9 @@ network.
 | `POST` | `/api/control/keypress` | Send an Android keycode. |
 | `POST` | `/api/control/text` | Type text into the focused field. |
 | `POST` | `/api/control/launch` | Foreground an app by package name (Android). |
+| `POST` | `/api/control/open-url` | Open an https URL in the device browser (Android). |
+| `POST` | `/api/control/devtools` | Forward the device's Chrome DevTools socket. |
+| `POST` | `/api/control/devtools/remove` | Release a DevTools forward. |
 | `POST` | `/api/control/clipboard/get` | Read clipboard text. |
 | `POST` | `/api/control/clipboard/set` | Set clipboard text. |
 | `GET` | `/api/programs` | List uploaded programs. |
@@ -839,6 +842,75 @@ Successful response:
 ```http
 204 No Content
 ```
+
+## Open URL
+
+```http
+POST /api/control/open-url
+```
+
+Opens an `https` URL in the device's default browser. Android only: the owning
+node runs `am start -a android.intent.action.VIEW -d {url}` over ADB. Requests
+for peer-owned devices are forwarded to the owning node fire-and-forget, like
+other control requests.
+
+The URL reaches a device shell as a single-quoted argument, so a URL containing
+a single quote, whitespace, or a control character is refused rather than
+escaped into something ambiguous. Only `https` is accepted, and the URL is
+capped at 2000 characters.
+
+Request body:
+
+```json
+{
+  "serial": "local-123",
+  "url": "https://example.com/rewards/payout/abc-123"
+}
+```
+
+Successful response:
+
+```http
+204 No Content
+```
+
+## DevTools Forward
+
+```http
+POST /api/control/devtools
+POST /api/control/devtools/remove
+```
+
+Exposes a device's Chrome DevTools socket on a TCP port of the owning node and
+reports which port ADB allocated, so a caller can read the live DOM of a page
+the device is showing. `localabstract:chrome_devtools_remote` exists only while
+Chrome is running; its absence is an error rather than a forward to a port that
+would refuse every connection.
+
+Local-node only. The forward binds loopback on the node that owns the phone, so
+a port number means nothing to a caller elsewhere; a peer-owned device is an
+explicit error rather than an endpoint that cannot be reached. This forwards a
+socket on a device Mast already owns — it does not manage a browser.
+
+Request body:
+
+```json
+{
+  "serial": "local-123"
+}
+```
+
+Successful response:
+
+```json
+{
+  "serial": "local-123",
+  "port": 41234
+}
+```
+
+`/remove` takes the same body plus the `port` to release and answers
+`204 No Content`.
 
 ## Get Clipboard
 

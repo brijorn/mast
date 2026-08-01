@@ -319,6 +319,18 @@ func (f *fakeBackend) TypeText(_ string, _ string) error {
 	return nil
 }
 
+func (f *fakeBackend) OpenURL(_ string, _ string) error {
+	return f.err
+}
+
+func (f *fakeBackend) DevToolsForward(_ string) (int, error) {
+	return 0, f.err
+}
+
+func (f *fakeBackend) DevToolsForwardRemove(_ string, _ int) error {
+	return f.err
+}
+
 func (f *fakeBackend) LaunchApp(_ string, _ string) error {
 	return nil
 }

@@ -72,6 +72,8 @@ type adbRunner interface {
 	Devices(ctx context.Context, host string) ([]byte, error)
 	Push(ctx context.Context, host string, serial string, localPath string, remotePath string) error
 	Reverse(ctx context.Context, host string, serial string, deviceSocket string, localPort int) error
+	Forward(ctx context.Context, host string, serial string, localSpec string, deviceSocket string) ([]byte, error)
+	ForwardRemove(ctx context.Context, host string, serial string, localSpec string) error
 	StartShell(host string, serial string, arg ...string) (*exec.Cmd, error)
 	Shell(ctx context.Context, host string, serial string, arg ...string) ([]byte, error)
 	ExecOut(ctx context.Context, host string, serial string, arg ...string) ([]byte, error)
@@ -132,6 +134,19 @@ func (a realADB) Push(ctx context.Context, host string, serial string, localPath
 
 func (a realADB) Reverse(ctx context.Context, host string, serial string, deviceSocket string, localPort int) error {
 	args := adbSerialArgs(serial, "reverse", deviceSocket, "tcp:"+strconv.Itoa(localPort))
+	_, err := a.run(ctx, host, adbCommandTimeout, args...)
+	return err
+}
+
+// Forward returns adb's output because `tcp:0` asks adb to allocate the port
+// and report which one it chose.
+func (a realADB) Forward(ctx context.Context, host string, serial string, localSpec string, deviceSocket string) ([]byte, error) {
+	args := adbSerialArgs(serial, "forward", localSpec, deviceSocket)
+	return a.run(ctx, host, adbCommandTimeout, args...)
+}
+
+func (a realADB) ForwardRemove(ctx context.Context, host string, serial string, localSpec string) error {
+	args := adbSerialArgs(serial, "forward", "--remove", localSpec)
 	_, err := a.run(ctx, host, adbCommandTimeout, args...)
 	return err
 }

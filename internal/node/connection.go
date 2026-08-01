@@ -421,6 +421,17 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				log.Println("launch app:", err)
 				break
 			}
+		case transport.TypeOpenURLRequest:
+			var req transport.OpenURLRequest
+			if err := json.Unmarshal(message, &req); err != nil {
+				log.Println("decode open url request:", err)
+				break
+			}
+
+			if err := n.OpenURL(req.Payload.Serial, req.Payload.URL); err != nil {
+				log.Println("open url:", err)
+				break
+			}
 		case transport.TypeTouchRequest:
 			var req transport.TouchRequest
 			if err := json.Unmarshal(message, &req); err != nil {

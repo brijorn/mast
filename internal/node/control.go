@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"regexp"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/brijorn/ioslink"
@@ -264,6 +267,91 @@ func (n *Node) LaunchApp(serial string, packageName string) error {
 	}
 
 	return n.sendPeerRequest(device.NodeID, transport.TypeLaunchAppRequest, payload)
+}
+
+// The URL reaches a device shell as one argument, so it is single-quoted
+// there. A URL carrying its own single quote cannot be quoted that way and is
+// refused by the caller rather than escaped into something ambiguous.
+func (n *Node) openURLLocal(serial string, url string) error {
+	_, err := n.adbShell(
+		n.ctx, "", serial,
+		"am", "start", "-a", "android.intent.action.VIEW", "-d", "'"+url+"'",
+	)
+	return err
+}
+
+func (n *Node) OpenURL(serial string, url string) error {
+	device, err := n.DeviceBySerial(serial)
+	if err != nil {
+		return err
+	}
+
+	if device.NodeID == n.ID {
+		return n.openURLLocal(serial, url)
+	}
+
+	payload := transport.OpenURLRequestPayload{
+		Serial: serial,
+		URL:    url,
+	}
+
+	return n.sendPeerRequest(device.NodeID, transport.TypeOpenURLRequest, payload)
+}
+
+const chromeDevToolsSocket = "localabstract:chrome_devtools_remote"
+
+var devToolsForwardPortPattern = regexp.MustCompile(`(\d+)`)
+
+// DevToolsForward exposes a device's Chrome DevTools socket on a local TCP
+// port and returns that port. The socket exists only while Chrome is running,
+// so its absence is reported rather than forwarded into a port that would
+// refuse every connection.
+//
+// This is deliberately local-node only: the forward binds loopback on the node
+// that owns the phone, so a port number is meaningless to a caller anywhere
+// else. A peer-owned device is an explicit error, not a broken endpoint.
+func (n *Node) DevToolsForward(serial string) (int, error) {
+	device, err := n.DeviceBySerial(serial)
+	if err != nil {
+		return 0, err
+	}
+
+	if device.NodeID != n.ID {
+		return 0, fmt.Errorf("devtools forward is unavailable for %s: the device is owned by node %s", serial, device.NodeID)
+	}
+
+	sockets, err := n.adbShell(n.ctx, "", serial, "cat", "/proc/net/unix")
+	if err != nil {
+		return 0, err
+	}
+	if !strings.Contains(string(sockets), "chrome_devtools_remote") {
+		return 0, fmt.Errorf("chrome is not running on %s: no devtools socket", serial)
+	}
+
+	output, err := n.adbForward(n.ctx, "", serial, "tcp:0", chromeDevToolsSocket)
+	if err != nil {
+		return 0, err
+	}
+
+	match := devToolsForwardPortPattern.FindString(strings.TrimSpace(string(output)))
+	port, err := strconv.Atoi(match)
+	if err != nil || port <= 0 {
+		return 0, fmt.Errorf("adb forward did not report a port for %s: %q", serial, strings.TrimSpace(string(output)))
+	}
+	return port, nil
+}
+
+func (n *Node) DevToolsForwardRemove(serial string, port int) error {
+	device, err := n.DeviceBySerial(serial)
+	if err != nil {
+		return err
+	}
+
+	if device.NodeID != n.ID {
+		return fmt.Errorf("devtools forward is unavailable for %s: the device is owned by node %s", serial, device.NodeID)
+	}
+
+	return n.adbForwardRemove(n.ctx, "", serial, "tcp:"+strconv.Itoa(port))
 }
 
 func (n *Node) typeTextLocal(serial string, text string) error {

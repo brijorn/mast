@@ -33,6 +33,7 @@ const (
 	TypePressButtonRequest           = "press_button_request"
 	TypeTextInputRequest             = "text_input_request"
 	TypeLaunchAppRequest             = "launch_app_request"
+	TypeOpenURLRequest               = "open_url_request"
 	TypeClipboardGetRequest          = "clipboard_get_request"
 	TypeClipboardGetResponse         = "clipboard_get_response"
 	TypeClipboardSetRequest          = "clipboard_set_request"
@@ -382,6 +383,16 @@ type LaunchAppRequest struct {
 type LaunchAppRequestPayload struct {
 	Serial  string `json:"serial"`
 	Package string `json:"package"`
+}
+
+type OpenURLRequest struct {
+	RawMessage
+	Payload OpenURLRequestPayload `json:"payload"`
+}
+
+type OpenURLRequestPayload struct {
+	Serial string `json:"serial"`
+	URL    string `json:"url"`
 }
 
 type ClipboardGetRequest struct {

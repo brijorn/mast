@@ -38,39 +38,52 @@ func (p *PeerConn) WriteMessage(messageType int, data []byte) error {
 }
 
 type Node struct {
-	ID              string
-	AdvertiseHost   string
-	Listener        net.Listener
-	mu              sync.RWMutex
-	Peers           map[string]*PeerConn
-	Client          http.Client
-	Upgrader        websocket.Upgrader
-	ctx             context.Context
-	cancel          context.CancelFunc
-	PingInterval    time.Duration
-	AndroidEnabled  bool
-	IOSEnabled      bool
-	ProxyEnabled    bool
-	ADBPort         int
-	APIAddr         string
-	adb             adbRunner
-	updateChecker   update.UpdateChecker
-	updateApplier   update.UpdateApplier
-	scheduleRestart func(time.Duration) error
-	pendingMu       sync.Mutex
-	pending         map[string]chan peerRPCResponse
-	streams         map[string]*streamEntry
-	streamsMu       sync.RWMutex
-	batteryMu       sync.RWMutex
-	batteryCache    map[string]batterySnapshot
-	configMu        sync.RWMutex
-	configPath      string
-	configState     mastconfig.Config
-	configReady     bool
-	configApplier   RuntimeConfigApplier
-	deviceBlacklist map[string]struct{}
-	iosMu           sync.Mutex
-	iosTunnelMgr    *tunnel.TunnelManager
+	ID                  string
+	AdvertiseHost       string
+	Listener            net.Listener
+	mu                  sync.RWMutex
+	Peers               map[string]*PeerConn
+	Client              http.Client
+	Upgrader            websocket.Upgrader
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	PingInterval        time.Duration
+	AndroidEnabled      bool
+	IOSEnabled          bool
+	ProxyEnabled        bool
+	ADBPort             int
+	APIAddr             string
+	adb                 adbRunner
+	updateChecker       update.UpdateChecker
+	updateApplier       update.UpdateApplier
+	scheduleRestart     func(time.Duration) error
+	pendingMu           sync.Mutex
+	pending             map[string]chan peerRPCResponse
+	streams             map[string]*streamEntry
+	streamsMu           sync.RWMutex
+	devicePowerMu       sync.Mutex
+	devicePowerReady    map[string]bool
+	devicePowerSessions map[string]*devicePowerSession
+	devicePowerStarting map[string]*devicePowerAttempt
+	devicePowerRetries  map[string]*devicePowerRetry
+	devicePowerFailures map[string]uint
+	devicePowerWake     chan struct{}
+	batteryMu           sync.RWMutex
+	batteryCache        map[string]batterySnapshot
+	identityMu          sync.RWMutex
+	identityPath        string
+	identityLoaded      bool
+	identityCache       map[string]deviceIdentityEntry
+	addressMu           sync.RWMutex
+	addressBySerial     map[string]string
+	configMu            sync.RWMutex
+	configPath          string
+	configState         mastconfig.Config
+	configReady         bool
+	configApplier       RuntimeConfigApplier
+	deviceBlacklist     map[string]struct{}
+	iosMu               sync.Mutex
+	iosTunnelMgr        *tunnel.TunnelManager
 }
 
 func NewNode(id string, addr string, advertiseHost string, androidEnabled bool, iosEnabled bool, proxyEnabled bool) (*Node, error) {
@@ -81,28 +94,38 @@ func NewNode(id string, addr string, advertiseHost string, androidEnabled bool, 
 
 	ctx, cancel := context.WithCancel(context.Background())
 	updateChecker := &update.Checker{}
-	return &Node{
-		ID:              id,
-		Listener:        ln,
-		Peers:           make(map[string]*PeerConn),
-		ctx:             ctx,
-		cancel:          cancel,
-		AdvertiseHost:   advertiseHost,
-		streams:         make(map[string]*streamEntry),
-		batteryCache:    make(map[string]batterySnapshot),
-		PingInterval:    30 * time.Second,
-		AndroidEnabled:  androidEnabled,
-		IOSEnabled:      iosEnabled,
-		ProxyEnabled:    proxyEnabled,
-		ADBPort:         5037,
-		APIAddr:         mastconfig.DefaultAPIAddr,
-		adb:             realADB{},
-		updateChecker:   updateChecker,
-		updateApplier:   &update.Applier{Checker: updateChecker},
-		scheduleRestart: scheduleProcessRestartForPlatform,
-		pending:         make(map[string]chan peerRPCResponse),
-		deviceBlacklist: make(map[string]struct{}),
-	}, nil
+	n := &Node{
+		ID:                  id,
+		Listener:            ln,
+		Peers:               make(map[string]*PeerConn),
+		ctx:                 ctx,
+		cancel:              cancel,
+		AdvertiseHost:       advertiseHost,
+		streams:             make(map[string]*streamEntry),
+		batteryCache:        make(map[string]batterySnapshot),
+		identityCache:       make(map[string]deviceIdentityEntry),
+		addressBySerial:     make(map[string]string),
+		PingInterval:        30 * time.Second,
+		AndroidEnabled:      androidEnabled,
+		IOSEnabled:          iosEnabled,
+		ProxyEnabled:        proxyEnabled,
+		ADBPort:             5037,
+		APIAddr:             mastconfig.DefaultAPIAddr,
+		adb:                 realADB{},
+		updateChecker:       updateChecker,
+		updateApplier:       &update.Applier{Checker: updateChecker},
+		scheduleRestart:     scheduleProcessRestartForPlatform,
+		pending:             make(map[string]chan peerRPCResponse),
+		deviceBlacklist:     make(map[string]struct{}),
+		devicePowerReady:    make(map[string]bool),
+		devicePowerSessions: make(map[string]*devicePowerSession),
+		devicePowerStarting: make(map[string]*devicePowerAttempt),
+		devicePowerRetries:  make(map[string]*devicePowerRetry),
+		devicePowerFailures: make(map[string]uint),
+		devicePowerWake:     make(chan struct{}, 1),
+	}
+	go n.monitorDevicePowerPolicy()
+	return n, nil
 }
 
 func (n *Node) GetPeer(peerID string) (*PeerConn, bool) {

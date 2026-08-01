@@ -17,7 +17,22 @@ import (
 	"github.com/google/uuid"
 )
 
-const runSchemaVersion = 1
+const runSchemaVersion = 2
+
+func syncLegacyAutostart(run *Run) {
+	run.Autostart = run.AutostartReconnect || run.AutostartCrashRestart
+}
+
+func migrateRunAutostart(run *Run) bool {
+	if run.SchemaVersion >= 2 {
+		syncLegacyAutostart(run)
+		return false
+	}
+	run.AutostartReconnect = run.Autostart
+	run.AutostartCrashRestart = run.Autostart
+	syncLegacyAutostart(run)
+	return true
+}
 
 func cloneRun(run *Run) Run {
 	clone := *run
@@ -30,10 +45,23 @@ func cloneRun(run *Run) Run {
 	for index := range clone.Companions {
 		clone.Companions[index].CmdArgs = append([]string(nil), run.Companions[index].CmdArgs...)
 	}
+	if run.AutostartSupervisor != nil {
+		supervisor := *run.AutostartSupervisor
+		if run.AutostartSupervisor.LastFailureAt != nil {
+			lastFailureAt := *run.AutostartSupervisor.LastFailureAt
+			supervisor.LastFailureAt = &lastFailureAt
+		}
+		if run.AutostartSupervisor.NextRestartAt != nil {
+			nextRestartAt := *run.AutostartSupervisor.NextRestartAt
+			supervisor.NextRestartAt = &nextRestartAt
+		}
+		clone.AutostartSupervisor = &supervisor
+	}
 	return clone
 }
 
 func nextRunSnapshot(run *Run) Run {
+	syncLegacyAutostart(run)
 	run.SchemaVersion = runSchemaVersion
 	run.Revision++
 	return cloneRun(run)
@@ -246,13 +274,26 @@ func runIsActive(run *Run) bool {
 }
 
 func (s *Store) SetRunAutostart(id string, enabled bool) (*Run, error) {
+	return s.UpdateRunAutostart(id, AutostartOptions{
+		Reconnect:    &enabled,
+		CrashRestart: &enabled,
+	})
+}
+
+func (s *Store) UpdateRunAutostart(id string, opts AutostartOptions) (*Run, error) {
+	if opts.Reconnect == nil && opts.CrashRestart == nil {
+		return nil, errors.New("at least one autostart behavior is required")
+	}
+
 	s.mu.Lock()
 	state := s.runs[id]
 	if state == nil {
 		s.mu.Unlock()
 		return nil, errors.New("run not found")
 	}
-	if enabled {
+	enabling := (opts.Reconnect != nil && *opts.Reconnect) ||
+		(opts.CrashRestart != nil && *opts.CrashRestart)
+	if enabling {
 		if state.run.WorkspaceCleaned {
 			s.mu.Unlock()
 			return nil, errors.New("workspace has been cleaned up")
@@ -261,10 +302,21 @@ func (s *Store) SetRunAutostart(id string, enabled bool) (*Run, error) {
 			s.mu.Unlock()
 			return nil, errors.New("run has no persisted command")
 		}
-	} else {
+	}
+	if opts.Reconnect != nil {
+		state.run.AutostartReconnect = *opts.Reconnect
+	}
+	if opts.CrashRestart != nil {
+		state.run.AutostartCrashRestart = *opts.CrashRestart
+		if !*opts.CrashRestart {
+			state.run.AutostartSupervisor = nil
+			delete(s.autostartRestarts, id)
+		}
+	}
+	syncLegacyAutostart(state.run)
+	if !state.run.Autostart {
 		state.run.AutostartPaused = false
 	}
-	state.run.Autostart = enabled
 	run := nextRunSnapshot(state.run)
 	s.mu.Unlock()
 
@@ -404,43 +456,59 @@ func (s *Store) resolveRunCommand(workspace, command string, args []string) (str
 
 func (s *Store) startRunProcesses(state *runState, stdout, stderr io.Writer, env map[string]string) error {
 	run := state.run
-	cmd := s.startCmd(run.Cmd, run.CmdArgs...)
+	s.mu.Lock()
+	command := run.Cmd
+	args := append([]string(nil), run.CmdArgs...)
+	workspace := run.Workspace
+	s.mu.Unlock()
+
+	cmd := s.startCmd(command, args...)
 	configureRunCommand(cmd)
-	cmd.Dir = run.Workspace
+	cmd.Dir = workspace
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	cmd.Env = mergeEnv(os.Environ(), env)
 	if err := cmd.Start(); err != nil {
 		return err
 	}
+	s.mu.Lock()
 	state.cmd = cmd
 	run.PID = cmd.Process.Pid
+	s.mu.Unlock()
 
 	for index := range run.Companions {
-		process := &run.Companions[index]
+		s.mu.Lock()
+		process := run.Companions[index]
+		mainPID := run.PID
+		s.mu.Unlock()
 		companionCmd := s.startCmd(process.Cmd, process.CmdArgs...)
-		configureCompanionRunCommand(companionCmd, run.PID)
-		companionCmd.Dir = run.Workspace
+		configureCompanionRunCommand(companionCmd, mainPID)
+		companionCmd.Dir = workspace
 		companionCmd.Stdout = stdout
 		companionCmd.Stderr = stderr
 		companionCmd.Env = mergeEnv(os.Environ(), env)
 		if err := companionCmd.Start(); err != nil {
 			if !process.Required {
-				process.Error = err.Error()
+				s.mu.Lock()
+				run.Companions[index].Error = err.Error()
+				s.mu.Unlock()
 				continue
 			}
 			s.mu.Lock()
 			state.mainExited = true
+			runForStop := cloneRun(run)
 			s.mu.Unlock()
-			_ = killRunProcess(run)
+			_ = killRunProcess(&runForStop)
 			_ = cmd.Wait()
 			state.companionWG.Wait()
 			return fmt.Errorf("start companion %s: %w", process.ID, err)
 		}
-		process.PID = companionCmd.Process.Pid
-		process.Error = ""
+		s.mu.Lock()
+		run.Companions[index].PID = companionCmd.Process.Pid
+		run.Companions[index].Error = ""
 		state.companionCmds = append(state.companionCmds, companionCmd)
 		state.companionWG.Add(1)
+		s.mu.Unlock()
 		go s.waitCompanion(state, process.ID, process.Required, companionCmd)
 	}
 	return nil
@@ -489,65 +557,83 @@ func (s *Store) programForRun(run *Run) Program {
 }
 
 // Resume re-executes a completed, failed, stopped, or lost run in its existing
-// workspace, preserving the run ID and replacing the previous log files.
+// workspace, preserving the run ID. A failed attempt's logs are rotated before
+// the current logs are replaced.
 // The run's Cmd and CmdArgs must have been persisted when the run was
 // originally started.
 func (s *Store) Resume(opts ResumeOptions) (*Run, error) {
 	s.mu.Lock()
 	state := s.runs[opts.ID]
-	s.mu.Unlock()
 	if state == nil {
+		s.mu.Unlock()
 		return nil, errors.New("run not found")
 	}
 	run := state.run
 	if run.Status == RunStatusRunning || run.Status == RunStatusStarting {
+		s.mu.Unlock()
 		return nil, errors.New("run is already active")
 	}
+	if state.resuming {
+		s.mu.Unlock()
+		return nil, errors.New("run resume is already in progress")
+	}
 	if run.WorkspaceCleaned {
+		s.mu.Unlock()
 		return nil, errors.New("workspace has been cleaned up")
 	}
 	if run.Cmd == "" {
+		s.mu.Unlock()
 		return nil, errors.New("run has no persisted command")
 	}
-	alive, matches := runProcessStatus(run)
+	savedRun := cloneRun(run)
+	rotateFailedLogs := run.Status == RunStatusFailed
+	state.resuming = true
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		state.resuming = false
+		s.mu.Unlock()
+	}()
+
+	alive, matches := runProcessStatus(&savedRun)
 	if alive {
 		if !matches {
-			return nil, fmt.Errorf("run pid %d is still alive but does not belong to the saved run workspace", run.PID)
+			return nil, fmt.Errorf("run pid %d is still alive but does not belong to the saved run workspace", savedRun.PID)
 		}
-		if err := killRunProcess(run); err != nil {
+		if err := killRunProcess(&savedRun); err != nil {
 			return nil, err
 		}
-		if !waitForRunProcessExit(run, 2*time.Second) {
-			return nil, fmt.Errorf("run pid %d is still alive", run.PID)
+		if !waitForRunProcessExit(&savedRun, 2*time.Second) {
+			return nil, fmt.Errorf("run pid %d is still alive", savedRun.PID)
 		}
 	}
 
-	device := node.DeviceInfo{Serial: run.Serial, NodeID: run.NodeID}
+	device := node.DeviceInfo{Serial: savedRun.Serial, NodeID: savedRun.NodeID}
 	if devices, err := s.devices.ListDevices(); err == nil {
 		for _, candidate := range devices {
-			if candidate.Serial == run.Serial {
+			if candidate.Serial == savedRun.Serial {
 				device = candidate
 				break
 			}
 		}
 	}
 
-	p := s.programForRun(run)
-	variables := mergeVariables(run.Env, opts.Variables)
-	secretVariables, err := readSecretVariables(run.Workspace)
+	p := s.programForRun(&savedRun)
+	variables := mergeVariables(savedRun.Env, opts.Variables)
+	secretVariables, err := readSecretVariables(savedRun.Workspace)
 	if err != nil {
 		return nil, err
 	}
 	secretVariables = mergeVariables(secretVariables, opts.SecretVariables)
-	if err := writeSecretVariables(run.Workspace, secretVariables); err != nil {
+	if err := writeSecretVariables(savedRun.Workspace, secretVariables); err != nil {
 		return nil, err
 	}
 	renderVariables := mergeVariables(variables, secretVariables)
 	if p.ConfigFile != "" {
-		configPath := filepath.Join(run.Workspace, p.ConfigFile)
-		templatePath := configTemplatePath(run.Workspace, p.ConfigFile)
+		configPath := filepath.Join(savedRun.Workspace, p.ConfigFile)
+		templatePath := configTemplatePath(savedRun.Workspace, p.ConfigFile)
 		if !fileExists(templatePath) {
-			bundleConfigPath := filepath.Join(s.bundlePath(run.ProgramID), p.ConfigFile)
+			bundleConfigPath := filepath.Join(s.bundlePath(savedRun.ProgramID), p.ConfigFile)
 			if fileExists(bundleConfigPath) {
 				if err := os.MkdirAll(filepath.Dir(templatePath), 0700); err != nil {
 					return nil, err
@@ -568,13 +654,16 @@ func (s *Store) Resume(opts ResumeOptions) (*Run, error) {
 	}
 
 	// Start a fresh log stream for the resumed attempt.
-	run.StdoutLogStart = 0
-	run.StderrLogStart = 0
-	stdout, err := s.newRunLogWriter(run, filepath.Join(run.Workspace, "stdout.log"), "stdout")
+	if rotateFailedLogs {
+		if err := rotateRunLogs(savedRun.Workspace); err != nil {
+			return nil, err
+		}
+	}
+	stdout, err := s.newRunLogWriter(run, filepath.Join(savedRun.Workspace, "stdout.log"), "stdout")
 	if err != nil {
 		return nil, err
 	}
-	stderr, err := s.newRunLogWriter(run, filepath.Join(run.Workspace, "stderr.log"), "stderr")
+	stderr, err := s.newRunLogWriter(run, filepath.Join(savedRun.Workspace, "stderr.log"), "stderr")
 	if err != nil {
 		_ = stdout.Close()
 		return nil, err
@@ -583,6 +672,12 @@ func (s *Store) Resume(opts ResumeOptions) (*Run, error) {
 	env := withDefaultRunEnv(variables)
 
 	s.mu.Lock()
+	run.StdoutLogStart = 0
+	run.StderrLogStart = 0
+	if !opts.Supervisor {
+		run.AutostartSupervisor = nil
+		delete(s.autostartRestarts, run.ID)
+	}
 	run.Status = RunStatusStarting
 	run.AutostartPaused = false
 	run.StopRequestedAt = nil
@@ -836,9 +931,7 @@ func (s *Store) loadRuns() {
 		if err := json.Unmarshal(data, &run); err != nil {
 			continue
 		}
-		if run.SchemaVersion == 0 {
-			run.SchemaVersion = runSchemaVersion
-		}
+		changed := migrateRunAutostart(&run)
 		if run.Status == RunStatusRunning || run.Status == RunStatusStarting {
 			alive, matches := runProcessStatus(&run)
 			run.Status = RunStatusLost
@@ -851,6 +944,9 @@ func (s *Store) loadRuns() {
 			default:
 				run.Error = "mast restarted; process ownership was lost"
 			}
+			changed = true
+		}
+		if changed {
 			snapshot := nextRunSnapshot(&run)
 			writeRunJSONBestEffort(runFile, &snapshot)
 		}

@@ -109,6 +109,7 @@ func (n *Node) deliverPeerRPCResponse(raw transport.RawMessage, message []byte) 
 		transport.TypeDeviceDNSSetResponse,
 		transport.TypeDeviceOrientationSetResponse,
 		transport.TypeScreenshotResponse,
+		transport.TypeElementsResponse,
 		transport.TypeStartStreamResponse,
 		transport.TypeClipboardGetResponse,
 		transport.TypeUpdateCheckResponse,

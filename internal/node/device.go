@@ -20,8 +20,13 @@ import (
 	"github.com/brijorn/mast/internal/transport"
 )
 
+// DeviceInfo separates what a device is from how it is currently reached.
+// Serial is the durable identity Runway keys its state on: the hardware serial
+// for a phone, the UDID for an iOS device. Address is the adb transport, which
+// for a wireless device changes on every reconnect. See identity.go.
 type DeviceInfo struct {
 	Serial   string         `json:"serial"`
+	Address  string         `json:"address,omitempty"`
 	Platform string         `json:"platform"`
 	State    string         `json:"state"`
 	Battery  *DeviceBattery `json:"battery,omitempty"`
@@ -121,7 +126,7 @@ func (a realADB) Devices(ctx context.Context, host string) ([]byte, error) {
 
 func (a realADB) Push(ctx context.Context, host string, serial string, localPath string, remotePath string) error {
 	args := adbSerialArgs(serial, "push", localPath, remotePath)
-	_, err := a.run(ctx, host, adbCommandTimeout, args...)
+	_, err := a.run(ctx, host, adbTransferTimeout, args...)
 	return err
 }
 
@@ -212,6 +217,10 @@ func (n *Node) ListDevices() ([]DeviceInfo, error) {
 		devices = append(devices, result.devices...)
 	}
 
+	// Peer devices are resolved by the node that owns them; recording their
+	// addresses here lets a host-directed adb call dial a peer phone by the
+	// serial Runway knows it as.
+	n.rememberDeviceAddresses(devices)
 	return devices, nil
 }
 
@@ -436,7 +445,7 @@ func (n *Node) cachedBattery(serial string) (batterySnapshot, bool) {
 }
 
 func (n *Node) deviceBattery(serial string) (batterySnapshot, error) {
-	output, err := n.adb.Shell(n.ctx, "", serial, "dumpsys", "battery")
+	output, err := n.adbShell(n.ctx, "", serial, "dumpsys", "battery")
 	if err != nil {
 		return batterySnapshot{}, err
 	}
@@ -467,6 +476,11 @@ func (n *Node) listLocalDeviceStates() ([]DeviceInfo, error) {
 	if adbErr != nil && len(devices) == 0 {
 		return nil, adbErr
 	}
+
+	// Identity is resolved before anything else sees the list, so a device is
+	// never reported — or written down by Runway — under a transport address.
+	devices = n.resolveDeviceIdentities(devices, "")
+	n.rememberDeviceAddresses(devices)
 	return n.filterBlacklistedDevices(devices), nil
 }
 
@@ -476,7 +490,9 @@ func (n *Node) filterBlacklistedDevices(devices []DeviceInfo) []DeviceInfo {
 	}
 	filtered := devices[:0]
 	for _, device := range devices {
-		if n.isDeviceBlacklisted(device.Serial) {
+		// Match either name: an operator may have blacklisted a phone by the
+		// address it used before identities were resolved.
+		if n.isDeviceBlacklisted(device.Serial) || n.isDeviceBlacklisted(device.Address) {
 			continue
 		}
 		filtered = append(filtered, device)
@@ -681,7 +697,7 @@ func (n *Node) localScreenshot(serial string) ([]byte, error) {
 	case PlatformIOS:
 		return n.localIOSScreenshot(serial)
 	case PlatformAndroid:
-		return n.adb.ExecOut(n.ctx, "", serial, "screencap", "-p")
+		return n.adbExecOut(n.ctx, "", serial, "screencap", "-p")
 	default:
 		return nil, fmt.Errorf("device %s has unsupported platform %s", serial, device.Platform)
 	}
@@ -808,6 +824,7 @@ func deviceInfoPayloads(devices []DeviceInfo) []transport.DeviceInfoPayload {
 	for _, device := range devices {
 		payloads = append(payloads, transport.DeviceInfoPayload{
 			Serial:   device.Serial,
+			Address:  device.Address,
 			Platform: device.Platform,
 			State:    device.State,
 			NodeID:   device.NodeID,
@@ -822,6 +839,7 @@ func deviceInfosFromPayload(payloads []transport.DeviceInfoPayload) []DeviceInfo
 	for _, payload := range payloads {
 		devices = append(devices, DeviceInfo{
 			Serial:   payload.Serial,
+			Address:  payload.Address,
 			Platform: payload.Platform,
 			State:    payload.State,
 			NodeID:   payload.NodeID,
@@ -868,8 +886,10 @@ func parseDevicesOutput(output string, nodeID string, devices []DeviceInfo) []De
 		if len(parts) != 2 {
 			continue
 		}
+		transport := strings.TrimSpace(parts[0])
 		devices = append(devices, DeviceInfo{
-			Serial:   strings.TrimSpace(parts[0]),
+			Serial:   transport,
+			Address:  transport,
 			Platform: PlatformAndroid,
 			State:    strings.TrimSpace(parts[1]),
 			NodeID:   nodeID,

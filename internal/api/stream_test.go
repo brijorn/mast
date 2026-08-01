@@ -303,6 +303,10 @@ func (f *fakeBackend) Swipe(_ string, _, _, _, _ int) error {
 	return nil
 }
 
+func (f *fakeBackend) TouchPointer(_ string, _ string, _, _ int, _ uint64) error {
+	return nil
+}
+
 func (f *fakeBackend) PressKey(_ string, _ uint32, _ uint32) error {
 	return nil
 }
@@ -312,6 +316,10 @@ func (f *fakeBackend) PressButton(_ string, _ string) error {
 }
 
 func (f *fakeBackend) TypeText(_ string, _ string) error {
+	return nil
+}
+
+func (f *fakeBackend) LaunchApp(_ string, _ string) error {
 	return nil
 }
 
@@ -374,8 +382,8 @@ func TestStartStreamStartsStream(t *testing.T) {
 	if backend.callCount() != 1 {
 		t.Fatalf("EnsureStream calls = %d, want 1", backend.callCount())
 	}
-	if got := backend.options[0]; !got.NoAudio || got.MaxSize != 1080 || !got.TurnScreenOff || !got.PreserveOrientation {
-		t.Fatalf("options = %+v, want no_audio=true, max_size=1080, turn_screen_off=true, and preserve_orientation=true", got)
+	if got := backend.options[0]; !got.NoAudio || got.MaxSize != 1080 || got.TurnScreenOff || !got.PreserveOrientation {
+		t.Fatalf("options = %+v, want no_audio=true, max_size=1080, viewer-owned turn_screen_off=false, and preserve_orientation=true", got)
 	}
 }
 
@@ -513,8 +521,8 @@ func TestStartStreamReturnsEnsuredStream(t *testing.T) {
 	if backend.callCount() != 1 {
 		t.Fatalf("EnsureStream calls = %d, want 1", backend.callCount())
 	}
-	if got := backend.options[0]; !got.TurnScreenOff {
-		t.Fatalf("TurnScreenOff = false, want true by default")
+	if got := backend.options[0]; got.TurnScreenOff {
+		t.Fatal("TurnScreenOff = true, want node power policy to own the default")
 	}
 }
 

@@ -2,11 +2,15 @@ package program
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
+
+const runLogHistoryGenerations = 3
 
 func (s *Store) Logs(id string) (string, string, error) {
 	logs, err := s.LogsSince(id, LogOffsets{})
@@ -72,6 +76,44 @@ func (s *Store) newRunLogWriter(run *Run, path, stream string) (*boundedLogWrite
 		s.mu.Unlock()
 		writeRunJSONBestEffort(filepath.Join(snapshot.Workspace, "run.json"), &snapshot)
 	})
+}
+
+func rotateRunLogs(workspace string) error {
+	for _, name := range []string{"stdout.log", "stderr.log"} {
+		if err := rotateLogFile(filepath.Join(workspace, name), runLogHistoryGenerations); err != nil {
+			return fmt.Errorf("rotate %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+func rotateLogFile(path string, generations int) error {
+	if generations < 1 {
+		return nil
+	}
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if err := os.Remove(logGenerationPath(path, generations)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	for generation := generations - 1; generation >= 1; generation-- {
+		from := logGenerationPath(path, generation)
+		to := logGenerationPath(path, generation+1)
+		if err := os.Rename(from, to); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return os.Rename(path, logGenerationPath(path, 1))
+}
+
+func logGenerationPath(path string, generation int) string {
+	extension := filepath.Ext(path)
+	base := strings.TrimSuffix(path, extension)
+	return fmt.Sprintf("%s.%d%s", base, generation, extension)
 }
 
 func newBoundedLogWriter(path string, maxBytes int64, onTrim func(start int64)) (*boundedLogWriter, error) {

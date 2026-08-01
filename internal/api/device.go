@@ -44,6 +44,33 @@ type geometryBackend interface {
 	Geometry(serial string) (*node.DeviceGeometry, error)
 }
 
+type elementsBackend interface {
+	Elements(serial string) ([]node.DeviceElement, error)
+}
+
+func (s *Server) DeviceElements(w http.ResponseWriter, r *http.Request) {
+	serial := r.PathValue("serial")
+	if serial == "" {
+		http.Error(w, "serial required", http.StatusBadRequest)
+		return
+	}
+	backend, ok := s.node.(elementsBackend)
+	if !ok {
+		http.Error(w, "device elements unavailable", http.StatusNotImplemented)
+		return
+	}
+	elements, err := backend.Elements(serial)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	if err := json.NewEncoder(w).Encode(elements); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
 func (s *Server) DeviceGeometry(w http.ResponseWriter, r *http.Request) {
 	serial := r.PathValue("serial")
 	if serial == "" {

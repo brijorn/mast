@@ -80,6 +80,43 @@ func (n *Node) Touch(serial string, action string, x int, y int) error {
 	return n.sendPeerRequest(device.NodeID, transport.TypeTouchRequest, payload)
 }
 
+func (n *Node) touchLocalPointer(serial string, action string, x int, y int, pointerID uint64) error {
+	session, err := n.controlSession(serial)
+	if err != nil {
+		return err
+	}
+	if session.Platform == PlatformIOS {
+		return errors.New("multi-touch control is only available for Android")
+	}
+	if session.controlConn == nil {
+		return errors.New("stream control connection not available")
+	}
+	touchAction, err := touchActionByte(action)
+	if err != nil {
+		return err
+	}
+	session.controlMu.Lock()
+	defer session.controlMu.Unlock()
+	width, height := session.Dimensions()
+	return scrcpy.WriteTouchPointer(session.controlConn, touchAction, pointerID, x, y, width, height)
+}
+
+func (n *Node) TouchPointer(serial string, action string, x int, y int, pointerID uint64) error {
+	if session, err := n.GetStream(serial); err == nil && session.controlConn != nil {
+		return n.touchLocalPointer(serial, action, x, y, pointerID)
+	}
+	device, err := n.DeviceBySerial(serial)
+	if err != nil {
+		return err
+	}
+	if device.NodeID == n.ID {
+		return n.touchLocalPointer(serial, action, x, y, pointerID)
+	}
+	return n.sendPeerRequest(device.NodeID, transport.TypeTouchRequest, transport.TouchRequestPayload{
+		Serial: serial, Action: action, X: x, Y: y, PointerID: &pointerID,
+	})
+}
+
 func (n *Node) tapLocal(serial string, x int, y int) error {
 	session, err := n.controlSession(serial)
 	if err != nil {
@@ -106,7 +143,7 @@ func (n *Node) tapLocal(serial string, x int, y int) error {
 }
 
 func (n *Node) tapLocalAndroidADB(serial string, x int, y int) error {
-	_, err := n.adb.Shell(n.ctx, "", serial, "input", "tap", fmt.Sprintf("%d", x), fmt.Sprintf("%d", y))
+	_, err := n.adbShell(n.ctx, "", serial, "input", "tap", fmt.Sprintf("%d", x), fmt.Sprintf("%d", y))
 	return err
 }
 
@@ -193,6 +230,40 @@ func (n *Node) PressButton(serial string, name string) error {
 	}
 
 	return n.sendPeerRequest(device.NodeID, transport.TypePressButtonRequest, payload)
+}
+
+func (n *Node) launchAppLocal(serial string, packageName string) error {
+	device, err := n.DeviceBySerial(serial)
+	if err != nil {
+		return err
+	}
+
+	if device.Platform != PlatformAndroid {
+		return errors.New("launch app is only supported on Android devices")
+	}
+
+	// monkey resolves the package's launcher activity itself, so a bare
+	// package name is enough to foreground the app.
+	_, err = n.adbShell(n.ctx, "", serial, "monkey", "-p", packageName, "1")
+	return err
+}
+
+func (n *Node) LaunchApp(serial string, packageName string) error {
+	device, err := n.DeviceBySerial(serial)
+	if err != nil {
+		return err
+	}
+
+	if device.NodeID == n.ID {
+		return n.launchAppLocal(serial, packageName)
+	}
+
+	payload := transport.LaunchAppRequestPayload{
+		Serial:  serial,
+		Package: packageName,
+	}
+
+	return n.sendPeerRequest(device.NodeID, transport.TypeLaunchAppRequest, payload)
 }
 
 func (n *Node) typeTextLocal(serial string, text string) error {

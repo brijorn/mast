@@ -28,8 +28,13 @@ func (n *Node) SetConfig(path string, cfg mastconfig.Config, applier RuntimeConf
 	n.configApplier = applier
 	n.configMu.Unlock()
 
+	n.setDeviceIdentityPath(path)
 	n.applyNodeConfig(cfg)
 	n.setDeviceBlacklist(cfg.DeviceBlacklist)
+	if !cfg.AndroidEnabled || !cfg.KeepDisplayOff {
+		n.stopAllDevicePowerSessions()
+	}
+	n.requestDevicePowerPolicy()
 }
 
 func (n *Node) GetNodeConfig(ctx context.Context, nodeID string) (*mastconfig.Config, error) {
@@ -96,6 +101,18 @@ func (n *Node) getLocalConfig() (*mastconfig.Config, error) {
 }
 
 func (n *Node) updateLocalConfig(values map[string]string) (*mastconfig.UpdateResult, error) {
+	result, err := n.persistLocalConfigUpdate(values)
+	if err != nil {
+		return nil, err
+	}
+	if !result.Config.AndroidEnabled || !result.Config.KeepDisplayOff {
+		n.stopAllDevicePowerSessions()
+	}
+	n.requestDevicePowerPolicy()
+	return result, nil
+}
+
+func (n *Node) persistLocalConfigUpdate(values map[string]string) (*mastconfig.UpdateResult, error) {
 	n.configMu.Lock()
 	defer n.configMu.Unlock()
 	if !n.configReady {

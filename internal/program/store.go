@@ -26,6 +26,7 @@ type Store struct {
 	monitorCtx          context.Context
 	monitorCancel       context.CancelFunc
 	observedDeviceReady map[string]bool
+	observedDevices     map[string]node.DeviceInfo
 	autostartRestarts   map[string]*autostartRestartState
 }
 
@@ -40,7 +41,12 @@ func (s *Store) standardDeviceEnv(device node.DeviceInfo) map[string]string {
 	apiURL := s.mastAPIURL
 	s.mu.Unlock()
 	env := map[string]string{
-		"DEVICE_SERIAL":   device.Serial,
+		// DEVICE_SERIAL stays adb-usable because programs pass it to adb -s.
+		// DEVICE_ID is the durable identity Runway keys state on; the two
+		// differ only for a wireless device.
+		"DEVICE_SERIAL":   deviceADBTarget(device),
+		"DEVICE_ID":       device.Serial,
+		"DEVICE_ADDRESS":  deviceADBTarget(device),
 		"DEVICE_PLATFORM": device.Platform,
 		"MAST_NODE_ID":    device.NodeID,
 	}
@@ -64,6 +70,7 @@ type runState struct {
 	companionFailure string
 	mainExited       bool
 	stopping         bool
+	resuming         bool
 }
 
 func NewStore(root string, devices deviceLister) (*Store, error) {
@@ -81,6 +88,7 @@ func NewStore(root string, devices deviceLister) (*Store, error) {
 		monitorCtx:          monitorCtx,
 		monitorCancel:       monitorCancel,
 		observedDeviceReady: make(map[string]bool),
+		observedDevices:     make(map[string]node.DeviceInfo),
 		autostartRestarts:   make(map[string]*autostartRestartState),
 	}
 	if err := os.MkdirAll(s.bundleDir(), 0700); err != nil {

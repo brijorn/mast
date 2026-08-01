@@ -64,7 +64,7 @@ func (n *Node) setLocalDeviceOrientation(serial string, orientation DeviceOrient
 		{"settings", "put", "system", "user_rotation", rotation},
 	}
 	for _, command := range commands {
-		if _, err := n.adb.Shell(n.ctx, "", serial, command...); err != nil {
+		if _, err := n.adbShell(n.ctx, "", serial, command...); err != nil {
 			return nil, fmt.Errorf("set %s orientation on %s: %w", orientation, serial, err)
 		}
 	}

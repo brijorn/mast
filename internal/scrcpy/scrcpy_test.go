@@ -49,6 +49,14 @@ func TestWriteSwipeWritesDownMoveAndUpTouchEvents(t *testing.T) {
 	assertTouchEvent(t, up, ActionUp, 56, 78, 944, 1080, 0)
 }
 
+func TestWriteTouchPointerPreservesPointerIdentity(t *testing.T) {
+	var buf bytes.Buffer
+	if err := WriteTouchPointer(&buf, ActionMove, 7, 420, 1000, 1000, 2000); err != nil {
+		t.Fatalf("WriteTouchPointer returned error: %v", err)
+	}
+	assertTouchPointerEvent(t, buf.Bytes(), ActionMove, 7, 420, 1000, 1000, 2000, DefaultPressure)
+}
+
 func TestWriteSetDisplayPowerWritesControlMessage(t *testing.T) {
 	var off bytes.Buffer
 	if err := WriteSetDisplayPower(&off, false); err != nil {
@@ -82,6 +90,11 @@ func TestWriteTextWritesInjectTextMessage(t *testing.T) {
 
 func assertTouchEvent(t *testing.T, msg []byte, action byte, x, y, width, height int, pressure uint16) {
 	t.Helper()
+	assertTouchPointerEvent(t, msg, action, ^uint64(1), x, y, width, height, pressure)
+}
+
+func assertTouchPointerEvent(t *testing.T, msg []byte, action byte, pointerID uint64, x, y, width, height int, pressure uint16) {
+	t.Helper()
 
 	if msg[0] != InjectTouchEvent {
 		t.Fatalf("message type = %d, want %d", msg[0], InjectTouchEvent)
@@ -89,8 +102,8 @@ func assertTouchEvent(t *testing.T, msg []byte, action byte, x, y, width, height
 	if msg[1] != action {
 		t.Fatalf("action = %d, want %d", msg[1], action)
 	}
-	if got := binary.BigEndian.Uint64(msg[2:10]); got != ^uint64(1) {
-		t.Fatalf("pointer id = %d, want %d", got, ^uint64(1))
+	if got := binary.BigEndian.Uint64(msg[2:10]); got != pointerID {
+		t.Fatalf("pointer id = %d, want %d", got, pointerID)
 	}
 	if got := binary.BigEndian.Uint32(msg[10:14]); got != uint32(x) {
 		t.Fatalf("x = %d, want %d", got, x)

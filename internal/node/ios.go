@@ -43,6 +43,7 @@ func iosDeviceInfos(summaries []ioslink.DeviceSummary, nodeID string) []DeviceIn
 		}
 		device := DeviceInfo{
 			Serial:   summary.UDID,
+			Address:  summary.UDID,
 			Platform: PlatformIOS,
 			State:    summary.State,
 			NodeID:   nodeID,

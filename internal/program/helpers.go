@@ -95,6 +95,11 @@ func writeJSONBestEffort(path string, value any) {
 }
 
 func writeRunJSONBestEffort(path string, run *Run) {
+	// A run without a workspace has no durable home; writing would land the
+	// checkpoint in the process working directory.
+	if run.Workspace == "" {
+		return
+	}
 	if err := writeRunJSON(path, run); err != nil {
 		log.Printf("persist %s: %v", path, err)
 	}
@@ -189,13 +194,26 @@ func findDevice(devices []node.DeviceInfo, serial string) (node.DeviceInfo, bool
 	return node.DeviceInfo{}, false
 }
 
+// deviceADBTarget returns the handle adb accepts for a device. A wireless
+// device is only addressable as host:port; its hardware serial is an identity,
+// not a route.
+func deviceADBTarget(device node.DeviceInfo) string {
+	if device.Address != "" {
+		return device.Address
+	}
+	return device.Serial
+}
+
 func adbEnv(device node.DeviceInfo, nodes []node.NodeInfo) map[string]string {
 	if device.Platform != node.PlatformAndroid {
 		return map[string]string{}
 	}
 
 	env := map[string]string{
-		"ANDROID_SERIAL": device.Serial,
+		// adb only knows a wireless device by its transport address, so every
+		// program-facing handle used for adb carries Address, not the durable
+		// identity in Serial. See DEVICE_ID for the identity.
+		"ANDROID_SERIAL": deviceADBTarget(device),
 	}
 	for _, n := range nodes {
 		if n.ID != device.NodeID || n.Local {
@@ -407,6 +425,9 @@ func replaceOnce(val string, variables map[string]string, device node.DeviceInfo
 		var resolved string
 		switch placeholder {
 		case "phone.serial":
+			// adb-usable by contract: programs pass this straight to adb -s.
+			resolved = deviceADBTarget(device)
+		case "phone.id":
 			resolved = device.Serial
 		case "phone.node_id":
 			resolved = device.NodeID

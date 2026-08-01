@@ -63,20 +63,32 @@ type Program struct {
 	CreatedAt      time.Time       `json:"created_at"`
 }
 
+type AutostartSupervisorState struct {
+	RestartAttempts int        `json:"restart_attempts"`
+	Abandoned       bool       `json:"abandoned"`
+	LastError       string     `json:"last_error,omitempty"`
+	LastFailureAt   *time.Time `json:"last_failure_at,omitempty"`
+	NextRestartAt   *time.Time `json:"next_restart_at,omitempty"`
+}
+
 type Run struct {
-	SchemaVersion   int               `json:"schema_version"`
-	Revision        uint64            `json:"revision"`
-	ID              string            `json:"id"`
-	ProgramID       string            `json:"program_id"`
-	Serial          string            `json:"serial"`
-	NodeID          string            `json:"node_id"`
-	Workspace       string            `json:"workspace"`
-	Status          string            `json:"status"`
-	Autostart       bool              `json:"autostart,omitempty"`
-	AutostartPaused bool              `json:"autostart_paused,omitempty"`
-	ExitCode        *int              `json:"exit_code,omitempty"`
-	Error           string            `json:"error,omitempty"`
-	Env             map[string]string `json:"env,omitempty"`
+	SchemaVersion int    `json:"schema_version"`
+	Revision      uint64 `json:"revision"`
+	ID            string `json:"id"`
+	ProgramID     string `json:"program_id"`
+	Serial        string `json:"serial"`
+	NodeID        string `json:"node_id"`
+	Workspace     string `json:"workspace"`
+	Status        string `json:"status"`
+	// Autostart is the legacy aggregate. It is true when either independently
+	// controllable automatic recovery behavior is enabled.
+	Autostart             bool              `json:"autostart,omitempty"`
+	AutostartReconnect    bool              `json:"autostart_reconnect"`
+	AutostartCrashRestart bool              `json:"autostart_crash_restart"`
+	AutostartPaused       bool              `json:"autostart_paused,omitempty"`
+	ExitCode              *int              `json:"exit_code,omitempty"`
+	Error                 string            `json:"error,omitempty"`
+	Env                   map[string]string `json:"env,omitempty"`
 	// Cmd and CmdArgs are the resolved command and arguments used to start this
 	// run. They are persisted so that Resume can re-execute the same process.
 	Cmd                string       `json:"cmd,omitempty"`
@@ -92,6 +104,10 @@ type Run struct {
 	WorkspaceCleaned bool  `json:"workspace_cleaned,omitempty"`
 	StdoutLogStart   int64 `json:"stdout_log_start,omitempty"`
 	StderrLogStart   int64 `json:"stderr_log_start,omitempty"`
+	// AutostartSupervisor is the durable crash-restart incident state exposed
+	// to API clients. It remains present after give-up until an explicit resume,
+	// crash-restart disable, or a failure-free recovery window clears it.
+	AutostartSupervisor *AutostartSupervisorState `json:"autostart_supervisor,omitempty"`
 }
 
 // UploadFile is a single file within a directory upload.
@@ -123,11 +139,17 @@ type ResumeOptions struct {
 	ID              string            `json:"id,omitempty"`
 	Variables       map[string]string `json:"variables,omitempty"`
 	SecretVariables map[string]string `json:"secret_variables,omitempty"`
+	Supervisor      bool              `json:"-"`
 }
 
 type StopOptions struct {
 	ID              string `json:"id,omitempty"`
 	AutostartPaused bool   `json:"autostart_paused,omitempty"`
+}
+
+type AutostartOptions struct {
+	Reconnect    *bool `json:"autostart_reconnect,omitempty"`
+	CrashRestart *bool `json:"autostart_crash_restart,omitempty"`
 }
 
 type StopRequest struct {

@@ -778,6 +778,79 @@ func TestResumeReplacesLogs(t *testing.T) {
 	if stdout != "second\n" {
 		t.Fatalf("stdout = %q, want %q", stdout, "second\n")
 	}
+	if _, err := os.Stat(filepath.Join(run.Workspace, "stdout.1.log")); !os.IsNotExist(err) {
+		t.Fatalf("clean exit unexpectedly retained log history: %v", err)
+	}
+}
+
+func TestResumeFailedRunRotatesPreviousAttemptLogs(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("/bin/sh is not available on Windows")
+	}
+
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	script := `#!/bin/sh
+attempt=1
+if [ -f .attempt ]; then attempt=2; fi
+touch .attempt
+echo "stdout-attempt-$attempt"
+echo "stderr-attempt-$attempt" >&2
+exit 1
+`
+	if err := os.WriteFile(filepath.Join(source, "run.sh"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := NewStore(filepath.Join(root, "programs"), fakeDevices{
+		devices: []node.DeviceInfo{{Serial: "phone-1", State: "device", NodeID: "node-1"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Shutdown()
+	registered, err := registerTestProgram(t, store, source, RegisterUploadOptions{
+		Name:  "failed resume logs",
+		Entry: Entry{Command: "/bin/sh", Args: []string{"run.sh"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := store.Start(StartOptions{ProgramID: registered.ID, Serials: []string{"phone-1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, store, started[0].ID)
+	run := findRun(t, store, started[0].ID)
+	if run.Status != RunStatusFailed {
+		t.Fatalf("first status = %q, want failed", run.Status)
+	}
+
+	resumed, err := store.Resume(ResumeOptions{ID: run.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, store, resumed.ID)
+
+	for _, stream := range []string{"stdout", "stderr"} {
+		current, err := os.ReadFile(filepath.Join(run.Workspace, stream+".log"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		previous, err := os.ReadFile(filepath.Join(run.Workspace, stream+".1.log"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(current), stream+"-attempt-2") {
+			t.Fatalf("current %s = %q, want second attempt", stream, current)
+		}
+		if !strings.Contains(string(previous), stream+"-attempt-1") {
+			t.Fatalf("previous %s = %q, want first attempt", stream, previous)
+		}
+	}
 }
 
 func TestResumeCanOverrideStartingConfigValues(t *testing.T) {
@@ -996,6 +1069,10 @@ func TestRunAutostartPersistsAndStopPreserves(t *testing.T) {
 	if !updated.Autostart {
 		t.Fatalf("Autostart = false, want true")
 	}
+	if !updated.AutostartReconnect || !updated.AutostartCrashRestart {
+		t.Fatalf("behavior flags = reconnect %v crash %v, want true/true",
+			updated.AutostartReconnect, updated.AutostartCrashRestart)
+	}
 	data, err := os.ReadFile(filepath.Join(updated.Workspace, "run.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -1006,6 +1083,10 @@ func TestRunAutostartPersistsAndStopPreserves(t *testing.T) {
 	}
 	if !persisted.Autostart {
 		t.Fatalf("persisted Autostart = false, want true")
+	}
+	if !persisted.AutostartReconnect || !persisted.AutostartCrashRestart {
+		t.Fatalf("persisted behavior flags = reconnect %v crash %v, want true/true",
+			persisted.AutostartReconnect, persisted.AutostartCrashRestart)
 	}
 
 	if _, err := store.Stop(StopOptions{ID: started[0].ID}); err != nil {
@@ -1025,6 +1106,129 @@ func TestRunAutostartPersistsAndStopPreserves(t *testing.T) {
 	}
 	if !persisted.Autostart {
 		t.Fatalf("persisted Autostart = false, want true after manual stop")
+	}
+}
+
+func TestRunAutostartBehaviorsToggleIndependently(t *testing.T) {
+	workspace := t.TempDir()
+	run := &Run{
+		SchemaVersion: runSchemaVersion,
+		ID:            "run-1",
+		Workspace:     workspace,
+		Status:        RunStatusStopped,
+		Cmd:           "/bin/sh",
+	}
+	store := &Store{
+		runs:              map[string]*runState{run.ID: {run: run}},
+		autostartRestarts: make(map[string]*autostartRestartState),
+	}
+
+	updated, err := store.SetRunAutostart(run.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !updated.AutostartReconnect || !updated.AutostartCrashRestart {
+		t.Fatalf("legacy enable did not set both behaviors: %+v", updated)
+	}
+
+	run.AutostartSupervisor = &AutostartSupervisorState{RestartAttempts: 2}
+	store.autostartRestarts[run.ID] = &autostartRestartState{}
+	crashDisabled := false
+	updated, err = store.UpdateRunAutostart(run.ID, AutostartOptions{
+		CrashRestart: &crashDisabled,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !updated.Autostart || !updated.AutostartReconnect || updated.AutostartCrashRestart {
+		t.Fatalf("flags after reconnect-only update = autostart %v reconnect %v crash %v",
+			updated.Autostart, updated.AutostartReconnect, updated.AutostartCrashRestart)
+	}
+	if updated.AutostartSupervisor != nil || store.autostartRestarts[run.ID] != nil {
+		t.Fatal("disabling crash restart did not clear its supervisor state")
+	}
+
+	crashEnabled := true
+	updated, err = store.UpdateRunAutostart(run.ID, AutostartOptions{
+		CrashRestart: &crashEnabled,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !updated.AutostartReconnect || !updated.AutostartCrashRestart {
+		t.Fatalf("enabling crash changed reconnect: reconnect %v crash %v",
+			updated.AutostartReconnect, updated.AutostartCrashRestart)
+	}
+
+	reconnectDisabled := false
+	updated, err = store.UpdateRunAutostart(run.ID, AutostartOptions{
+		Reconnect: &reconnectDisabled,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !updated.Autostart || updated.AutostartReconnect || !updated.AutostartCrashRestart {
+		t.Fatalf("flags after crash-only update = autostart %v reconnect %v crash %v",
+			updated.Autostart, updated.AutostartReconnect, updated.AutostartCrashRestart)
+	}
+
+	var persisted Run
+	data, err := os.ReadFile(filepath.Join(workspace, "run.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if persisted.AutostartReconnect || !persisted.AutostartCrashRestart {
+		t.Fatalf("persisted flags = reconnect %v crash %v, want false/true",
+			persisted.AutostartReconnect, persisted.AutostartCrashRestart)
+	}
+}
+
+func TestLoadRunsMigratesLegacyAutostartToBothBehaviors(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "instances", "run-1")
+	if err := os.MkdirAll(workspace, 0700); err != nil {
+		t.Fatal(err)
+	}
+	legacy := map[string]any{
+		"schema_version": 1,
+		"revision":       4,
+		"id":             "run-1",
+		"workspace":      workspace,
+		"status":         RunStatusStopped,
+		"autostart":      true,
+		"cmd":            "/bin/sh",
+		"started_at":     time.Now().UTC(),
+	}
+	if err := writeJSON(filepath.Join(workspace, "run.json"), legacy); err != nil {
+		t.Fatal(err)
+	}
+
+	store := &Store{root: root, runs: make(map[string]*runState)}
+	store.loadRuns()
+
+	run := store.runs["run-1"].run
+	if !run.Autostart || !run.AutostartReconnect || !run.AutostartCrashRestart {
+		t.Fatalf("migrated flags = autostart %v reconnect %v crash %v, want true/true/true",
+			run.Autostart, run.AutostartReconnect, run.AutostartCrashRestart)
+	}
+	if run.SchemaVersion != runSchemaVersion {
+		t.Fatalf("schema version = %d, want %d", run.SchemaVersion, runSchemaVersion)
+	}
+
+	var persisted Run
+	data, err := os.ReadFile(filepath.Join(workspace, "run.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if persisted.SchemaVersion != runSchemaVersion ||
+		!persisted.AutostartReconnect || !persisted.AutostartCrashRestart {
+		t.Fatalf("persisted migrated run = %+v", persisted)
 	}
 }
 
@@ -1061,7 +1265,11 @@ func TestPausedAutostartDoesNotResumeOnStartupOrReconnect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.SetRunAutostart(started[0].ID, true); err != nil {
+	reconnectEnabled := true
+	crashDisabled := false
+	if _, err := store.UpdateRunAutostart(started[0].ID, AutostartOptions{
+		Reconnect: &reconnectEnabled, CrashRestart: &crashDisabled,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Stop(StopOptions{ID: started[0].ID, AutostartPaused: true}); err != nil {
@@ -1181,7 +1389,11 @@ func TestAutostartReconnectResumesAfterDeviceReturns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.SetRunAutostart(started[0].ID, true); err != nil {
+	reconnectEnabled := true
+	crashDisabled := false
+	if _, err := store.UpdateRunAutostart(started[0].ID, AutostartOptions{
+		Reconnect: &reconnectEnabled, CrashRestart: &crashDisabled,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	store.checkAutostartReconnects()
@@ -1204,6 +1416,10 @@ func TestAutostartReconnectResumesAfterDeviceReturns(t *testing.T) {
 	}
 	if !resumed.Autostart {
 		t.Fatalf("Autostart = false, want true")
+	}
+	if !resumed.AutostartReconnect || resumed.AutostartCrashRestart {
+		t.Fatalf("behavior flags = reconnect %v crash %v, want true/false",
+			resumed.AutostartReconnect, resumed.AutostartCrashRestart)
 	}
 }
 
@@ -1268,7 +1484,11 @@ func TestAutostartRestartsRunThatExitedWhileDeviceStayedOnline(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := started[0].ID
-	if _, err := store.SetRunAutostart(id, true); err != nil {
+	reconnectDisabled := false
+	crashEnabled := true
+	if _, err := store.UpdateRunAutostart(id, AutostartOptions{
+		Reconnect: &reconnectDisabled, CrashRestart: &crashEnabled,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	waitForRun(t, store, id)
@@ -1292,8 +1512,10 @@ func TestAutostartRestartsRunThatExitedWhileDeviceStayedOnline(t *testing.T) {
 	if restart == nil {
 		t.Fatal("crashed autostart run was not tracked for restart")
 	}
-	if restart.attempts != 0 {
-		t.Fatalf("attempts = %d before the backoff elapsed, want 0", restart.attempts)
+	if supervisor := findRun(t, store, id).AutostartSupervisor; supervisor == nil || supervisor.RestartAttempts != 0 {
+		t.Fatalf("supervisor = %+v before the backoff elapsed, want zero attempts", supervisor)
+	} else if supervisor.NextRestartAt == nil || !supervisor.NextRestartAt.After(time.Now()) {
+		t.Fatalf("supervisor next restart = %v, want a visible future backoff deadline", supervisor.NextRestartAt)
 	}
 
 	// Once it elapses the run is resumed, and the attempt is counted.
@@ -1302,11 +1524,21 @@ func TestAutostartRestartsRunThatExitedWhileDeviceStayedOnline(t *testing.T) {
 	store.mu.Unlock()
 	store.checkAutostartRestarts()
 
-	store.mu.Lock()
-	attempts := store.autostartRestarts[id].attempts
-	store.mu.Unlock()
+	supervisor := findRun(t, store, id).AutostartSupervisor
+	if supervisor == nil {
+		t.Fatal("run lost supervisor state after restart")
+	}
+	attempts := supervisor.RestartAttempts
 	if attempts != 1 {
 		t.Fatalf("attempts = %d after the backoff elapsed, want 1", attempts)
+	}
+	if supervisor.NextRestartAt != nil {
+		t.Fatalf("running restart retained stale pending deadline %v", supervisor.NextRestartAt)
+	}
+	restarted := findRun(t, store, id)
+	if restarted.AutostartReconnect || !restarted.AutostartCrashRestart {
+		t.Fatalf("behavior flags = reconnect %v crash %v, want false/true",
+			restarted.AutostartReconnect, restarted.AutostartCrashRestart)
 	}
 }
 
@@ -1367,11 +1599,28 @@ func TestAutostartRestartStopsAfterMaxAttempts(t *testing.T) {
 	if state == nil {
 		t.Fatal("crash-looping run lost its restart state")
 	}
-	if state.attempts > autostartRestartMaxAttempts {
-		t.Fatalf("attempts = %d, exceeded cap %d", state.attempts, autostartRestartMaxAttempts)
+	supervisor := findRun(t, store, id).AutostartSupervisor
+	if supervisor == nil {
+		t.Fatal("crash-looping run lost its durable supervisor state")
 	}
-	if !state.exhausted {
+	if supervisor.RestartAttempts > autostartRestartMaxAttempts {
+		t.Fatalf("attempts = %d, exceeded cap %d", supervisor.RestartAttempts, autostartRestartMaxAttempts)
+	}
+	if !supervisor.Abandoned {
 		t.Fatal("a run crashing instantly never became exhausted and would restart forever")
+	}
+	data, err := os.ReadFile(filepath.Join(findRun(t, store, id).Workspace, "run.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persisted Run
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if persisted.AutostartSupervisor == nil || !persisted.AutostartSupervisor.Abandoned ||
+		persisted.AutostartSupervisor.RestartAttempts != autostartRestartMaxAttempts ||
+		persisted.AutostartSupervisor.LastError == "" {
+		t.Fatalf("persisted supervisor state = %+v, want durable give-up details", persisted.AutostartSupervisor)
 	}
 }
 
@@ -1395,23 +1644,23 @@ func TestAutostartRestartSkipsSerialsAlreadyWorkingAndStaleHistory(t *testing.T)
 	// A healthy run plus an older crash on the same phone.
 	store.runs["live"] = &runState{run: &Run{
 		ID: "live", Serial: "phone-busy", Status: RunStatusRunning,
-		Autostart: true, Cmd: "/bin/sh", StartedAt: completed,
+		Autostart: true, AutostartCrashRestart: true, Cmd: "/bin/sh", StartedAt: completed,
 	}}
 	store.runs["crashed-beside-live"] = &runState{run: &Run{
 		ID: "crashed-beside-live", Serial: "phone-busy", Status: RunStatusFailed,
-		Autostart: true, Cmd: "/bin/sh",
+		Autostart: true, AutostartCrashRestart: true, Cmd: "/bin/sh",
 		StartedAt: completed.Add(-time.Minute), CompletedAt: &completed,
 	}}
 	// A long-dead run on an idle phone.
 	store.runs["ancient"] = &runState{run: &Run{
 		ID: "ancient", Serial: "phone-idle", Status: RunStatusFailed,
-		Autostart: true, Cmd: "/bin/sh",
+		Autostart: true, AutostartCrashRestart: true, Cmd: "/bin/sh",
 		StartedAt: stale.Add(-time.Minute), CompletedAt: &stale,
 	}}
 	// A deliberately stopped run must not be revived by the crash watch.
 	store.runs["stopped"] = &runState{run: &Run{
 		ID: "stopped", Serial: "phone-idle", Status: RunStatusStopped,
-		Autostart: true, Cmd: "/bin/sh",
+		Autostart: true, AutostartCrashRestart: true, Cmd: "/bin/sh",
 		StartedAt: completed.Add(-time.Minute), CompletedAt: &completed,
 	}}
 
@@ -1420,7 +1669,7 @@ func TestAutostartRestartSkipsSerialsAlreadyWorkingAndStaleHistory(t *testing.T)
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	for _, id := range []string{"crashed-beside-live", "ancient", "stopped"} {
-		if state := store.autostartRestarts[id]; state != nil && state.attempts > 0 {
+		if supervisor := store.runs[id].run.AutostartSupervisor; supervisor != nil && supervisor.RestartAttempts > 0 {
 			t.Fatalf("run %s was restarted; it should have been skipped", id)
 		}
 	}
@@ -1442,7 +1691,8 @@ func TestAutostartRestartStreakSurvivesShortLivedRuns(t *testing.T) {
 	}
 	run := &Run{
 		ID: "run-1", Serial: "phone-1", Status: RunStatusFailed,
-		Autostart: true, Cmd: "/bin/sh",
+		Autostart: true, AutostartCrashRestart: true, Cmd: "/bin/sh",
+		Workspace: t.TempDir(),
 		StartedAt: now.Add(-20 * time.Second), CompletedAt: &now,
 	}
 	store.runs["run-1"] = &runState{run: run}
@@ -1456,7 +1706,7 @@ func TestAutostartRestartStreakSurvivesShortLivedRuns(t *testing.T) {
 		t.Fatal("crashed run was not tracked")
 	}
 	// Stand in for several restarts already spent on this loop.
-	state.attempts = 3
+	run.AutostartSupervisor.RestartAttempts = 3
 	store.mu.Unlock()
 
 	// The run comes up and is still Running when the next tick lands, which is
@@ -1471,17 +1721,29 @@ func TestAutostartRestartStreakSurvivesShortLivedRuns(t *testing.T) {
 	if state == nil {
 		t.Fatal("a run that had only just started lost its backoff streak")
 	}
-	if state.attempts != 3 {
-		t.Fatalf("attempts reset to %d while the run was briefly up, want 3", state.attempts)
+	if run.AutostartSupervisor == nil || run.AutostartSupervisor.RestartAttempts != 3 {
+		t.Fatalf("supervisor reset while the run was briefly up: %+v", run.AutostartSupervisor)
 	}
 
-	// A run that stays up past the healthy runtime has genuinely recovered.
-	run.StartedAt = time.Now().Add(-2 * autostartRestartHealthyRuntime)
+	// Even a run beyond the former 10-minute threshold remains in the incident
+	// if failures keep recurring. This is the production ~11-minute defect.
+	run.StartedAt = time.Now().Add(-11 * time.Minute)
 	store.checkAutostartRestarts()
 	store.mu.Lock()
-	cleared := store.autostartRestarts["run-1"] == nil
+	retained := store.autostartRestarts["run-1"] != nil && run.AutostartSupervisor != nil
+	store.mu.Unlock()
+	if !retained {
+		t.Fatal("an 11-minute run cleared its restart incident")
+	}
+
+	// Six failure-free hours are enough to declare recovery.
+	lastFailureAt := time.Now().Add(-2 * autostartRestartRecoveryWindow)
+	run.AutostartSupervisor.LastFailureAt = &lastFailureAt
+	store.checkAutostartRestarts()
+	store.mu.Lock()
+	cleared := store.autostartRestarts["run-1"] == nil && run.AutostartSupervisor == nil
 	store.mu.Unlock()
 	if !cleared {
-		t.Fatal("a run up well past the healthy runtime kept its streak")
+		t.Fatal("a run beyond the failure-free recovery window kept its streak")
 	}
 }

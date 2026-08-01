@@ -50,6 +50,23 @@ func TestTouchCallsBackend(t *testing.T) {
 	}
 }
 
+func TestTouchWithPointerIDCallsMultiTouchBackend(t *testing.T) {
+	backend := &controlBackend{}
+	server := NewServer(backend)
+
+	body := []byte(`{"serial":"local-123","action":"move","x":12,"y":34,"pointer_id":7}`)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/control/touch", bytes.NewReader(body))
+	server.Touch(res, req)
+
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusNoContent, res.Body.String())
+	}
+	if backend.pointerID != 7 || backend.touchSerial != "local-123" || backend.touchAction != "move" {
+		t.Fatalf("multi-touch call = serial %q action %q pointer %d", backend.touchSerial, backend.touchAction, backend.pointerID)
+	}
+}
+
 func TestControlWebSocketCallsBackend(t *testing.T) {
 	backend := &controlBackend{touchDone: make(chan struct{}, 1)}
 	server := httptest.NewServer(NewServer(backend).Handler())
@@ -206,6 +223,42 @@ func TestControlWebSocketPreservesControlOrder(t *testing.T) {
 	defer backend.mu.Unlock()
 	if strings.Join(backend.touchCalls, ",") != "down,up" {
 		t.Fatalf("touch call order = %q, want down,up", strings.Join(backend.touchCalls, ","))
+	}
+}
+
+func TestLaunchAppCallsBackend(t *testing.T) {
+	backend := &controlBackend{}
+	server := NewServer(backend)
+
+	body := []byte(`{"serial":"local-123","package":"com.example.game"}`)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/control/launch", bytes.NewReader(body))
+
+	server.LaunchApp(res, req)
+
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusNoContent, res.Body.String())
+	}
+	if backend.launchSerial != "local-123" || backend.launchPackage != "com.example.game" {
+		t.Fatalf("launch call = serial %q package %q", backend.launchSerial, backend.launchPackage)
+	}
+}
+
+func TestLaunchAppRejectsInvalidPackage(t *testing.T) {
+	backend := &controlBackend{}
+	server := NewServer(backend)
+
+	body := []byte(`{"serial":"local-123","package":"com.example; rm -rf /"}`)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/control/launch", bytes.NewReader(body))
+
+	server.LaunchApp(res, req)
+
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", res.Code, http.StatusBadRequest)
+	}
+	if backend.launchSerial != "" {
+		t.Fatalf("backend was called with serial %q for an invalid package", backend.launchSerial)
 	}
 }
 
@@ -380,6 +433,7 @@ type controlBackend struct {
 	startY      int
 	endX        int
 	endY        int
+	pointerID   uint64
 
 	keySerial string
 	keycode   uint32
@@ -389,6 +443,9 @@ type controlBackend struct {
 
 	textSerial string
 	text       string
+
+	launchSerial  string
+	launchPackage string
 
 	clipboardSerial string
 	clipboardText   string
@@ -437,6 +494,15 @@ func (b *controlBackend) Swipe(serial string, startX, startY, endX, endY int) er
 	return b.err
 }
 
+func (b *controlBackend) TouchPointer(serial string, action string, x, y int, pointerID uint64) error {
+	b.touchSerial = serial
+	b.touchAction = action
+	b.touchX = x
+	b.touchY = y
+	b.pointerID = pointerID
+	return b.err
+}
+
 func (b *controlBackend) PressKey(serial string, keycode uint32, metaState uint32) error {
 	b.keySerial = serial
 	b.keycode = keycode
@@ -446,6 +512,12 @@ func (b *controlBackend) PressKey(serial string, keycode uint32, metaState uint3
 func (b *controlBackend) PressButton(serial string, name string) error {
 	b.buttonSerial = serial
 	b.buttonName = name
+	return b.err
+}
+
+func (b *controlBackend) LaunchApp(serial string, packageName string) error {
+	b.launchSerial = serial
+	b.launchPackage = packageName
 	return b.err
 }
 

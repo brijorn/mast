@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	mastconfig "github.com/brijorn/mast/internal/config"
 	"github.com/brijorn/mast/internal/scrcpy"
 	streamcfg "github.com/brijorn/mast/internal/stream"
 	"github.com/google/go-cmp/cmp"
@@ -637,27 +638,129 @@ func TestEnsureStreamKeepsStaticAndroidVideo(t *testing.T) {
 	}
 }
 
-func TestWaitForInitialVideoWakesDisplayBeforeRetry(t *testing.T) {
+func TestWaitForInitialVideoRunsRecoveryBeforeRetry(t *testing.T) {
 	broadcaster := newVideoBroadcaster()
 	packets, unsubscribe := broadcaster.Subscribe()
 	defer unsubscribe()
-	wakeCalls := 0
-	wakeDisplay := func() error {
-		wakeCalls++
+	recoveryCalls := 0
+	recoverStartup := func() {
+		recoveryCalls++
 		broadcaster.broadcast(VideoPacket{PTS: 1, Config: true, Data: annexBNAL(7, 1)})
 		broadcaster.broadcast(VideoPacket{PTS: 2, Keyframe: true, Data: annexBNAL(5, 2)})
-		return nil
 	}
 
-	if err := waitForInitialVideo(context.Background(), packets, wakeDisplay, time.Nanosecond, time.Second); err != nil {
+	if err := waitForInitialVideo(context.Background(), packets, recoverStartup, time.Nanosecond, time.Second); err != nil {
 		t.Fatalf("waitForInitialVideo returned error: %v", err)
 	}
-	if wakeCalls != 1 {
-		t.Fatalf("wake calls = %d, want 1", wakeCalls)
+	if recoveryCalls != 1 {
+		t.Fatalf("recovery calls = %d, want 1", recoveryCalls)
 	}
 }
 
-func TestEnsureStreamTurnsScreenOffWhenReusingExistingStream(t *testing.T) {
+func TestAndroidDeviceInteractiveParsesPowerManagerState(t *testing.T) {
+	tests := []struct {
+		name string
+		dump string
+		want bool
+	}{
+		{name: "explicit interactive", dump: "  mInteractive=true\n  mWakefulness=Asleep\n", want: true},
+		{name: "awake", dump: "  mWakefulness=Awake\n", want: true},
+		{name: "dreaming", dump: "Wakefulness: Dreaming\n", want: true},
+		{name: "asleep", dump: "  mWakefulness=Asleep\n", want: false},
+		{name: "dozing", dump: "Wakefulness: Dozing\n", want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := androidDeviceInteractive([]byte(test.dump))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != test.want {
+				t.Fatalf("interactive = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestVideoStartupDoesNotWakeInteractiveAndroidDevice(t *testing.T) {
+	fake := &fakeADB{shellCommandOutputs: map[string][]byte{
+		shellCommandKey("local-123", "dumpsys", "power"): []byte("mWakefulness=Awake\n"),
+	}}
+	control := &recordingConn{}
+	n := &Node{
+		ctx:         context.Background(),
+		adb:         fake,
+		configReady: true,
+		configState: mastconfig.Config{AndroidEnabled: true},
+	}
+
+	n.recoverAndroidVideoStartup("", "local-123", &StreamSession{controlConn: control})
+
+	if got := control.dataSnapshot(); len(got) != 0 {
+		t.Fatalf("interactive device received display-power message %v", got)
+	}
+	for _, call := range fake.shellOutputCallsSnapshot() {
+		if cmp.Equal(call.Args, []string{"input", "keyevent", "KEYCODE_WAKEUP"}) {
+			t.Fatalf("interactive device received wake keyevent: %+v", call)
+		}
+	}
+}
+
+func TestVideoStartupWakesConfirmedNonInteractiveDevice(t *testing.T) {
+	fake := &fakeADB{shellCommandOutputs: map[string][]byte{
+		shellCommandKey("local-123", "dumpsys", "power"): []byte("mInteractive=false\n"),
+	}}
+	control := &recordingConn{}
+	n := &Node{
+		ctx:         context.Background(),
+		adb:         fake,
+		configReady: true,
+		configState: mastconfig.Config{AndroidEnabled: true},
+	}
+
+	n.recoverAndroidVideoStartup("", "local-123", &StreamSession{controlConn: control})
+
+	want := []byte{scrcpy.SetDisplayPower, 1}
+	if got := control.dataSnapshot(); !cmp.Equal(got, want) {
+		t.Fatalf("display-power message mismatch (-want +got):\n%s", cmp.Diff(want, got))
+	}
+}
+
+func TestVideoStartupPreservesDisplayOffPolicyEvenWhenDeviceIsNonInteractive(t *testing.T) {
+	fake := &fakeADB{shellCommandOutputs: map[string][]byte{
+		shellCommandKey("local-123", "dumpsys", "power"): []byte("mWakefulness=Asleep\n"),
+	}}
+	viewerControl := &recordingConn{}
+	policyControl := &recordingConn{}
+	n := &Node{
+		ctx:                 context.Background(),
+		adb:                 fake,
+		configReady:         true,
+		configState:         mastconfig.Config{AndroidEnabled: true, KeepDisplayOff: true},
+		devicePowerReady:    map[string]bool{"local-123": true},
+		devicePowerSessions: map[string]*devicePowerSession{"local-123": {serial: "local-123", control: policyControl}},
+	}
+
+	n.recoverAndroidVideoStartup("", "local-123", &StreamSession{controlConn: viewerControl})
+
+	if got := viewerControl.dataSnapshot(); len(got) != 0 {
+		t.Fatalf("policy-protected viewer received wake message %v", got)
+	}
+	want := []byte{scrcpy.SetDisplayPower, 0}
+	waitFor(t, time.Second, func() bool {
+		return cmp.Equal(policyControl.dataSnapshot(), want)
+	})
+	if got := policyControl.dataSnapshot(); !cmp.Equal(got, want) {
+		t.Fatalf("policy message mismatch (-want +got):\n%s", cmp.Diff(want, got))
+	}
+	for _, call := range fake.shellOutputCallsSnapshot() {
+		if cmp.Equal(call.Args, []string{"input", "keyevent", "KEYCODE_WAKEUP"}) {
+			t.Fatalf("policy-protected device received wake keyevent: %+v", call)
+		}
+	}
+}
+
+func TestEnsureStreamAppliesExplicitTurnScreenOffWhenReusingExistingStream(t *testing.T) {
 	done := make(chan struct{})
 	close(done)
 
@@ -684,7 +787,7 @@ func TestEnsureStreamTurnsScreenOffWhenReusingExistingStream(t *testing.T) {
 		},
 	}
 
-	got, err := node.EnsureStream("local-123", streamcfg.Options{})
+	got, err := node.EnsureStream("local-123", streamcfg.Options{TurnScreenOff: true})
 	if err != nil {
 		t.Fatalf("EnsureStream returned error: %v", err)
 	}

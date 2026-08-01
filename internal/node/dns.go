@@ -82,11 +82,11 @@ func (n *Node) localDeviceDNS(serial string) (*DeviceDNSStatus, error) {
 		return nil, fmt.Errorf("device %s is %s", serial, device.State)
 	}
 
-	modeOutput, err := n.adb.Shell(n.ctx, "", serial, "settings", "get", "global", "private_dns_mode")
+	modeOutput, err := n.adbShell(n.ctx, "", serial, "settings", "get", "global", "private_dns_mode")
 	if err != nil {
 		return nil, err
 	}
-	hostnameOutput, err := n.adb.Shell(n.ctx, "", serial, "settings", "get", "global", "private_dns_specifier")
+	hostnameOutput, err := n.adbShell(n.ctx, "", serial, "settings", "get", "global", "private_dns_specifier")
 	if err != nil {
 		return nil, err
 	}
@@ -105,24 +105,24 @@ func (n *Node) setLocalDeviceDNS(serial string, desired DeviceDNSStatus) (*Devic
 		if hostname == "" {
 			return nil, errors.New("hostname required for hostname DNS mode")
 		}
-		if _, err := n.adb.Shell(n.ctx, "", serial, "settings", "put", "global", "private_dns_mode", androidDNSHostnameMode); err != nil {
+		if _, err := n.adbShell(n.ctx, "", serial, "settings", "put", "global", "private_dns_mode", androidDNSHostnameMode); err != nil {
 			return nil, err
 		}
-		if _, err := n.adb.Shell(n.ctx, "", serial, "settings", "put", "global", "private_dns_specifier", hostname); err != nil {
+		if _, err := n.adbShell(n.ctx, "", serial, "settings", "put", "global", "private_dns_specifier", hostname); err != nil {
 			return nil, err
 		}
 	case DeviceDNSModeAutomatic:
-		if _, err := n.adb.Shell(n.ctx, "", serial, "settings", "put", "global", "private_dns_mode", androidDNSAutomaticMode); err != nil {
+		if _, err := n.adbShell(n.ctx, "", serial, "settings", "put", "global", "private_dns_mode", androidDNSAutomaticMode); err != nil {
 			return nil, err
 		}
-		if _, err := n.adb.Shell(n.ctx, "", serial, "settings", "delete", "global", "private_dns_specifier"); err != nil {
+		if _, err := n.adbShell(n.ctx, "", serial, "settings", "delete", "global", "private_dns_specifier"); err != nil {
 			return nil, err
 		}
 	case DeviceDNSModeOff:
-		if _, err := n.adb.Shell(n.ctx, "", serial, "settings", "put", "global", "private_dns_mode", androidDNSOffMode); err != nil {
+		if _, err := n.adbShell(n.ctx, "", serial, "settings", "put", "global", "private_dns_mode", androidDNSOffMode); err != nil {
 			return nil, err
 		}
-		if _, err := n.adb.Shell(n.ctx, "", serial, "settings", "delete", "global", "private_dns_specifier"); err != nil {
+		if _, err := n.adbShell(n.ctx, "", serial, "settings", "delete", "global", "private_dns_specifier"); err != nil {
 			return nil, err
 		}
 	default:

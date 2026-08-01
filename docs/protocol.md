@@ -81,6 +81,7 @@ The response uses the same message ID:
     "result": [
       {
         "serial": "remote-123",
+        "address": "remote-123",
         "state": "device",
         "node_id": "node-b",
         "battery": {
@@ -94,6 +95,12 @@ The response uses the same message ID:
 ```
 
 If the listing fails, `payload.error` contains the error string.
+
+Each node resolves the identity of its own devices before answering, so
+`serial` is already the hardware serial and `address` the current adb
+transport. The requesting node records the pair, which is what lets it dial a
+peer-owned phone by the serial its callers know it as. Devices the owning node
+could not identify are absent from `result`.
 
 ## device_accounts_get_request
 
@@ -272,11 +279,31 @@ JSON because it carries raw bytes:
 
 If capture fails, `payload.error` contains the error string.
 
+## elements_request
+
+Requests normalized Android UIAutomator elements from a device owned by the
+destination node. `elements_response.payload.result` contains type, label,
+value, bounds, clickable, and enabled fields. Labels prefer `content-desc` and
+fall back to text. Failures use `payload.error`.
+
+```json
+{
+  "type": "elements_request",
+  "id": "message-id",
+  "from": "node-a",
+  "to": "node-b",
+  "timestamp": "2026-06-22T17:00:00Z",
+  "payload": {"serial": "remote-123"}
+}
+```
+
 ## start_stream_request
 
-Requests that the device owner start a scrcpy stream. If `no_control` is false
-or omitted, `turn_screen_off` defaults to true. `preserve_orientation` bypasses
-the owner's configured portrait lock for this start.
+Requests that the device owner start a scrcpy stream. `turn_screen_off` is
+applied only when explicitly true; the owning node's default
+`keep_display_off` device policy is independent of viewer streams.
+`preserve_orientation` bypasses the owner's configured portrait lock for this
+start.
 
 ```json
 {
@@ -386,12 +413,14 @@ messages, then `up`.
     "serial": "remote-123",
     "action": "move",
     "x": 320,
-    "y": 640
+    "y": 640,
+    "pointer_id": 1
   }
 }
 ```
 
-`action` must be `down`, `move`, or `up`.
+`action` must be `down`, `move`, or `up`. `pointer_id` is optional and preserves
+the identity of simultaneous Android scrcpy touches across events.
 
 This is a fire-and-forget message. Errors are logged on the receiving node.
 
@@ -418,6 +447,7 @@ socket.
 ```
 
 This is a fire-and-forget message. Errors are logged on the receiving node.
+
 
 ## press_key_request
 
@@ -457,6 +487,27 @@ ioslink/WebDriverAgent keys.
   "payload": {
     "serial": "remote-123",
     "text": "hello"
+  }
+}
+```
+
+This is a fire-and-forget message. Errors are logged on the receiving node.
+
+## launch_app_request
+
+Requests that the device owner foreground an installed app by package name.
+Android runs `monkey -p {package} 1` over ADB; iOS devices log an error.
+
+```json
+{
+  "type": "launch_app_request",
+  "id": "message-id",
+  "from": "node-a",
+  "to": "node-b",
+  "timestamp": "2026-06-22T17:00:00Z",
+  "payload": {
+    "serial": "remote-123",
+    "package": "com.example.game"
   }
 }
 ```
@@ -555,7 +606,8 @@ The response uses the same message ID:
       "android_enabled": true,
       "ios_enabled": false,
       "proxy_enabled": false,
-      "lock_portrait": false
+      "lock_portrait": false,
+      "keep_display_off": true
     }
   }
 }
@@ -608,6 +660,7 @@ The response uses the same message ID:
         "ios_enabled": false,
         "proxy_enabled": false,
         "lock_portrait": false,
+        "keep_display_off": true,
         "runners": {
           ".py": "python3 -u"
         }

@@ -149,14 +149,69 @@ Mast injects the device-routing contract into every new run:
 | Variable | Meaning |
 |---|---|
 | `MAST_API_URL` | Mast API used by deployed device clients. |
-| `DEVICE_SERIAL` | Selected local or peer device serial. |
+| `DEVICE_SERIAL` | adb transport for the selected device. Pass this to `adb -s`. |
+| `DEVICE_ADDRESS` | Explicit alias for `DEVICE_SERIAL`. |
+| `DEVICE_ID` | The device's durable identity: hardware serial or iOS UDID. |
 | `DEVICE_PLATFORM` | `android` or `ios`. |
 | `MAST_NODE_ID` | Node that owns the selected device. |
 | `ANDROID_SERIAL` | Android-only compatibility alias for `DEVICE_SERIAL`. |
 
-Standard FrameKit programs use these values to route screenshots and controls
-back through Mast. They do not start independent ADB, WDA, tunnel, or ioslink
+`DEVICE_SERIAL` and `DEVICE_ID` differ only for a wirelessly connected device.
+adb knows such a device only as `host:port`, so every handle a program hands to
+adb carries that address; `adb -s` with a hardware serial fails with "device
+not found". `DEVICE_ID` is the value Mast and Runway key durable state on, and
+is what a program should record in evidence or report upward — it survives the
+reconnect that changes the address.
+
+Programs are expected to use these values to route screenshots and controls
+through Mast rather than starting their own ADB, WDA, tunnel, or ioslink
 sessions in a deployed workspace.
+
+## Android automation power policy
+
+Mast owns the power policy for every ready local Android device. It sets
+Android's `stay_on_while_plugged_in` value to `7` so the device remains awake on
+AC, USB, or wireless power independently of any video viewer.
+
+By default, Mast also keeps the physical panel powered off. Each device gets a
+lightweight scrcpy session with video and audio disabled and a dedicated
+control socket, separate from the viewer stream socket. The session starts with
+`power_on=false`, sends `SET_DISPLAY_POWER(false)` immediately and every 30
+seconds, and uses `cleanup=false`. Disabling cleanup is intentional: scrcpy's
+`power_off_on_close` path injects a POWER key and can put the Android device to
+sleep, while disabling cleanup simply prevents scrcpy from restoring display
+power. Policy-protected viewer sessions use the same `power_on=false` and
+`cleanup=false` safeguards. Consequently, releasing or replacing a viewer
+stream cannot restore the panel or sleep the automation device. Mast recreates
+the policy session after its control socket ends and after the existing
+device-readiness monitor observes a reconnect; the same readiness observation
+establishes it after Mast starts.
+
+This changes only physical display power. ADB screenshots and injected input
+continue to use the awake Android device and work while the panel is dark.
+Viewer startup allows two seconds for the first video keyframe before checking
+Android's power-manager interactive state. A confirmed non-interactive device
+is woken only when the display-off policy is not active. An interactive device
+is simply given the remaining startup budget, since encoder or network delay is
+not evidence that it is asleep. When `keep_display_off` is active, Mast never
+wakes the device from this path and re-asserts the panel-off policy instead.
+Failure to query power state or send a recovery command is logged and does not,
+by itself, abort the stream.
+
+To allow deliberate operator control of the physical panel, opt out at runtime
+through the node config API:
+
+```http
+PUT /api/nodes/{node-id}/config
+Content-Type: application/json
+
+{"values":{"keep_display_off":"false"}}
+```
+
+The device remains awake for automation, but Mast stops maintaining and
+re-asserting the display-off control session. Set the value back to `true` to
+restore the default policy. Existing config files that omit
+`keep_display_off` are treated as enabled.
 
 ---
 
@@ -181,12 +236,13 @@ updated `Run` object with `"workspace_cleaned": true` on success.
 ### Resume
 
 `POST /api/runs/{id}/resume` re-runs the saved command in the same instance
-workspace, preserving the same run ID and replacing the previous logs. Mast
-uses this for `exited`, `failed`, `stopped`, or `lost` runs. By default, resume
-uses the run's original starting config values. To change values for the resumed
-attempt, send a JSON body with `variables`; those values are applied to the
-process environment and rendered config file without changing the run's saved
-starting defaults.
+workspace and preserves the same run ID. Mast uses this for `exited`, `failed`,
+`stopped`, or `lost` runs. When the previous attempt failed, Resume rotates its
+current logs before starting; clean exits and explicit stops replace the current
+logs without retaining history. By default, resume uses the run's original
+starting config values. To change values for the resumed attempt, send a JSON
+body with `variables`; those values are applied to the process environment and
+rendered config file without changing the run's saved starting defaults.
 
 ```json
 {
@@ -220,40 +276,101 @@ The response includes appended `stdout` and `stderr` chunks plus
 was truncated, such as after resume, Mast returns the current file from the
 beginning and sets the corresponding `*_reset` flag.
 
-Mast caps each stdout/stderr stream to one retained file of up to 10 MiB. When
-the file exceeds the cap, Mast keeps the newest bytes and records the logical
-start offset in `run.json` so offset polling can continue. If a client asks for
-an offset older than the retained window, Mast returns the retained window and
-sets the corresponding reset flag.
+Mast caps each current stdout/stderr stream to 10 MiB. When the file exceeds the
+cap, Mast keeps the newest bytes and records the logical start offset in
+`run.json` so offset polling can continue. If a client asks for an offset older
+than the retained window, Mast returns the retained window and sets the
+corresponding reset flag.
+
+A failed attempt is retained for up to three resumed generations:
+`stdout.1.log` through `stdout.3.log` and `stderr.1.log` through
+`stderr.3.log`, where generation 1 is the most recent failed attempt. The logs
+API continues to read only the current `stdout.log` and `stderr.log`; the
+existing current-log offsets reset to zero for the resumed attempt. Historical
+files use the same per-file 10 MiB bound already applied while they were
+current, with no additional aggregate size cap.
 
 ### Autostart
 
-`PUT /api/runs/{id}/autostart` stores a run-owned autostart flag:
+`PUT /api/runs/{id}/autostart` stores two run-owned automatic recovery flags.
+They can be set independently:
+
+```json
+{
+  "autostart_reconnect": true,
+  "autostart_crash_restart": false
+}
+```
+
+Either field may be omitted to leave that behavior unchanged. The legacy
+request remains supported and sets both flags together:
 
 ```json
 {"enabled": true}
 ```
 
-When Mast starts, it automatically resumes autostart-enabled runs that are
-`stopped` or `lost`, using the same run ID and instance workspace.
+`GET /api/runs` and every persisted `run.json` expose both values. They also
+retain `autostart` as a compatibility aggregate that is true when either
+behavior is enabled. This lets old clients disable both through the legacy
+request without hiding that some automatic recovery is still active.
 
-While Mast is running, two watches resume autostart-enabled runs, both using
-that same run ID and workspace:
+When Mast starts, it automatically resumes runs with `autostart_reconnect`
+enabled that are `stopped` or `lost`, using the same run ID and instance
+workspace. Startup recovery is grouped with reconnect recovery because both
+restore work after Mast or the device went away, rather than reacting to a
+program failure while the device stayed connected.
 
-- **Device reconnect.** A run whose device leaves and returns is resumed on the
-  ready-state transition.
-- **Ended on its own.** A run that reached `failed` or `exited` while its device
-  stayed connected produces no such transition, so it is resumed on a backoff
-  instead. Without this the phone stays idle until a human notices, because the
-  reconnect watch never fires for a program that simply exited.
+While Mast is running, two independently gated watches resume runs using that
+same run ID and workspace:
+
+- **Device reconnect (`autostart_reconnect`).** A run whose device leaves and
+  returns is resumed on the ready-state transition.
+- **Ended on its own (`autostart_crash_restart`).** A run that reached `failed`
+  or `exited` while its device stayed connected produces no such transition, so
+  it is resumed on a backoff instead. Without this the phone stays idle until a
+  human notices, because the reconnect watch never fires for a program that
+  simply exited.
 
 The backoff starts at 30 seconds and doubles per consecutive attempt to a
-15-minute ceiling. A run that stayed up for 10 minutes before ending is treated
-as healthy work and its next failure starts a fresh streak. After 8 consecutive
-attempts that never reach that healthy runtime the run is left alone and logged,
-since it is failing on something a restart cannot fix. Runs that are
-`autostart_paused`, workspace-cleaned, or not autostart-enabled are never
-resumed by either watch, and neither watch acts while the device is not ready.
+15-minute ceiling. Restart attempts remain in the same incident until the run
+has gone six hours without another failure. This failure-rate window means a
+run that repeatedly dies after 11 or 12 minutes still escalates, while a stable
+run that crashes again weeks later starts with a clean streak. After 8 restart
+attempts in one incident, the supervisor leaves the run alone because restarts
+are not correcting the failure. Runs that are `autostart_paused` or
+workspace-cleaned are never resumed by either watch. Each watch also requires
+its own behavior flag, and neither watch acts while the device is not ready.
+
+`GET /api/runs` exposes the durable incident state on the run so clients can
+surface pending recovery or give-up without reading the Mast journal:
+
+```json
+{
+  "autostart_supervisor": {
+    "restart_attempts": 2,
+    "abandoned": false,
+    "last_error": "exit status 1",
+    "last_failure_at": "2026-07-26T14:12:00Z",
+    "next_restart_at": "2026-07-26T14:14:00Z"
+  }
+}
+```
+
+`next_restart_at` is present only while a failed or exited run has a scheduled
+crash-restart attempt. It is cleared before the attempt starts and when the
+supervisor gives up, so API clients can distinguish pending recovery from a
+terminal failure without guessing Mast's backoff.
+
+This state is checkpointed in `run.json` and survives a Mast restart. An
+explicit Resume, disabling `autostart_crash_restart`, or disabling both through
+the legacy request clears it; a supervisor-driven Resume preserves it so
+subsequent failures continue the same incident. A running attempt clears it
+automatically after the six-hour failure-free window.
+
+Run checkpoint schema version 1 contained only `autostart`. On load, Mast
+migrates that value into both new fields and rewrites the checkpoint as schema
+version 2. Consequently every legacy run with `autostart: true` keeps both
+reconnect and crash recovery enabled after upgrading.
 
 Manual `POST /api/runs/{id}/stop` preserves autostart for that run. Clients can
 send `{"autostart_paused": true}` with the stop request when a run should stay
@@ -344,9 +461,12 @@ Placeholders are defined using `{{placeholder}}` token notation.
 #### 1. Built-in Tokens
 
 Built-in tokens are automatically populated by Mast depending on the executing
-phone. There are exactly two supported built-in tokens:
+phone. There are exactly three supported built-in tokens:
 
-- `{{phone.serial}}` - Replaced with the target phone's serial number.
+- `{{phone.serial}}` - Replaced with the phone's adb transport, so the value can
+  be passed straight to `adb -s`. For a wireless phone this is `host:port`.
+- `{{phone.id}}` - Replaced with the phone's durable identity (hardware serial
+  or iOS UDID). Use this for anything recorded or reported, not for adb.
 - `{{phone.node_id}}` - Replaced with the node ID of the host.
 
 #### 2. Custom Tokens

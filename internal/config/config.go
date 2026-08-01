@@ -32,7 +32,14 @@ type Config struct {
 	IOSEnabled      bool              `json:"ios_enabled"`
 	ProxyEnabled    bool              `json:"proxy_enabled"`
 	LockPortrait    bool              `json:"lock_portrait"`
+	KeepDisplayOff  bool              `json:"keep_display_off"`
 	Runners         map[string]string `json:"runners,omitempty"`
+}
+
+func (c *Config) UnmarshalJSON(data []byte) error {
+	type configAlias Config
+	*c = Config{KeepDisplayOff: true}
+	return json.Unmarshal(data, (*configAlias)(c))
 }
 
 type UpdateResult struct {
@@ -104,6 +111,12 @@ func (c *Config) Set(key string, value string) error {
 			return err
 		}
 		c.LockPortrait = parsed
+	case "keep_display_off":
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return err
+		}
+		c.KeepDisplayOff = parsed
 	default:
 		return fmt.Errorf("invalid config key: %s", key)
 	}
@@ -230,6 +243,7 @@ func Default() Config {
 		ProgramsDir:    programsDir,
 		AndroidEnabled: false,
 		ProxyEnabled:   false,
+		KeepDisplayOff: true,
 	}
 }
 
@@ -335,6 +349,10 @@ func changedKeys(before Config, after Config, requested []string) []string {
 			}
 		case "lock_portrait":
 			if before.LockPortrait != after.LockPortrait {
+				changed = append(changed, key)
+			}
+		case "keep_display_off":
+			if before.KeepDisplayOff != after.KeepDisplayOff {
 				changed = append(changed, key)
 			}
 		}

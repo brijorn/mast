@@ -100,3 +100,50 @@ func TestBoundedLogWriterCapsSingleFileAndReadsWindow(t *testing.T) {
 		t.Fatalf("tail = %q end = %d reset = %v, want last segment without reset", tail, end, reset)
 	}
 }
+
+func TestRotateRunLogsKeepsThreeGenerations(t *testing.T) {
+	workspace := t.TempDir()
+	for _, stream := range []string{"stdout", "stderr"} {
+		for generation, content := range map[int]string{
+			0: "current-" + stream,
+			1: "one-" + stream,
+			2: "two-" + stream,
+			3: "three-" + stream,
+		} {
+			path := filepath.Join(workspace, stream+".log")
+			if generation > 0 {
+				path = logGenerationPath(path, generation)
+			}
+			if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	if err := rotateRunLogs(workspace); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, stream := range []string{"stdout", "stderr"} {
+		current := filepath.Join(workspace, stream+".log")
+		if _, err := os.Stat(current); !os.IsNotExist(err) {
+			t.Fatalf("%s current log still exists after rotation: %v", stream, err)
+		}
+		for generation, want := range map[int]string{
+			1: "current-" + stream,
+			2: "one-" + stream,
+			3: "two-" + stream,
+		} {
+			data, err := os.ReadFile(logGenerationPath(current, generation))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(data) != want {
+				t.Fatalf("%s generation %d = %q, want %q", stream, generation, data, want)
+			}
+		}
+		if _, err := os.Stat(logGenerationPath(current, 4)); !os.IsNotExist(err) {
+			t.Fatalf("%s unexpectedly retained a fourth generation: %v", stream, err)
+		}
+	}
+}

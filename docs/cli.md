@@ -39,7 +39,8 @@ Default configuration:
   "android_enabled": false,
   "ios_enabled": false,
   "proxy_enabled": false,
-  "lock_portrait": false
+  "lock_portrait": false,
+  "keep_display_off": true
 }
 ```
 
@@ -58,6 +59,7 @@ mast config set android_enabled true
 mast config set ios_enabled true
 mast config set proxy_enabled true
 mast config set lock_portrait true
+mast config set keep_display_off false
 mast config set runners..py "python3 -u"
 ```
 
@@ -76,12 +78,20 @@ android_enabled
 ios_enabled
 proxy_enabled
 lock_portrait
+keep_display_off
 runners.<file_extension>
 ```
 
 `device_blacklist` is a comma- or whitespace-separated list of Android serials
 and iOS UDIDs. It is evaluated when Mast starts, so restart Mast after changing
 it.
+
+`keep_display_off` defaults to `true` (including when the key is absent from an
+older config). `mast config set` persists the value for the next start; updating
+the same key through `PUT /api/nodes/{id}/config` applies it to a running node.
+Set it to `false` to stop Mast from re-asserting the Android
+physical-panel-off policy. The separate stay-awake policy remains enabled for
+continuous automation.
 
 ## config show
 
@@ -146,6 +156,12 @@ mast peer add 100.64.0.20 --api http://127.0.0.1:6271
 
 Saved peers are written to `peers.json` beside `config.json` and reconnected
 when `mast start` runs.
+
+Resolved device identities are written to `device-identity.json` beside
+`config.json`, mapping each wireless adb transport to the hardware serial
+behind it. The node maintains this file itself; it exists so a phone that is
+unreachable when Mast starts is still identified rather than dropped. Deleting
+it is safe — entries are rebuilt the next time each device is reachable.
 
 ## peer remove
 

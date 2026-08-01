@@ -71,6 +71,28 @@ func TestTapLocalWritesControlMessage(t *testing.T) {
 	}
 }
 
+func TestTouchLocalPointerPreservesPointerIdentity(t *testing.T) {
+	controlConn := &recordingConn{}
+	node := newControlTestNode("local-node", "local-123")
+	node.streams["local-123"] = readyStreamEntry(&StreamSession{
+		DeviceSerial: "local-123",
+		Width:        944,
+		Height:       1080,
+		controlConn:  controlConn,
+	})
+
+	if err := node.touchLocalPointer("local-123", "move", 12, 34, 7); err != nil {
+		t.Fatalf("touchLocalPointer returned error: %v", err)
+	}
+	data := controlConn.dataSnapshot()
+	if len(data) != 32 {
+		t.Fatalf("pointer touch wrote %d bytes, want 32", len(data))
+	}
+	if got := uint64(data[9]); got != 7 {
+		t.Fatalf("pointer id low byte = %d, want 7", got)
+	}
+}
+
 func TestTapLocalRequiresStartedStream(t *testing.T) {
 	node := newControlTestNode("local-node", "local-123")
 

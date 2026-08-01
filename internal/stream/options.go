@@ -11,12 +11,11 @@ type Options struct {
 	MaxSize             int    `json:"max_size"`
 	VideoBitrate        int    `json:"video_bitrate"`
 	VideoCodecOptions   string `json:"video_codec_options"`
+	DisablePowerOn      bool   `json:"-"`
+	DisableCleanup      bool   `json:"-"`
 }
 
 func (s Options) WithDefaults() Options {
-	if !s.NoControl {
-		s.TurnScreenOff = true
-	}
 	return s
 }
 
@@ -28,6 +27,12 @@ func (s *Options) Format() []string {
 		"stay_awake="+strconv.FormatBool(s.StayAwake),
 		"clipboard_autosync=false",
 	)
+	if s.DisablePowerOn {
+		formatted = append(formatted, "power_on=false")
+	}
+	if s.DisableCleanup {
+		formatted = append(formatted, "cleanup=false")
+	}
 	if s.VideoCodecOptions != "" {
 		formatted = append(formatted, "video_codec_options="+s.VideoCodecOptions)
 	}

@@ -19,8 +19,8 @@ func TestIOSDeviceInfosDeduplicatesAndPrefersUSB(t *testing.T) {
 
 	got := iosDeviceInfos(summaries, "node-a")
 	want := []DeviceInfo{
-		{Serial: "ios-1", Platform: PlatformIOS, State: "device", NodeID: "node-a"},
-		{Serial: "ios-2", Platform: PlatformIOS, State: "device", NodeID: "node-a"},
+		{Serial: "ios-1", Address: "ios-1", Platform: PlatformIOS, State: "device", NodeID: "node-a"},
+		{Serial: "ios-2", Address: "ios-2", Platform: PlatformIOS, State: "device", NodeID: "node-a"},
 	}
 
 	if diff := cmp.Diff(want, got); diff != "" {

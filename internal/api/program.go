@@ -294,14 +294,32 @@ func (s *Server) SetRunAutostart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Enabled bool `json:"enabled"`
+		Enabled      *bool `json:"enabled"`
+		Reconnect    *bool `json:"autostart_reconnect"`
+		CrashRestart *bool `json:"autostart_crash_restart"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	run, err := s.programs.SetRunAutostart(r.PathValue("id"), req.Enabled)
+	if req.Enabled != nil && (req.Reconnect != nil || req.CrashRestart != nil) {
+		http.Error(w, "enabled cannot be combined with behavior-specific fields", http.StatusBadRequest)
+		return
+	}
+
+	var (
+		run *program.Run
+		err error
+	)
+	if req.Enabled != nil {
+		run, err = s.programs.SetRunAutostart(r.PathValue("id"), *req.Enabled)
+	} else {
+		run, err = s.programs.UpdateRunAutostart(r.PathValue("id"), program.AutostartOptions{
+			Reconnect:    req.Reconnect,
+			CrashRestart: req.CrashRestart,
+		})
+	}
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			http.Error(w, err.Error(), http.StatusNotFound)

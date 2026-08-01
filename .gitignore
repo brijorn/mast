@@ -4,3 +4,4 @@ qodana.yaml
 fixtures/
 selfIdentity.plist
 tmp-wordcollect-debug/
+dist/

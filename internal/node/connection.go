@@ -97,6 +97,7 @@ func (n *Node) reconnect(addr string) {
 
 func (n *Node) Close() error {
 	n.cancel()
+	n.stopAllDevicePowerSessions()
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	var err error
@@ -380,6 +381,13 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				break
 			}
 			go n.handleScreenshotRequest(peer, req)
+		case transport.TypeElementsRequest:
+			var req transport.ElementsRequest
+			if err := json.Unmarshal(message, &req); err != nil {
+				log.Println("decode elements request:", err)
+				break
+			}
+			go n.handleElementsRequest(peer, req)
 		case transport.TypeStopStreamRequest:
 			var req transport.StopStreamRequest
 			if err := json.Unmarshal(message, &req); err != nil {
@@ -402,6 +410,17 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				log.Println("tap:", err)
 				break
 			}
+		case transport.TypeLaunchAppRequest:
+			var req transport.LaunchAppRequest
+			if err := json.Unmarshal(message, &req); err != nil {
+				log.Println("decode launch app request:", err)
+				break
+			}
+
+			if err := n.LaunchApp(req.Payload.Serial, req.Payload.Package); err != nil {
+				log.Println("launch app:", err)
+				break
+			}
 		case transport.TypeTouchRequest:
 			var req transport.TouchRequest
 			if err := json.Unmarshal(message, &req); err != nil {
@@ -409,7 +428,13 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				break
 			}
 
-			if err := n.touchLocal(req.Payload.Serial, req.Payload.Action, req.Payload.X, req.Payload.Y); err != nil {
+			var err error
+			if req.Payload.PointerID == nil {
+				err = n.touchLocal(req.Payload.Serial, req.Payload.Action, req.Payload.X, req.Payload.Y)
+			} else {
+				err = n.touchLocalPointer(req.Payload.Serial, req.Payload.Action, req.Payload.X, req.Payload.Y, *req.Payload.PointerID)
+			}
+			if err != nil {
 				log.Println("touch:", err)
 				break
 			}

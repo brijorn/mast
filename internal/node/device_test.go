@@ -62,6 +62,8 @@ type fakeADB struct {
 	shellCalls               []shellCall
 	shellOutputCalls         []shellCall
 	controlMessages          chan []byte
+	reverseErr               error
+	disableScrcpyConnect     bool
 }
 
 func (a *fakeADB) Devices(ctx context.Context, host string) ([]byte, error) {
@@ -105,7 +107,7 @@ func (a *fakeADB) Reverse(ctx context.Context, host string, serial string, devic
 		DeviceSocket: deviceSocket,
 		LocalPort:    localPort,
 	})
-	return nil
+	return a.reverseErr
 }
 
 func (a *fakeADB) StartShell(host string, serial string, arg ...string) (*exec.Cmd, error) {
@@ -120,10 +122,11 @@ func (a *fakeADB) StartShell(host string, serial string, arg ...string) (*exec.C
 		port = a.reverseCalls[len(a.reverseCalls)-1].LocalPort
 	}
 	controlMessages := a.controlMessages
+	disableScrcpyConnect := a.disableScrcpyConnect
 	a.mu.Unlock()
-	if port > 0 {
-		audio, control := fakeScrcpySocketOptions(arg)
-		go writeFakeScrcpySockets(port, audio, control, controlMessages)
+	if port > 0 && !disableScrcpyConnect {
+		video, audio, control, sendDeviceMeta := fakeScrcpySocketOptions(arg)
+		go writeFakeScrcpySockets(port, video, audio, control, sendDeviceMeta, controlMessages)
 	}
 	return nil, nil
 }
@@ -182,24 +185,32 @@ func (a *fakeADB) shellOutputCallsSnapshot() []shellCall {
 	return calls
 }
 
-func fakeScrcpySocketOptions(args []string) (bool, bool) {
+func fakeScrcpySocketOptions(args []string) (bool, bool, bool, bool) {
+	video := true
 	audio := true
 	control := true
+	sendDeviceMeta := true
 	for _, arg := range args {
 		switch arg {
+		case "video=false":
+			video = false
 		case "audio=false":
 			audio = false
 		case "control=false":
 			control = false
+		case "send_device_meta=false":
+			sendDeviceMeta = false
 		}
 	}
-	return audio, control
+	return video, audio, control, sendDeviceMeta
 }
 
-func writeFakeScrcpySockets(port int, audio bool, control bool, controlMessages chan<- []byte) {
-	videoConnected := make(chan struct{})
-	go writeFakeScrcpyVideoMetadata(port, videoConnected)
-	<-videoConnected
+func writeFakeScrcpySockets(port int, video bool, audio bool, control bool, sendDeviceMeta bool, controlMessages chan<- []byte) {
+	if video {
+		videoConnected := make(chan struct{})
+		go writeFakeScrcpyVideoMetadata(port, videoConnected)
+		<-videoConnected
+	}
 	if audio {
 		conn, err := net.Dial("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 		if err == nil {
@@ -212,7 +223,11 @@ func writeFakeScrcpySockets(port int, audio bool, control bool, controlMessages 
 			return
 		}
 		defer func() { _ = conn.Close() }()
+		if !video && !audio && sendDeviceMeta {
+			_, _ = conn.Write(make([]byte, 64))
+		}
 		if controlMessages == nil {
+			_, _ = io.Copy(io.Discard, conn)
 			return
 		}
 		message := make([]byte, 2)
@@ -316,8 +331,8 @@ func TestParseDevicesOutput(t *testing.T) {
 	got := parseDevicesOutput(parserADBOutput, "node-a", []DeviceInfo{})
 
 	expected := []DeviceInfo{
-		{Serial: "abc123", Platform: PlatformAndroid, State: "device", NodeID: "node-a"},
-		{Serial: "xyz789", Platform: PlatformAndroid, State: "offline", NodeID: "node-a"},
+		{Serial: "abc123", Address: "abc123", Platform: PlatformAndroid, State: "device", NodeID: "node-a"},
+		{Serial: "xyz789", Address: "xyz789", Platform: PlatformAndroid, State: "offline", NodeID: "node-a"},
 	}
 
 	if diff := cmp.Diff(expected, got); diff != "" {
@@ -348,7 +363,7 @@ func TestListLocalDeviceStatesFiltersStartupBlacklist(t *testing.T) {
 	}
 
 	expected := []DeviceInfo{
-		{Serial: "xyz789", Platform: PlatformAndroid, State: "device", NodeID: "node-a"},
+		{Serial: "xyz789", Address: "xyz789", Platform: PlatformAndroid, State: "device", NodeID: "node-a"},
 	}
 	if diff := cmp.Diff(expected, got); diff != "" {
 		t.Fatalf("devices mismatch (-want +got):\n%s", diff)
@@ -490,7 +505,7 @@ func TestListDevicesIncludesLocalDevices(t *testing.T) {
 	}
 
 	expected := []DeviceInfo{
-		{Serial: "local-123", Platform: PlatformAndroid, State: "device", NodeID: "local-node"},
+		{Serial: "local-123", Address: "local-123", Platform: PlatformAndroid, State: "device", NodeID: "local-node"},
 	}
 	if diff := cmp.Diff(expected, got); diff != "" {
 		t.Fatalf("devices mismatch (-want +got):\n%s", diff)
@@ -528,6 +543,7 @@ func TestListDevicesIncludesLocalBattery(t *testing.T) {
 	expected := []DeviceInfo{
 		{
 			Serial:   "local-123",
+			Address:  "local-123",
 			Platform: PlatformAndroid,
 			State:    "device",
 			Battery:  &DeviceBattery{Percent: &battery, State: BatteryStateCharging},
@@ -578,6 +594,7 @@ func TestListDevicesUsesCachedBatteryWhenBatteryFails(t *testing.T) {
 	expected := []DeviceInfo{
 		{
 			Serial:   "local-123",
+			Address:  "local-123",
 			Platform: PlatformAndroid,
 			State:    "device",
 			Battery:  &DeviceBattery{Percent: &battery, State: BatteryStateCharging},
@@ -613,7 +630,7 @@ func TestListDevicesKeepsDeviceWhenBatteryFails(t *testing.T) {
 	}
 
 	expected := []DeviceInfo{
-		{Serial: "local-123", Platform: PlatformAndroid, State: "device", NodeID: "local-node"},
+		{Serial: "local-123", Address: "local-123", Platform: PlatformAndroid, State: "device", NodeID: "local-node"},
 	}
 	if diff := cmp.Diff(expected, got); diff != "" {
 		t.Fatalf("devices mismatch (-want +got):\n%s", diff)
@@ -654,8 +671,8 @@ func TestListDevicesIncludesAndroidEnabledPeerDevices(t *testing.T) {
 	}
 
 	expected := []DeviceInfo{
-		{Serial: "local-123", Platform: PlatformAndroid, State: "device", NodeID: "a"},
-		{Serial: "remote-456", Platform: PlatformAndroid, State: "device", Battery: &DeviceBattery{Percent: &remoteBattery, State: BatteryStateUnknown}, NodeID: "b"},
+		{Serial: "local-123", Address: "local-123", Platform: PlatformAndroid, State: "device", NodeID: "a"},
+		{Serial: "remote-456", Address: "remote-456", Platform: PlatformAndroid, State: "device", Battery: &DeviceBattery{Percent: &remoteBattery, State: BatteryStateUnknown}, NodeID: "b"},
 	}
 	if diff := cmp.Diff(expected, got); diff != "" {
 		t.Fatalf("devices mismatch (-want +got):\n%s", diff)
@@ -695,7 +712,7 @@ func TestListDevicesReturnsLocalDevicesWhenPeerListingFails(t *testing.T) {
 	}
 
 	expected := []DeviceInfo{
-		{Serial: "local-123", Platform: PlatformAndroid, State: "device", NodeID: "a"},
+		{Serial: "local-123", Address: "local-123", Platform: PlatformAndroid, State: "device", NodeID: "a"},
 	}
 	if diff := cmp.Diff(expected, got); diff != "" {
 		t.Fatalf("devices mismatch (-want +got):\n%s", diff)
@@ -752,6 +769,7 @@ func TestDeviceBySerialReturnsHealthyPeerBeforeSlowPeer(t *testing.T) {
 
 	expected := &DeviceInfo{
 		Serial:   "remote-123",
+		Address:  "remote-123",
 		Platform: PlatformAndroid,
 		State:    "device",
 		NodeID:   "c",
@@ -788,7 +806,7 @@ func TestListDevicesSkipsPeersWithoutAndroidEnabled(t *testing.T) {
 	}
 
 	expected := []DeviceInfo{
-		{Serial: "local-123", Platform: PlatformAndroid, State: "device", NodeID: "local-node"},
+		{Serial: "local-123", Address: "local-123", Platform: PlatformAndroid, State: "device", NodeID: "local-node"},
 	}
 	if diff := cmp.Diff(expected, got); diff != "" {
 		t.Fatalf("devices mismatch (-want +got):\n%s", diff)
@@ -948,6 +966,58 @@ func TestStartStreamSetsUpLocalDeviceStream(t *testing.T) {
 	}
 	if diff := cmp.Diff(expectedShellCalls, fake.shellCalls); diff != "" {
 		t.Fatalf("shell calls mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestStartStreamLeavesDisplayPowerOwnedByNodePolicy(t *testing.T) {
+	fake := &fakeADB{
+		outputs: map[string][]byte{
+			"": []byte("List of devices attached\nlocal-123\tdevice\n"),
+		},
+	}
+	node := &Node{
+		ID:             "local-node",
+		AdvertiseHost:  "100.64.0.1",
+		AndroidEnabled: true,
+		Peers:          map[string]*PeerConn{},
+		adb:            fake,
+		configReady:    true,
+		configState: mastconfig.Config{
+			AndroidEnabled: true,
+			KeepDisplayOff: true,
+		},
+	}
+
+	session, err := node.StartStream("local-123", streamcfg.Options{
+		NoAudio:   true,
+		NoControl: true,
+		StayAwake: true,
+	})
+	if err != nil {
+		t.Fatalf("StartStream returned error: %v", err)
+	}
+	defer func() { _ = session.Stop() }()
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.shellCalls) != 1 {
+		t.Fatalf("shell calls = %+v, want one viewer scrcpy start", fake.shellCalls)
+	}
+	want := []string{
+		"CLASSPATH=" + scrcpy.RemotePath,
+		"app_process",
+		"/",
+		"com.genymobile.scrcpy.Server",
+		scrcpy.ServerVersion,
+		"audio=false",
+		"control=false",
+		"stay_awake=false",
+		"clipboard_autosync=false",
+		"power_on=false",
+		"cleanup=false",
+	}
+	if diff := cmp.Diff(want, fake.shellCalls[0].Args); diff != "" {
+		t.Fatalf("viewer scrcpy args mismatch (-want +got):\n%s", diff)
 	}
 }
 

@@ -35,11 +35,13 @@ type nodeBackend interface {
 	StreamMJPEG(ctx context.Context, serial string, w http.ResponseWriter) error
 	StreamVideo(ctx context.Context, serial string, conn *websocket.Conn) error
 	Touch(serial string, action string, x, y int) error
+	TouchPointer(serial string, action string, x, y int, pointerID uint64) error
 	Tap(serial string, x, y int) error
 	Swipe(serial string, startX, startY, endX, endY int) error
 	PressKey(serial string, keycode uint32, metaState uint32) error
 	PressButton(serial string, name string) error
 	TypeText(serial string, text string) error
+	LaunchApp(serial string, packageName string) error
 	GetClipboard(serial string) (string, error)
 	SetClipboard(serial string, text string) error
 }
@@ -70,6 +72,7 @@ type programBackend interface {
 	Stop(opts program.StopOptions) (*program.Run, error)
 	Resume(opts program.ResumeOptions) (*program.Run, error)
 	SetRunAutostart(id string, enabled bool) (*program.Run, error)
+	UpdateRunAutostart(id string, opts program.AutostartOptions) (*program.Run, error)
 	Logs(id string) (string, string, error)
 	LogsSince(id string, offsets program.LogOffsets) (*program.LogsResult, error)
 	CleanupRun(id string) (*program.Run, error)
@@ -102,6 +105,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/devices", s.ListDevices)
 	mux.HandleFunc("GET /api/devices/{serial}/screenshot", s.Screenshot)
 	mux.HandleFunc("GET /api/devices/{serial}/geometry", s.DeviceGeometry)
+	mux.HandleFunc("GET /api/devices/{serial}/elements", s.DeviceElements)
 	mux.HandleFunc("GET /api/devices/{serial}/accounts", s.DeviceAccounts)
 	mux.HandleFunc("GET /api/devices/{serial}/dns", s.DeviceDNS)
 	mux.HandleFunc("PUT /api/devices/{serial}/dns", s.SetDeviceDNS)
@@ -148,6 +152,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/control/keypress", s.PressKey)
 	mux.HandleFunc("POST /api/control/button", s.PressButton)
 	mux.HandleFunc("POST /api/control/text", s.TypeText)
+	mux.HandleFunc("POST /api/control/launch", s.LaunchApp)
 	mux.HandleFunc("POST /api/control/clipboard/get", s.GetClipboard)
 	mux.HandleFunc("POST /api/control/clipboard/set", s.SetClipboard)
 	return mux

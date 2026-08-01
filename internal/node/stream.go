@@ -91,7 +91,8 @@ type iosTouchPoint struct {
 
 const (
 	peerStreamRPCTimeout     = 30 * time.Second
-	videoStartupInitialWait  = 500 * time.Millisecond
+	videoStartupInitialWait  = 2 * time.Second
+	videoStartupPowerTimeout = 2 * time.Second
 	videoStartupWakeWait     = 5 * time.Second
 	videoWriteTimeout        = 2 * time.Second
 	VideoCloseStreamNotFound = 4004
@@ -205,14 +206,13 @@ func (s *StreamSession) setDisplayPower(on bool) error {
 	return scrcpy.WriteSetDisplayPower(s.controlConn, on)
 }
 
-func (n *Node) applyStreamOptions(session *StreamSession, opts streamcfg.Options) error {
-	if !opts.TurnScreenOff {
-		return nil
+func (n *Node) applyStreamOptions(session *StreamSession, opts streamcfg.Options) {
+	if opts.TurnScreenOff && session.Platform != PlatformIOS {
+		if err := session.setDisplayPower(false); err != nil {
+			log.Printf("apply viewer display-off option to %s: %v", session.DeviceSerial, err)
+		}
 	}
-	if session.Platform == PlatformIOS {
-		return nil
-	}
-	return session.setDisplayPower(false)
+	n.reassertDevicePowerPolicy(session.DeviceSerial)
 }
 
 func waitForVideoKeyframe(ctx context.Context, packets *videoSubscription) error {
@@ -233,9 +233,9 @@ func waitForVideoKeyframe(ctx context.Context, packets *videoSubscription) error
 func waitForInitialVideo(
 	ctx context.Context,
 	packets *videoSubscription,
-	wakeDisplay func() error,
+	recoverStartup func(),
 	initialWait time.Duration,
-	wakeWait time.Duration,
+	recoveryWait time.Duration,
 ) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -249,16 +249,100 @@ func waitForInitialVideo(
 	if !errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
-	if err := wakeDisplay(); err != nil {
-		return fmt.Errorf("wake display for video startup: %w", err)
-	}
+	recoverStartup()
 
-	wakeCtx, cancelWake := context.WithTimeout(ctx, wakeWait)
-	defer cancelWake()
-	if err := waitForVideoKeyframe(wakeCtx, packets); err != nil {
-		return fmt.Errorf("wait for video keyframe after waking display: %w", err)
+	recoveryCtx, cancelRecovery := context.WithTimeout(ctx, recoveryWait)
+	defer cancelRecovery()
+	if err := waitForVideoKeyframe(recoveryCtx, packets); err != nil {
+		return fmt.Errorf("wait for video keyframe after startup recovery: %w", err)
 	}
 	return nil
+}
+
+func androidDeviceInteractive(powerDump []byte) (bool, error) {
+	lines := strings.Split(string(powerDump), "\n")
+	for _, line := range lines {
+		value, ok := strings.CutPrefix(strings.TrimSpace(line), "mInteractive=")
+		if !ok {
+			continue
+		}
+		interactive, err := strconv.ParseBool(strings.TrimSpace(value))
+		if err != nil {
+			return false, fmt.Errorf("parse Android interactive state %q: %w", value, err)
+		}
+		return interactive, nil
+	}
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		var value string
+		switch {
+		case strings.HasPrefix(line, "mWakefulness="):
+			value = strings.TrimPrefix(line, "mWakefulness=")
+		case strings.HasPrefix(line, "Wakefulness:"):
+			value = strings.TrimPrefix(line, "Wakefulness:")
+		default:
+			continue
+		}
+		value = strings.ToLower(strings.TrimSpace(value))
+		switch value {
+		case "awake", "dreaming":
+			return true, nil
+		case "asleep", "dozing":
+			return false, nil
+		default:
+			return false, fmt.Errorf("unknown Android wakefulness %q", value)
+		}
+	}
+	return false, errors.New("Android power state did not report interactive state or wakefulness")
+}
+
+func (n *Node) recoverAndroidVideoStartup(host, serial string, session *StreamSession) {
+	nodeCtx := n.ctx
+	if nodeCtx == nil {
+		nodeCtx = context.Background()
+	}
+	powerCtx, cancelPower := context.WithTimeout(nodeCtx, videoStartupPowerTimeout)
+	powerDump, err := n.adbShell(powerCtx, host, serial, "dumpsys", "power")
+	cancelPower()
+	interactive := false
+	stateKnown := false
+	if err != nil {
+		log.Printf("video startup for %s produced no keyframe; query Android power state: %v", serial, err)
+	} else if interactive, err = androidDeviceInteractive(powerDump); err != nil {
+		log.Printf("video startup for %s produced no keyframe; interpret Android power state: %v", serial, err)
+	} else {
+		stateKnown = true
+	}
+
+	managedPower, keepDisplayOff := n.devicePowerConfig()
+	if managedPower && keepDisplayOff {
+		log.Printf("video startup for %s produced no keyframe; preserving and re-asserting display-off policy", serial)
+		go n.reassertDevicePowerPolicy(serial)
+		return
+	}
+	if !stateKnown {
+		// An unknown state is not evidence that the device is asleep. Give the
+		// encoder the remaining startup budget without changing device power.
+		return
+	}
+	if interactive {
+		log.Printf("video startup for %s produced no keyframe while Android is interactive; waiting longer", serial)
+		return
+	}
+
+	log.Printf("video startup for %s produced no keyframe and Android is non-interactive; waking the device", serial)
+	if session.controlConn != nil {
+		if err := session.setDisplayPower(true); err != nil {
+			log.Printf("wake display for video startup on %s: %v", serial, err)
+		}
+		return
+	}
+	wakeCtx, cancelWake := context.WithTimeout(nodeCtx, videoStartupPowerTimeout)
+	_, err = n.adbShell(wakeCtx, host, serial, "input", "keyevent", "KEYCODE_WAKEUP")
+	cancelWake()
+	if err != nil {
+		log.Printf("wake device for video startup on %s: %v", serial, err)
+	}
 }
 
 func acceptScrcpySocket(ln net.Listener) (net.Conn, error) {
@@ -330,13 +414,17 @@ func (n *Node) deviceBySerial(serial string) (DeviceInfo, error) {
 }
 
 func (n *Node) pushScrcpyServer(host string, serial string) error {
+	return n.pushScrcpyServerContext(n.ctx, host, serial)
+}
+
+func (n *Node) pushScrcpyServerContext(ctx context.Context, host string, serial string) error {
 	localPath, cleanup, err := writeScrcpyServerTempFile()
 	if err != nil {
 		return err
 	}
 	defer cleanup()
 
-	return n.adb.Push(n.ctx, host, serial, localPath, scrcpy.RemotePath)
+	return n.adbPush(ctx, host, serial, localPath, scrcpy.RemotePath)
 }
 
 func newScrcpyListener() (net.Listener, int, error) {
@@ -350,12 +438,12 @@ func newScrcpyListener() (net.Listener, int, error) {
 }
 
 func (n *Node) createScrcpyReverse(host string, serial string, port int) error {
-	return n.adb.Reverse(n.ctx, host, serial, scrcpy.DeviceSocket, port)
+	return n.adbReverse(n.ctx, host, serial, scrcpy.DeviceSocket, port)
 }
 
 func (n *Node) startScrcpyProcess(host string, serial string, opts streamcfg.Options) (*exec.Cmd, error) {
 	shellArgs := scrcpyServerArgs(opts)
-	return n.adb.StartShell(host, serial, shellArgs...)
+	return n.adbStartShell(host, serial, shellArgs...)
 }
 
 func scrcpyServerArgs(opts streamcfg.Options) []string {
@@ -400,6 +488,19 @@ func (n *Node) startLocalAndroidStreamAfterLookup(serial string, opts streamcfg.
 
 func (n *Node) startLocalAndroidStreamWithDeviceCheck(serial string, opts streamcfg.Options, checkDevice bool) (*StreamSession, error) {
 	opts = opts.WithDefaults()
+	managedPower, keepDisplayOff := n.devicePowerConfig()
+	if managedPower {
+		// The node policy owns wakefulness, so a viewer session must not restore
+		// an older stay-awake setting when it exits.
+		opts.StayAwake = false
+		if keepDisplayOff {
+			// scrcpy powers the display on when a controlled session starts and
+			// restores display power after SET_DISPLAY_POWER on cleanup. Avoid
+			// both behaviors, and make viewer release leave the panel dark.
+			opts.DisablePowerOn = true
+			opts.DisableCleanup = true
+		}
+	}
 
 	if opts.TurnScreenOff && opts.NoControl {
 		return nil, errors.New("turn_screen_off requires control")
@@ -420,13 +521,13 @@ func (n *Node) startLocalAndroidStreamWithDeviceCheck(serial string, opts stream
 	n.configMu.RUnlock()
 
 	if lockPortrait {
-		if _, err := n.adb.Shell(n.ctx, "", serial, "wm", "set-ignore-orientation-request", "-d", "0", "true"); err != nil {
+		if _, err := n.adbShell(n.ctx, "", serial, "wm", "set-ignore-orientation-request", "-d", "0", "true"); err != nil {
 			log.Printf("failed to set ignore orientation request on %s: %v", serial, err)
 		}
-		if _, err := n.adb.Shell(n.ctx, "", serial, "settings", "put", "system", "accelerometer_rotation", "0"); err != nil {
+		if _, err := n.adbShell(n.ctx, "", serial, "settings", "put", "system", "accelerometer_rotation", "0"); err != nil {
 			log.Printf("failed to disable accelerometer rotation on %s: %v", serial, err)
 		}
-		if _, err := n.adb.Shell(n.ctx, "", serial, "settings", "put", "system", "user_rotation", "0"); err != nil {
+		if _, err := n.adbShell(n.ctx, "", serial, "settings", "put", "system", "user_rotation", "0"); err != nil {
 			log.Printf("failed to set user rotation on %s: %v", serial, err)
 		}
 	}
@@ -494,28 +595,17 @@ func (n *Node) startLocalAndroidStreamWithDeviceCheck(serial string, opts stream
 		n.streamsMu.Unlock()
 	})
 
-	wakeDisplay := func() error {
-		log.Printf("video startup for %s produced no keyframe; waking the display", serial)
-		if session.controlConn != nil {
-			return session.setDisplayPower(true)
-		}
-		_, err := n.adb.Shell(n.ctx, host, serial, "input", "keyevent", "KEYCODE_WAKEUP")
-		return err
-	}
 	if err := waitForInitialVideo(
 		n.ctx,
 		startupPackets,
-		wakeDisplay,
+		func() { n.recoverAndroidVideoStartup(host, serial, session) },
 		videoStartupInitialWait,
 		videoStartupWakeWait,
 	); err != nil {
 		_ = session.Stop()
 		return nil, fmt.Errorf("start video for %s: %w%s", serial, err, session.getStderrDiagnostics())
 	}
-	if err := n.applyStreamOptions(session, opts); err != nil {
-		_ = session.Stop()
-		return nil, err
-	}
+	n.applyStreamOptions(session, opts)
 
 	return session, nil
 }
@@ -663,9 +753,7 @@ func (n *Node) ensureStream(serial string, opts streamcfg.Options, start func(st
 				_ = n.cleanupStreamSession(serial, entry.Session)
 				continue
 			}
-			if err := n.applyStreamOptions(entry.Session, opts); err != nil {
-				return nil, err
-			}
+			n.applyStreamOptions(entry.Session, opts)
 
 			return entry.Session, nil
 		}
@@ -1120,6 +1208,7 @@ func (n *Node) stopLocalStream(serial string) error {
 }
 
 func (n *Node) cleanupStreamSession(serial string, session *StreamSession) error {
+	defer n.reassertDevicePowerPolicy(serial)
 	if session.Platform != PlatformIOS {
 		return session.Stop()
 	}

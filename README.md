@@ -32,6 +32,7 @@ input, program runs, node config, and updates.
 | --- | --- | --- |
 | `GET` | `/api/devices` | List visible devices |
 | `GET` | `/api/devices/{serial}/screenshot` | Capture a device screenshot |
+| `GET` | `/api/devices/{serial}/elements` | Read Android UIAutomator elements |
 | `GET` | `/api/devices/{serial}/dns` | Read Android private DNS mode |
 | `PUT` | `/api/devices/{serial}/dns` | Set private DNS mode explicitly |
 | `GET` | `/api/nodes` | List local and connected Mast nodes |
@@ -47,6 +48,7 @@ input, program runs, node config, and updates.
 | `POST` | `/api/control/swipe` | Swipe stream coordinates |
 | `POST` | `/api/control/keypress` | Send an Android keycode |
 | `POST` | `/api/control/text` | Type text into the focused field |
+| `POST` | `/api/control/launch` | Foreground an app by package name (Android) |
 | `POST` | `/api/control/clipboard/get` | Read device clipboard text |
 | `POST` | `/api/control/clipboard/set` | Set device clipboard text |
 | `GET` | `/api/programs` | List uploaded programs |

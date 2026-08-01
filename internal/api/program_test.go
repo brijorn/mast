@@ -18,6 +18,7 @@ type fakeProgramBackend struct {
 	deletedID        string
 	autostartID      string
 	autostartEnabled bool
+	autostartOptions program.AutostartOptions
 	logOffsets       program.LogOffsets
 	uploaded         program.RegisterUploadOptions
 	stopRequested    bool
@@ -93,7 +94,24 @@ func (f *fakeProgramBackend) Resume(opts program.ResumeOptions) (*program.Run, e
 func (f *fakeProgramBackend) SetRunAutostart(id string, enabled bool) (*program.Run, error) {
 	f.autostartID = id
 	f.autostartEnabled = enabled
-	return &program.Run{ID: id, Status: "stopped", Autostart: enabled}, nil
+	return &program.Run{
+		ID: id, Status: "stopped", Autostart: enabled,
+		AutostartReconnect: enabled, AutostartCrashRestart: enabled,
+	}, nil
+}
+
+func (f *fakeProgramBackend) UpdateRunAutostart(id string, opts program.AutostartOptions) (*program.Run, error) {
+	f.autostartID = id
+	f.autostartOptions = opts
+	run := &program.Run{ID: id, Status: "stopped"}
+	if opts.Reconnect != nil {
+		run.AutostartReconnect = *opts.Reconnect
+	}
+	if opts.CrashRestart != nil {
+		run.AutostartCrashRestart = *opts.CrashRestart
+	}
+	run.Autostart = run.AutostartReconnect || run.AutostartCrashRestart
+	return run, nil
 }
 
 func (f *fakeProgramBackend) UpdateProgram(id string, name string, slug string, mappings []program.ConfigMapping) (*program.Program, error) {
@@ -128,6 +146,27 @@ func TestStartRunsCallsBackend(t *testing.T) {
 	}
 	if programs.started.SecretVariables["LICENSE_KEY"] != "abc" {
 		t.Fatalf("secret variables = %+v", programs.started.SecretVariables)
+	}
+}
+
+func TestListRunsExposesBothAutostartBehaviors(t *testing.T) {
+	server := NewServer(&fakeBackend{}, &fakeProgramBackend{})
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/runs", nil)
+
+	server.Handler().ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusOK, res.Body.String())
+	}
+	var runs []map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&runs); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	for _, field := range []string{"autostart_reconnect", "autostart_crash_restart"} {
+		if _, ok := runs[0][field]; !ok {
+			t.Fatalf("run response omitted %q: %+v", field, runs[0])
+		}
 	}
 }
 
@@ -248,6 +287,40 @@ func TestSetRunAutostartCallsBackend(t *testing.T) {
 	}
 	if !got.Autostart {
 		t.Fatalf("got Autostart = false, want true")
+	}
+	if !got.AutostartReconnect || !got.AutostartCrashRestart {
+		t.Fatalf("got behavior flags = reconnect %v crash %v, want true/true",
+			got.AutostartReconnect, got.AutostartCrashRestart)
+	}
+}
+
+func TestSetRunAutostartBehaviorsIndependently(t *testing.T) {
+	programs := &fakeProgramBackend{}
+	server := NewServer(&fakeBackend{}, programs)
+
+	body := []byte(`{"autostart_reconnect":true,"autostart_crash_restart":false}`)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/api/runs/run-1/autostart", bytes.NewReader(body))
+
+	server.Handler().ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusOK, res.Body.String())
+	}
+	if programs.autostartID != "run-1" ||
+		programs.autostartOptions.Reconnect == nil || !*programs.autostartOptions.Reconnect ||
+		programs.autostartOptions.CrashRestart == nil || *programs.autostartOptions.CrashRestart {
+		t.Fatalf("autostart options = id %q %+v, want reconnect true and crash false",
+			programs.autostartID, programs.autostartOptions)
+	}
+
+	var got program.Run
+	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !got.Autostart || !got.AutostartReconnect || got.AutostartCrashRestart {
+		t.Fatalf("got flags = autostart %v reconnect %v crash %v, want true/true/false",
+			got.Autostart, got.AutostartReconnect, got.AutostartCrashRestart)
 	}
 }
 

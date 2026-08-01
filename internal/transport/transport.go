@@ -21,6 +21,8 @@ const (
 	TypeDeviceOrientationSetResponse = "device_orientation_set_response"
 	TypeScreenshotRequest            = "screenshot_request"
 	TypeScreenshotResponse           = "screenshot_response"
+	TypeElementsRequest              = "elements_request"
+	TypeElementsResponse             = "elements_response"
 	TypeStartStreamRequest           = "start_stream_request"
 	TypeStartStreamResponse          = "start_stream_response"
 	TypeStopStreamRequest            = "stop_stream_request"
@@ -30,6 +32,7 @@ const (
 	TypePressKeyRequest              = "press_key_request"
 	TypePressButtonRequest           = "press_button_request"
 	TypeTextInputRequest             = "text_input_request"
+	TypeLaunchAppRequest             = "launch_app_request"
 	TypeClipboardGetRequest          = "clipboard_get_request"
 	TypeClipboardGetResponse         = "clipboard_get_response"
 	TypeClipboardSetRequest          = "clipboard_set_request"
@@ -90,6 +93,7 @@ type ListDevicesRequest struct {
 
 type DeviceInfoPayload struct {
 	Serial   string                `json:"serial"`
+	Address  string                `json:"address,omitempty"`
 	Platform string                `json:"platform"`
 	State    string                `json:"state"`
 	NodeID   string                `json:"node_id"`
@@ -230,6 +234,37 @@ type ScreenshotResponse struct {
 	Payload ScreenshotResponsePayload `json:"payload"`
 }
 
+type ElementsRequestPayload struct {
+	Serial string `json:"serial"`
+}
+
+type ElementsRequest struct {
+	RawMessage
+	Payload ElementsRequestPayload `json:"payload"`
+}
+
+type ElementPayload struct {
+	Type      string  `json:"type,omitempty"`
+	Label     string  `json:"label,omitempty"`
+	Value     string  `json:"value,omitempty"`
+	X         float64 `json:"x"`
+	Y         float64 `json:"y"`
+	Width     float64 `json:"width"`
+	Height    float64 `json:"height"`
+	Clickable bool    `json:"clickable,omitempty"`
+	Enabled   bool    `json:"enabled,omitempty"`
+}
+
+type ElementsResponsePayload struct {
+	Result []ElementPayload `json:"result,omitempty"`
+	Error  string           `json:"error,omitempty"`
+}
+
+type ElementsResponse struct {
+	RawMessage
+	Payload ElementsResponsePayload `json:"payload"`
+}
+
 type StartStreamRequestPayload struct {
 	Serial  string            `json:"serial"`
 	Options streamcfg.Options `json:"options"`
@@ -288,10 +323,11 @@ type TouchRequest struct {
 }
 
 type TouchRequestPayload struct {
-	Serial string `json:"serial"`
-	Action string `json:"action"`
-	X      int    `json:"x"`
-	Y      int    `json:"y"`
+	Serial    string  `json:"serial"`
+	Action    string  `json:"action"`
+	X         int     `json:"x"`
+	Y         int     `json:"y"`
+	PointerID *uint64 `json:"pointer_id,omitempty"`
 }
 
 type SwipeRequest struct {
@@ -336,6 +372,16 @@ type TextInputRequest struct {
 type TextInputRequestPayload struct {
 	Serial string `json:"serial"`
 	Text   string `json:"text"`
+}
+
+type LaunchAppRequest struct {
+	RawMessage
+	Payload LaunchAppRequestPayload `json:"payload"`
+}
+
+type LaunchAppRequestPayload struct {
+	Serial  string `json:"serial"`
+	Package string `json:"package"`
 }
 
 type ClipboardGetRequest struct {

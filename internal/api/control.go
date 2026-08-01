@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"sync"
 	"time"
 
@@ -27,22 +28,33 @@ type tapRequest struct {
 	Y      int    `json:"y"`
 }
 
+type launchAppRequest struct {
+	Serial  string `json:"serial"`
+	Package string `json:"package"`
+}
+
+// Package names reach an adb shell argument, so only plain Android
+// application-id characters are accepted.
+var launchPackagePattern = regexp.MustCompile(`^[A-Za-z0-9._]+$`)
+
 type touchRequest struct {
-	Serial string `json:"serial"`
-	Action string `json:"action"`
-	X      int    `json:"x"`
-	Y      int    `json:"y"`
+	Serial    string  `json:"serial"`
+	Action    string  `json:"action"`
+	X         int     `json:"x"`
+	Y         int     `json:"y"`
+	PointerID *uint64 `json:"pointer_id,omitempty"`
 }
 
 type controlWSRequest struct {
-	Type   string `json:"type"`
-	Action string `json:"action,omitempty"`
-	X      int    `json:"x,omitempty"`
-	Y      int    `json:"y,omitempty"`
-	StartX int    `json:"start_x,omitempty"`
-	StartY int    `json:"start_y,omitempty"`
-	EndX   int    `json:"end_x,omitempty"`
-	EndY   int    `json:"end_y,omitempty"`
+	Type      string  `json:"type"`
+	Action    string  `json:"action,omitempty"`
+	X         int     `json:"x,omitempty"`
+	Y         int     `json:"y,omitempty"`
+	StartX    int     `json:"start_x,omitempty"`
+	StartY    int     `json:"start_y,omitempty"`
+	EndX      int     `json:"end_x,omitempty"`
+	EndY      int     `json:"end_y,omitempty"`
+	PointerID *uint64 `json:"pointer_id,omitempty"`
 }
 
 type controlWSErrorResponse struct {
@@ -106,7 +118,13 @@ func (s *Server) Touch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.node.Touch(req.Serial, req.Action, req.X, req.Y); err != nil {
+	var err error
+	if req.PointerID == nil {
+		err = s.node.Touch(req.Serial, req.Action, req.X, req.Y)
+	} else {
+		err = s.node.TouchPointer(req.Serial, req.Action, req.X, req.Y, *req.PointerID)
+	}
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -189,7 +207,11 @@ func (s *Server) handleControlWSRequest(conn *websocket.Conn, writeMu *sync.Mute
 	var err error
 	switch req.Type {
 	case "touch":
-		err = s.node.Touch(serial, req.Action, req.X, req.Y)
+		if req.PointerID == nil {
+			err = s.node.Touch(serial, req.Action, req.X, req.Y)
+		} else {
+			err = s.node.TouchPointer(serial, req.Action, req.X, req.Y, *req.PointerID)
+		}
 	case "swipe":
 		err = s.node.Swipe(serial, req.StartX, req.StartY, req.EndX, req.EndY)
 	}
@@ -291,6 +313,31 @@ func (s *Server) Tap(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.node.Tap(req.Serial, req.X, req.Y); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) LaunchApp(w http.ResponseWriter, r *http.Request) {
+	var req launchAppRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.Serial == "" {
+		http.Error(w, "serial required", http.StatusBadRequest)
+		return
+	}
+
+	if req.Package == "" || !launchPackagePattern.MatchString(req.Package) {
+		http.Error(w, "valid package required", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.node.LaunchApp(req.Serial, req.Package); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

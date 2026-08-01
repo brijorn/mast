@@ -11,6 +11,7 @@ network.
 | `GET` | `/api/devices` | List local and peer Android and iOS devices. |
 | `GET` | `/api/devices/{serial}/screenshot` | Capture a PNG screenshot from a device. |
 | `GET` | `/api/devices/{serial}/geometry` | Read screenshot-pixel and input-coordinate geometry. |
+| `GET` | `/api/devices/{serial}/elements` | Read normalized Android UIAutomator elements. |
 | `GET` | `/api/devices/{serial}/accounts` | Read Google accounts signed in on an Android device. |
 | `GET` | `/api/devices/{serial}/dns` | Read Android private DNS mode for a device. |
 | `PUT` | `/api/devices/{serial}/dns` | Set Android private DNS explicitly. |
@@ -36,6 +37,7 @@ network.
 | `POST` | `/api/control/swipe` | Send a swipe. |
 | `POST` | `/api/control/keypress` | Send an Android keycode. |
 | `POST` | `/api/control/text` | Type text into the focused field. |
+| `POST` | `/api/control/launch` | Foreground an app by package name (Android). |
 | `POST` | `/api/control/clipboard/get` | Read clipboard text. |
 | `POST` | `/api/control/clipboard/set` | Set clipboard text. |
 | `GET` | `/api/programs` | List uploaded programs. |
@@ -49,7 +51,7 @@ network.
 | `GET` | `/api/runs/{id}/stop-request` | Read cooperative shutdown state. |
 | `POST` | `/api/runs/{id}/stop-ack` | Acknowledge a cooperative shutdown request. |
 | `POST` | `/api/runs/{id}/resume` | Resume a completed, stopped, failed, or lost run. |
-| `PUT` | `/api/runs/{id}/autostart` | Set run autostart. |
+| `PUT` | `/api/runs/{id}/autostart` | Set run reconnect/crash recovery. |
 | `GET` | `/api/runs/{id}/logs` | Read run logs, optionally by byte offset. |
 | `POST` | `/api/runs/{id}/cleanup` | Remove a completed run workspace. |
 
@@ -67,7 +69,8 @@ lookup.
 ```json
 [
   {
-    "serial": "local-123",
+    "serial": "RZCY82CQMFE",
+    "address": "192.168.1.159:43497",
     "platform": "android",
     "state": "device",
     "battery": {
@@ -78,6 +81,32 @@ lookup.
   }
 ]
 ```
+
+### Device Identity
+
+`serial` is the device's durable identity and is the only field callers should
+store or key state on. For Android it is the hardware serial from
+`ro.serialno`; for iOS it is the UDID.
+
+`address` is how the device is reachable right now — the adb transport. For a
+USB device it equals `serial`. For a wireless device it is `host:port`, and
+that value is not stable: Android picks a fresh ephemeral port every time adbd
+restarts, and DHCP can move the host. It is reported for diagnostics only.
+
+Mast resolves a wireless device's identity before listing it, caching the
+result per address and re-probing every five minutes so a recycled address
+corrects itself. A wireless device whose identity cannot be established — an
+offline transport Mast has never seen resolved — is omitted from the listing
+rather than reported under its address, because an address-keyed device would
+strand any caller state written against it at the next reconnect.
+
+Emulators and loopback transports (`emulator-5554`, `127.0.0.1:5555`) keep
+their address as their identity. Their `ro.serialno` is a synthetic value that
+can repeat across machines, so promoting it would merge two distinct emulators
+into one device.
+
+Every device-scoped route takes the `serial`; Mast maps it to the current
+transport internally.
 
 Battery is omitted when Android does not expose usable battery information or
 the device is not ready. `state` is one of `charging`, `holding`, `full`,
@@ -176,6 +205,28 @@ Successful response:
 200 OK
 Content-Type: application/json
 Cache-Control: no-store
+```
+
+## Device Elements
+
+```http
+GET /api/devices/{serial}/elements
+```
+
+Returns the current Android UIAutomator hierarchy as normalized elements for a
+local or peer-owned device. Labels prefer `content-desc` and fall back to
+visible text. Bounds use physical Android screen coordinates.
+
+```json
+[
+  {
+    "type": "android.widget.ImageButton",
+    "label": "Close",
+    "rect": {"x": 810, "y": 2227, "width": 270, "height": 90},
+    "clickable": true,
+    "enabled": true
+  }
+]
 ```
 
 ## Device Orientation
@@ -318,6 +369,7 @@ Returns the selected local or peer node's persisted runtime config.
   "ios_enabled": false,
   "proxy_enabled": false,
   "lock_portrait": false,
+  "keep_display_off": true,
   "runners": {
     ".py": "python3"
   }
@@ -343,6 +395,7 @@ as a `runners` object or as `runners.<extension>` keys.
     "ios_enabled": false,
     "proxy_enabled": true,
     "lock_portrait": true,
+    "keep_display_off": false,
     "device_blacklist": "android-serial,ios-udid",
     "adb_port": 5038,
     "api_addr": ":7001",
@@ -370,11 +423,12 @@ Response body:
     "ios_enabled": false,
     "proxy_enabled": true,
     "lock_portrait": true,
+    "keep_display_off": false,
     "runners": {
       ".py": "python3"
     }
   },
-  "changed_keys": ["adb_port", "android_enabled", "api_addr", "device_blacklist", "lock_portrait", "node_id", "proxy_enabled", "runners..py"],
+  "changed_keys": ["adb_port", "android_enabled", "api_addr", "device_blacklist", "keep_display_off", "lock_portrait", "node_id", "proxy_enabled", "runners..py"],
   "restart_required": true,
   "restart_required_keys": ["api_addr", "device_blacklist", "node_id"]
 }
@@ -382,7 +436,7 @@ Response body:
 
 Supported config keys are `node_id`, `bind_addr`, `proxy_addr`, `api_addr`,
 `advertise_host`, `adb_port`, `programs_dir`, `android_enabled`, `ios_enabled`,
-`proxy_enabled`, `lock_portrait`, `device_blacklist`, and
+`proxy_enabled`, `lock_portrait`, `keep_display_off`, `device_blacklist`, and
 `runners.<file_extension>`.
 
 Listener, directory, and startup device fields such as `bind_addr`, `api_addr`,
@@ -391,7 +445,7 @@ but require a restart to fully take effect. Changing `node_id` also requires a
 restart because it changes the peer identity advertised by the running node.
 
 Runtime fields such as Android/iOS visibility, ADB port, advertised host, proxy
-enablement, portrait locking, and runner mappings are applied to the running
+enablement, portrait locking, Android display power policy, and runner mappings are applied to the running
 node when possible. Changing `proxy_addr` while the proxy is already running
 still requires a restart.
 
@@ -529,10 +583,13 @@ POST /api/streams
 
 Starts a scrcpy stream for a device serial. Only one stream start is allowed per
 serial at a time; concurrent requests for the same serial wait for the same
-startup result. If `no_control` is false or omitted, `turn_screen_off` defaults
-to true. `preserve_orientation` skips the node's optional portrait lock for
-that stream start, allowing a caller that already set device orientation to
-restart the encoder in landscape.
+startup result. Viewer options no longer implicitly own physical display power:
+`turn_screen_off` is applied only when explicitly true. The node's default
+`keep_display_off` policy is independent of viewer streams and is described in
+[Programs](programs.md#android-automation-power-policy).
+`preserve_orientation` skips the node's optional portrait lock for that stream
+start, allowing a caller that already set device orientation to restart the
+encoder in landscape.
 Android startup does not succeed until Mast receives the first keyframe. If an
 encoder produces no keyframe within 500 milliseconds, Mast briefly wakes the
 display and waits up to five more seconds before failing the start. This handles
@@ -668,7 +725,9 @@ Request body:
 }
 ```
 
-`action` must be `down`, `move`, or `up`.
+`action` must be `down`, `move`, or `up`. `pointer_id` is optional. Supplying
+distinct pointer IDs allows an Android client to generate simultaneous scrcpy
+touches, such as the real and mirrored fingers used for pinch-to-zoom.
 
 Successful response:
 
@@ -702,6 +761,7 @@ Successful response:
 ```http
 204 No Content
 ```
+
 
 ## Press Key
 
@@ -744,6 +804,33 @@ Request body:
 {
   "serial": "local-123",
   "text": "hello"
+}
+```
+
+Successful response:
+
+```http
+204 No Content
+```
+
+## Launch App
+
+```http
+POST /api/control/launch
+```
+
+Foregrounds an installed app by its package name. Android only: the owning
+node runs `monkey -p {package} 1` over ADB, which resolves the launcher
+activity itself. iOS devices return an error. The package must match
+`^[A-Za-z0-9._]+$`. Requests for peer-owned devices are forwarded to the
+owning node fire-and-forget, like other control requests.
+
+Request body:
+
+```json
+{
+  "serial": "local-123",
+  "package": "com.example.game"
 }
 ```
 
@@ -865,7 +952,7 @@ template variables are covered in [Programs](programs.md). The HTTP surface is:
 | `GET` | `/api/runs/{id}/stop-request` | Read request and acknowledgement timestamps. |
 | `POST` | `/api/runs/{id}/stop-ack` | Idempotently acknowledge the pending request. |
 | `POST` | `/api/runs/{id}/resume` | Resume the same run ID and workspace. |
-| `PUT` | `/api/runs/{id}/autostart` | Enable or disable autostart for a run. |
+| `PUT` | `/api/runs/{id}/autostart` | Set reconnect/crash recovery independently or together. |
 | `GET` | `/api/runs/{id}/logs` | Read stdout/stderr with optional offsets. |
 | `POST` | `/api/runs/{id}/cleanup` | Delete a completed run workspace. |
 
@@ -920,13 +1007,39 @@ Stop-request response:
 }
 ```
 
-Autostart request:
+Behavior-specific autostart request (omitted fields remain unchanged):
 
 ```json
 {
-  "enabled": true
+  "autostart_reconnect": true,
+  "autostart_crash_restart": false
 }
 ```
+
+The compatibility request remains supported and sets both behaviors:
+
+```json
+{"enabled": true}
+```
+
+Do not combine `enabled` with behavior-specific fields in one request.
+`GET /api/runs` includes all three compatibility and behavior fields:
+
+```json
+{
+  "autostart": true,
+  "autostart_reconnect": true,
+  "autostart_crash_restart": false
+}
+```
+
+`autostart` is a compatibility aggregate and is true when either behavior is
+enabled. `autostart_reconnect` controls startup/lost recovery and device
+ready-state reconnects. `autostart_crash_restart` controls the bounded backoff
+supervisor for runs that exit or fail while their device stays connected. A
+failed or exited run with a scheduled attempt includes
+`autostart_supervisor.next_restart_at`; the field clears when that attempt
+starts or the supervisor gives up.
 
 ## Coordinate Space and Routing
 

@@ -204,3 +204,45 @@ func TestADBEnvOnlyAppliesToAndroidDevices(t *testing.T) {
 		t.Fatalf("Android adb env mismatch (-want +got):\n%s", diff)
 	}
 }
+
+// Every program-facing handle used for adb has to name the transport. A
+// wireless phone's hardware serial is an identity, not a route: adb -s with it
+// fails with "device not found", which would break each running program the
+// moment it restarted.
+func TestProgramDeviceHandlesStayADBUsableForWirelessDevices(t *testing.T) {
+	device := node.DeviceInfo{
+		Serial:   "RZGYC0A00QN",
+		Address:  "192.168.1.160:34891",
+		Platform: node.PlatformAndroid,
+		NodeID:   "BMO",
+	}
+
+	if got := adbEnv(device, nil)["ANDROID_SERIAL"]; got != "192.168.1.160:34891" {
+		t.Fatalf("ANDROID_SERIAL = %q, want the transport address", got)
+	}
+
+	resolved := resolveValue("{{phone.serial}}", nil, device)
+	if resolved != "192.168.1.160:34891" {
+		t.Fatalf("{{phone.serial}} = %q, want the transport address", resolved)
+	}
+
+	if got := resolveValue("{{phone.id}}", nil, device); got != "RZGYC0A00QN" {
+		t.Fatalf("{{phone.id}} = %q, want the durable identity", got)
+	}
+}
+
+// A USB device has no separate address; both handles are the serial.
+func TestProgramDeviceHandlesFallBackToSerial(t *testing.T) {
+	device := node.DeviceInfo{
+		Serial:   "R5CY21SP09D",
+		Platform: node.PlatformAndroid,
+		NodeID:   "BMO",
+	}
+
+	if got := adbEnv(device, nil)["ANDROID_SERIAL"]; got != "R5CY21SP09D" {
+		t.Fatalf("ANDROID_SERIAL = %q, want the serial", got)
+	}
+	if got := resolveValue("{{phone.serial}}", nil, device); got != "R5CY21SP09D" {
+		t.Fatalf("{{phone.serial}} = %q, want the serial", got)
+	}
+}

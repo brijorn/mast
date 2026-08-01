@@ -1,6 +1,37 @@
 package config
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
+
+func TestKeepDisplayOffDefaultsOnForExistingConfig(t *testing.T) {
+	var cfg Config
+	if err := json.Unmarshal([]byte(`{"android_enabled":true}`), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.KeepDisplayOff {
+		t.Fatal("KeepDisplayOff = false for config without keep_display_off, want true")
+	}
+}
+
+func TestApplyValuesCanDisableKeepDisplayOffWithoutRestart(t *testing.T) {
+	got, changed, restartKeys, err := ApplyValues(Default(), map[string]string{
+		"keep_display_off": "false",
+	})
+	if err != nil {
+		t.Fatalf("ApplyValues returned error: %v", err)
+	}
+	if got.KeepDisplayOff {
+		t.Fatal("KeepDisplayOff = true, want false")
+	}
+	if len(changed) != 1 || changed[0] != "keep_display_off" {
+		t.Fatalf("changed = %+v, want [keep_display_off]", changed)
+	}
+	if len(restartKeys) != 0 {
+		t.Fatalf("restartKeys = %+v, want none", restartKeys)
+	}
+}
 
 func TestApplyValuesRejectsBatteryProtectionKeys(t *testing.T) {
 	_, _, _, err := ApplyValues(Default(), map[string]string{"battery_protection.enabled": "true"})

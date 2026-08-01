@@ -60,7 +60,7 @@ func (n *Node) localDeviceAccounts(serial string) (*DeviceAccounts, error) {
 		return nil, fmt.Errorf("device %s is %s", serial, device.State)
 	}
 
-	output, err := n.adb.Shell(n.ctx, "", serial, "dumpsys", "account")
+	output, err := n.adbShell(n.ctx, "", serial, "dumpsys", "account")
 	if err != nil {
 		return nil, err
 	}

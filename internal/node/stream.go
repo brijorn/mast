@@ -93,7 +93,10 @@ const (
 	peerStreamRPCTimeout     = 30 * time.Second
 	videoStartupInitialWait  = 2 * time.Second
 	videoStartupPowerTimeout = 2 * time.Second
-	videoStartupWakeWait     = 5 * time.Second
+	// A compositor that froze under a dark panel needs the wake to land and
+	// the encoder to re-init before its first frame; 5s lost that race on a
+	// wedged SM_S156V while repeated wakes within a longer window recovered it.
+	videoStartupWakeWait = 12 * time.Second
 	videoWriteTimeout        = 2 * time.Second
 	VideoCloseStreamNotFound = 4004
 )
@@ -358,19 +361,41 @@ func (n *Node) recoverAndroidVideoStartup(host, serial string, session *StreamSe
 // wakeForVideoStartup turns the panel on through every channel available. The
 // scrcpy display-power message flips the compositor's power mode; the wake key
 // event additionally kicks a compositor whose pipeline froze while the panel
-// was dark, which the message alone does not.
+// was dark, which the message alone does not. A single kick has been seen to
+// lose the race against the policy loop re-darkening the panel, so after the
+// first synchronous wake the key event repeats in the background across the
+// recovery window until the keyframe wait has had its chance.
 func (n *Node) wakeForVideoStartup(ctx context.Context, host, serial string, session *StreamSession) {
 	if session.controlConn != nil {
 		if err := session.setDisplayPower(true); err != nil {
 			log.Printf("wake display for video startup on %s: %v", serial, err)
 		}
 	}
-	wakeCtx, cancelWake := context.WithTimeout(ctx, videoStartupPowerTimeout)
-	_, err := n.adbShell(wakeCtx, host, serial, "input", "keyevent", "KEYCODE_WAKEUP")
-	cancelWake()
-	if err != nil {
-		log.Printf("wake device for video startup on %s: %v", serial, err)
+	wake := func() {
+		wakeCtx, cancelWake := context.WithTimeout(ctx, videoStartupPowerTimeout)
+		_, err := n.adbShell(wakeCtx, host, serial, "input", "keyevent", "KEYCODE_WAKEUP")
+		cancelWake()
+		if err != nil {
+			log.Printf("wake device for video startup on %s: %v", serial, err)
+		}
 	}
+	wake()
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		deadline := time.NewTimer(videoStartupWakeWait)
+		defer deadline.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-deadline.C:
+				return
+			case <-ticker.C:
+				wake()
+			}
+		}
+	}()
 }
 
 func acceptScrcpySocket(ln net.Listener) (net.Conn, error) {

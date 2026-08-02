@@ -239,10 +239,15 @@ updated `Run` object with `"workspace_cleaned": true` on success.
 workspace and preserves the same run ID. Mast uses this for `exited`, `failed`,
 `stopped`, or `lost` runs. When the previous attempt failed, Resume rotates its
 current logs before starting; clean exits and explicit stops replace the current
-logs without retaining history. By default, resume uses the run's original
-starting config values. To change values for the resumed attempt, send a JSON
-body with `variables`; those values are applied to the process environment and
-rendered config file without changing the run's saved starting defaults.
+logs without retaining history. By default, resume uses the run's current config
+values. To change them, send a JSON body with `variables`; those values are
+applied to the process environment and the rendered config file, and become the
+run's stored `env` from that point on.
+
+They persist deliberately. A crash-restart supervisor resumes with no variables
+of its own, so an override held for one attempt would be reverted by the first
+crash, leaving a run executing configuration its operator had already replaced.
+A caller wanting the original values back sends them explicitly.
 
 ```json
 {

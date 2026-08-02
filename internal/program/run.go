@@ -672,6 +672,12 @@ func (s *Store) Resume(opts ResumeOptions) (*Run, error) {
 	env := withDefaultRunEnv(variables)
 
 	s.mu.Lock()
+	// The resumed configuration becomes the run's, rather than applying to this
+	// attempt alone. A crash-restart supervisor resumes with no variables of its
+	// own, so a value that lived only in this call would be reverted by the
+	// first crash — and a run silently back on the configuration its operator
+	// replaced is worse than one that never took the change.
+	run.Env = variables
 	run.StdoutLogStart = 0
 	run.StderrLogStart = 0
 	if !opts.Supervisor {

@@ -919,9 +919,27 @@ func TestResumeCanOverrideStartingConfigValues(t *testing.T) {
 	if !strings.Contains(stdout, "MAX_LEVELS = 30") || !strings.Contains(stdout, "ENV_MAX_LEVELS=30") {
 		t.Fatalf("resumed stdout = %q, want resumed max level 30", stdout)
 	}
+	// The override belongs to the run from here on, not to the one attempt that
+	// carried it. A crash-restart supervisor resumes with no variables of its
+	// own, so a value kept only for that call would be reverted by the first
+	// crash — leaving a run quietly executing the configuration its operator
+	// replaced.
 	after := findRun(t, store, resumed.ID)
-	if after.Env["MAX_LEVELS"] != "1" {
-		t.Fatalf("stored MAX_LEVELS = %q, want original starting value 1", after.Env["MAX_LEVELS"])
+	if after.Env["MAX_LEVELS"] != "30" {
+		t.Fatalf("stored MAX_LEVELS = %q, want the resumed value 30", after.Env["MAX_LEVELS"])
+	}
+
+	supervised, err := store.Resume(ResumeOptions{ID: resumed.ID, Supervisor: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, store, supervised.ID)
+	stdout, _, err = store.Logs(supervised.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout, "MAX_LEVELS = 30") || !strings.Contains(stdout, "ENV_MAX_LEVELS=30") {
+		t.Fatalf("crash-restarted stdout = %q, want the resumed max level 30", stdout)
 	}
 }
 

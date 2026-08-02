@@ -720,6 +720,49 @@ func TestListDevicesIncludesAndroidEnabledPeerDevices(t *testing.T) {
 	}
 }
 
+// A peer's USB device hides a dropped transport, because there the address is
+// just the serial again. Only a wireless peer device can show whether the
+// coordinator carried the transport across the websocket or invented it from
+// the identity it already had.
+func TestListDevicesKeepsAPeerWirelessDeviceTransport(t *testing.T) {
+	nodeA, nodeB := createNodePair(t)
+	defer func() { _ = nodeA.Close() }()
+	defer func() { _ = nodeB.Close() }()
+
+	nodeA.adb = &fakeADB{
+		outputs: map[string][]byte{"": []byte("List of devices attached\nlocal-123\tdevice\n")},
+	}
+	nodeB.adb = &fakeADB{
+		outputs: map[string][]byte{"": []byte("List of devices attached\n192.168.1.159:43497\tdevice\n")},
+		shellCommandOutputs: map[string][]byte{
+			shellCommandKey("192.168.1.159:43497", "getprop", "ro.serialno"): []byte("RZCY82CQMFE\n"),
+		},
+	}
+	nodeA.AndroidEnabled = true
+	nodeB.AndroidEnabled = true
+
+	connectNodePair(t, nodeA, nodeB)
+
+	got, err := nodeA.ListDevices()
+	if err != nil {
+		t.Fatalf("ListDevices returned error: %v", err)
+	}
+
+	expected := []DeviceInfo{
+		{Serial: "local-123", Address: "local-123", Platform: PlatformAndroid, State: "device", NodeID: "a"},
+		{
+			Serial:   "RZCY82CQMFE",
+			Address:  "192.168.1.159:43497",
+			Platform: PlatformAndroid,
+			State:    "device",
+			NodeID:   "b",
+		},
+	}
+	if diff := cmp.Diff(expected, got); diff != "" {
+		t.Fatalf("devices mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestListDevicesReturnsLocalDevicesWhenPeerListingFails(t *testing.T) {
 	nodeA, nodeB := createNodePair(t)
 	defer func() { _ = nodeA.Close() }()

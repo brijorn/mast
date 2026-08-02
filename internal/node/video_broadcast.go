@@ -274,6 +274,7 @@ type videoBroadcaster struct {
 	latestConfig    *VideoPacket
 	currentGOP      []VideoPacket
 	currentGOPBytes int
+	lastPacketAt    time.Time
 	closed          bool
 }
 
@@ -315,12 +316,21 @@ func (b *videoBroadcaster) broadcast(packet VideoPacket) {
 	b.broadcastAt(packet, time.Now())
 }
 
+// LastPacketAt reports when the source last produced a packet. ok is false
+// before the first packet arrives.
+func (b *videoBroadcaster) LastPacketAt() (at time.Time, ok bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.lastPacketAt, !b.lastPacketAt.IsZero()
+}
+
 func (b *videoBroadcaster) broadcastAt(packet VideoPacket, now time.Time) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.closed {
 		return
 	}
+	b.lastPacketAt = now
 	packet.receivedAt = now
 
 	if packet.Config {

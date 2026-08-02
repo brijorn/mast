@@ -316,8 +316,18 @@ func (n *Node) recoverAndroidVideoStartup(host, serial string, session *StreamSe
 
 	managedPower, keepDisplayOff := n.devicePowerConfig()
 	if managedPower && keepDisplayOff {
-		log.Printf("video startup for %s produced no keyframe; preserving and re-asserting display-off policy", serial)
-		go n.reassertDevicePowerPolicy(serial)
+		// The dark panel the policy maintains is the likeliest reason there is
+		// no keyframe: some devices stop composing frames entirely while the
+		// display is off, so re-asserting the policy here waits on a keyframe
+		// that can never come. Wake the display for startup instead — the
+		// policy loop restores the dark panel on its own interval once video
+		// is flowing. A device in this state can report Awake while its
+		// pipeline is frozen, so the wake cannot be gated on interactivity,
+		// and the key event is sent as well as the scrcpy display-power
+		// message because only the former has been seen to unfreeze a wedged
+		// compositor.
+		log.Printf("video startup for %s produced no keyframe under display-off policy; waking the display for startup", serial)
+		n.wakeForVideoStartup(nodeCtx, host, serial, session)
 		return
 	}
 	if !stateKnown {
@@ -339,6 +349,24 @@ func (n *Node) recoverAndroidVideoStartup(host, serial string, session *StreamSe
 	}
 	wakeCtx, cancelWake := context.WithTimeout(nodeCtx, videoStartupPowerTimeout)
 	_, err = n.adbShell(wakeCtx, host, serial, "input", "keyevent", "KEYCODE_WAKEUP")
+	cancelWake()
+	if err != nil {
+		log.Printf("wake device for video startup on %s: %v", serial, err)
+	}
+}
+
+// wakeForVideoStartup turns the panel on through every channel available. The
+// scrcpy display-power message flips the compositor's power mode; the wake key
+// event additionally kicks a compositor whose pipeline froze while the panel
+// was dark, which the message alone does not.
+func (n *Node) wakeForVideoStartup(ctx context.Context, host, serial string, session *StreamSession) {
+	if session.controlConn != nil {
+		if err := session.setDisplayPower(true); err != nil {
+			log.Printf("wake display for video startup on %s: %v", serial, err)
+		}
+	}
+	wakeCtx, cancelWake := context.WithTimeout(ctx, videoStartupPowerTimeout)
+	_, err := n.adbShell(wakeCtx, host, serial, "input", "keyevent", "KEYCODE_WAKEUP")
 	cancelWake()
 	if err != nil {
 		log.Printf("wake device for video startup on %s: %v", serial, err)
@@ -743,7 +771,15 @@ func (n *Node) ensureStream(serial string, opts streamcfg.Options, start func(st
 			if entry.Session == nil {
 				return nil, errors.New("internal error: stream session is nil")
 			}
-			if entry.Session.isUnhealthyIOS() {
+			unhealthy := entry.Session.isUnhealthyIOS()
+			if !unhealthy && entry.Session.isSuspectAndroid(time.Now()) {
+				adbHost, hostErr := n.adbHostForNode(n.ID)
+				if hostErr == nil && !n.androidServerAlive(adbHost, serial) {
+					log.Printf("stream for %s has a dead device-side server; rebuilding", serial)
+					unhealthy = true
+				}
+			}
+			if unhealthy {
 				n.streamsMu.Lock()
 				current, stillCurrent := n.streams[serial]
 				if stillCurrent && current == entry {
@@ -792,6 +828,57 @@ func (s *StreamSession) isUnhealthyIOS() bool {
 		return false
 	}
 	return !s.iosDevice.Status().Ready
+}
+
+// androidLivenessQuietWindow is how long an Android session may go without a
+// video packet before a new viewer triggers a device-side liveness probe.
+// scrcpy encodes on display damage, so a static screen is legitimately silent
+// — quiet alone earns a probe, never a verdict.
+const androidLivenessQuietWindow = 15 * time.Second
+
+// isSuspectAndroid reports whether the session has been silent long enough
+// that its device-side server deserves a look before being handed to another
+// viewer.
+func (s *StreamSession) isSuspectAndroid(now time.Time) bool {
+	if s.Platform != PlatformAndroid || s.videoBroadcaster == nil {
+		return false
+	}
+	at, ok := s.videoBroadcaster.LastPacketAt()
+	if !ok {
+		return false
+	}
+	return now.Sub(at) > androidLivenessQuietWindow
+}
+
+// androidServerAlive checks on the device whether the viewer scrcpy server is
+// still running. The device-side process can die while every host-side signal
+// stays healthy — the adb client survives and the sockets stay open — so this
+// is the only probe that catches a zombie session. The power-policy session
+// launches with an scid argument and the viewer session without one, which is
+// what tells them apart.
+func (n *Node) androidServerAlive(host, serial string) bool {
+	if n.adb == nil {
+		return true
+	}
+	ctx := n.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, videoStartupPowerTimeout)
+	out, err := n.adbShell(probeCtx, host, serial, "ps", "-A", "-o", "ARGS")
+	cancel()
+	if err != nil {
+		// An unreachable device is a device problem, not proof the session
+		// is a zombie; leave the session alone and let the viewer's own
+		// connection surface the failure.
+		return true
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.Contains(line, "com.genymobile.scrcpy.Server") && !strings.Contains(line, "scid=") {
+			return true
+		}
+	}
+	return false
 }
 
 func (n *Node) GetStream(serial string) (*StreamSession, error) {

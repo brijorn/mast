@@ -726,9 +726,16 @@ func TestVideoStartupWakesConfirmedNonInteractiveDevice(t *testing.T) {
 	}
 }
 
-func TestVideoStartupPreservesDisplayOffPolicyEvenWhenDeviceIsNonInteractive(t *testing.T) {
+// A dark panel maintained by the display-off policy is the likeliest reason
+// startup saw no keyframe — some devices stop composing entirely while the
+// panel is off, and such a device can report Awake with a frozen pipeline
+// (observed on an SM_S156V, 2026-08-02: policy preservation looped forever
+// while a wake key event recovered video immediately). So under the policy the
+// recovery must wake the display through both channels rather than re-assert
+// the very state that blocks the keyframe.
+func TestVideoStartupWakesDisplayDespiteDisplayOffPolicy(t *testing.T) {
 	fake := &fakeADB{shellCommandOutputs: map[string][]byte{
-		shellCommandKey("local-123", "dumpsys", "power"): []byte("mWakefulness=Asleep\n"),
+		shellCommandKey("local-123", "dumpsys", "power"): []byte("mWakefulness=Awake\n"),
 	}}
 	viewerControl := &recordingConn{}
 	policyControl := &recordingConn{}
@@ -743,20 +750,109 @@ func TestVideoStartupPreservesDisplayOffPolicyEvenWhenDeviceIsNonInteractive(t *
 
 	n.recoverAndroidVideoStartup("", "local-123", &StreamSession{controlConn: viewerControl})
 
-	if got := viewerControl.dataSnapshot(); len(got) != 0 {
-		t.Fatalf("policy-protected viewer received wake message %v", got)
+	want := []byte{scrcpy.SetDisplayPower, 1}
+	if got := viewerControl.dataSnapshot(); !cmp.Equal(got, want) {
+		t.Fatalf("viewer wake message mismatch (-want +got):\n%s", cmp.Diff(want, got))
 	}
-	want := []byte{scrcpy.SetDisplayPower, 0}
-	waitFor(t, time.Second, func() bool {
-		return cmp.Equal(policyControl.dataSnapshot(), want)
-	})
-	if got := policyControl.dataSnapshot(); !cmp.Equal(got, want) {
-		t.Fatalf("policy message mismatch (-want +got):\n%s", cmp.Diff(want, got))
-	}
+	wokeDevice := false
 	for _, call := range fake.shellOutputCallsSnapshot() {
 		if cmp.Equal(call.Args, []string{"input", "keyevent", "KEYCODE_WAKEUP"}) {
-			t.Fatalf("policy-protected device received wake keyevent: %+v", call)
+			wokeDevice = true
 		}
+	}
+	if !wokeDevice {
+		t.Fatal("device did not receive the wake keyevent that unfreezes a wedged compositor")
+	}
+	if got := policyControl.dataSnapshot(); len(got) != 0 {
+		t.Fatalf("policy session re-asserted display power during startup recovery: %v", got)
+	}
+}
+
+// scrcpy encodes on display damage, so a static screen is legitimately
+// silent; quiet earns a device probe, never a verdict on its own.
+func TestSuspectAndroidRequiresQuietBeyondWindow(t *testing.T) {
+	b := newVideoBroadcaster()
+	s := &StreamSession{Platform: PlatformAndroid, videoBroadcaster: b}
+
+	now := time.Now()
+	if s.isSuspectAndroid(now) {
+		t.Fatal("session with no packets yet reported suspect")
+	}
+	b.broadcastAt(VideoPacket{Data: []byte{1}, Keyframe: true}, now)
+	if s.isSuspectAndroid(now.Add(androidLivenessQuietWindow / 2)) {
+		t.Fatal("recently active session reported suspect")
+	}
+	if !s.isSuspectAndroid(now.Add(androidLivenessQuietWindow + time.Second)) {
+		t.Fatal("long-silent session not reported suspect")
+	}
+}
+
+// The device-side scrcpy server can die while every host-side signal stays
+// healthy — the adb client survives and the sockets stay open (observed
+// 2026-08-02: a 17-hour-old adb client with no app_process on the device,
+// serving "waiting for video" forever). Only a device probe tells a zombie
+// from a healthy quiet session, and the power-policy session's scid argument
+// must not count as the viewer server.
+func TestAndroidServerAliveDistinguishesViewerFromPolicySession(t *testing.T) {
+	deadOutput := []byte("ARGS\napp_process / com.genymobile.scrcpy.Server 4.0 scid=4d415354 video=false\n")
+	liveOutput := []byte(string(deadOutput) + "app_process / com.genymobile.scrcpy.Server 4.0 audio=false control=true\n")
+
+	fake := &fakeADB{shellCommandOutputs: map[string][]byte{
+		shellCommandKey("local-123", "ps", "-A", "-o", "ARGS"): deadOutput,
+	}}
+	n := &Node{ctx: context.Background(), adb: fake}
+	if n.androidServerAlive("", "local-123") {
+		t.Fatal("policy-only process list reported the viewer server alive")
+	}
+
+	fake = &fakeADB{shellCommandOutputs: map[string][]byte{
+		shellCommandKey("local-123", "ps", "-A", "-o", "ARGS"): liveOutput,
+	}}
+	n = &Node{ctx: context.Background(), adb: fake}
+	if !n.androidServerAlive("", "local-123") {
+		t.Fatal("live viewer server reported dead")
+	}
+}
+
+// ensureStream must hand a new viewer a working session: a long-quiet session
+// whose device-side server is gone gets rebuilt, and one whose server is
+// alive is kept even after an hour of static screen.
+func TestEnsureStreamRebuildsZombieAndroidSession(t *testing.T) {
+	deadOutput := []byte("ARGS\napp_process / com.genymobile.scrcpy.Server 4.0 scid=4d415354 video=false\n")
+	fake := &fakeADB{shellCommandOutputs: map[string][]byte{
+		shellCommandKey("local-123", "ps", "-A", "-o", "ARGS"): deadOutput,
+	}}
+	node := &Node{ctx: context.Background(), adb: fake, streams: make(map[string]*streamEntry)}
+	done := make(chan struct{})
+	close(done)
+	broadcaster := newVideoBroadcaster()
+	broadcaster.broadcastAt(
+		VideoPacket{PTS: 1, Keyframe: true, Data: annexBNAL(5, 1)},
+		time.Now().Add(-time.Hour),
+	)
+	existing := &StreamSession{
+		ID:               "zombie-stream",
+		DeviceSerial:     "local-123",
+		Platform:         PlatformAndroid,
+		Kind:             "h264",
+		videoBroadcaster: broadcaster,
+	}
+	node.streams["local-123"] = &streamEntry{Session: existing, Done: done}
+
+	fresh := &StreamSession{ID: "fresh-stream"}
+	startCalls := 0
+	got, err := node.ensureStream("local-123", streamcfg.Options{NoControl: true}, func(string, streamcfg.Options) (*StreamSession, error) {
+		startCalls++
+		return fresh, nil
+	})
+	if err != nil {
+		t.Fatalf("ensureStream returned error: %v", err)
+	}
+	if got != fresh {
+		t.Fatalf("ensureStream returned %q, want the rebuilt session", got.ID)
+	}
+	if startCalls != 1 {
+		t.Fatalf("start calls = %d, want 1", startCalls)
 	}
 }
 

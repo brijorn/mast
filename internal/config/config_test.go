@@ -33,6 +33,34 @@ func TestApplyValuesCanDisableKeepDisplayOffWithoutRestart(t *testing.T) {
 	}
 }
 
+// Retuning the encoder is the reason these keys exist, so they have to take
+// effect on the next stream rather than on the next restart.
+func TestApplyValuesRetunesEncoderWithoutRestart(t *testing.T) {
+	got, changed, restartKeys, err := ApplyValues(Default(), map[string]string{
+		"stream_video_bitrate":       "4000000",
+		"stream_max_size":            "720",
+		"stream_video_codec_options": "i-frame-interval=10",
+	})
+	if err != nil {
+		t.Fatalf("ApplyValues returned error: %v", err)
+	}
+	if got.StreamVideoBitrate != 4_000_000 || got.StreamMaxSize != 720 || got.StreamVideoCodecOptions != "i-frame-interval=10" {
+		t.Fatalf("config = %+v, want the requested encoder settings", got)
+	}
+	if len(changed) != 3 {
+		t.Fatalf("changed = %+v, want all three encoder keys", changed)
+	}
+	if len(restartKeys) != 0 {
+		t.Fatalf("restartKeys = %+v, want none", restartKeys)
+	}
+}
+
+func TestApplyValuesRejectsNegativeBitrate(t *testing.T) {
+	if _, _, _, err := ApplyValues(Default(), map[string]string{"stream_video_bitrate": "-1"}); err == nil {
+		t.Fatal("ApplyValues returned nil, want error for a negative bitrate")
+	}
+}
+
 func TestApplyValuesRejectsBatteryProtectionKeys(t *testing.T) {
 	_, _, _, err := ApplyValues(Default(), map[string]string{"battery_protection.enabled": "true"})
 	if err == nil {

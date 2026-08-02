@@ -458,7 +458,7 @@ func scrcpyServerArgs(opts streamcfg.Options) []string {
 }
 
 func (n *Node) StartStream(serial string, opts streamcfg.Options) (*StreamSession, error) {
-	opts = opts.WithDefaults()
+	opts = opts.WithDefaults(n.StreamDefaults())
 
 	device, err := n.deviceBySerial(serial)
 	if err != nil {
@@ -487,7 +487,7 @@ func (n *Node) startLocalAndroidStreamAfterLookup(serial string, opts streamcfg.
 }
 
 func (n *Node) startLocalAndroidStreamWithDeviceCheck(serial string, opts streamcfg.Options, checkDevice bool) (*StreamSession, error) {
-	opts = opts.WithDefaults()
+	opts = opts.WithDefaults(n.StreamDefaults())
 	managedPower, keepDisplayOff := n.devicePowerConfig()
 	if managedPower {
 		// The node policy owns wakefulness, so a viewer session must not restore
@@ -611,7 +611,7 @@ func (n *Node) startLocalAndroidStreamWithDeviceCheck(serial string, opts stream
 }
 
 func (n *Node) startPeerStream(ctx context.Context, nodeID string, serial string, opts streamcfg.Options) (*StreamSession, error) {
-	opts = opts.WithDefaults()
+	opts = opts.WithDefaults(n.StreamDefaults())
 
 	ctx, cancel := context.WithTimeout(ctx, peerStreamRPCTimeout)
 	defer cancel()
@@ -692,7 +692,7 @@ func streamSessionFromPayload(payload *transport.StartStreamResultPayload) *Stre
 }
 
 func (n *Node) EnsureStream(serial string, opts streamcfg.Options) (*StreamSession, error) {
-	opts = opts.WithDefaults()
+	opts = opts.WithDefaults(n.StreamDefaults())
 
 	device, err := n.deviceBySerial(serial)
 	if err != nil {
@@ -712,7 +712,7 @@ func (n *Node) EnsureStream(serial string, opts streamcfg.Options) (*StreamSessi
 }
 
 func (n *Node) ensureLocalStream(serial string, opts streamcfg.Options) (*StreamSession, error) {
-	opts = opts.WithDefaults()
+	opts = opts.WithDefaults(n.StreamDefaults())
 
 	device, err := n.localDeviceBySerial(serial)
 	if err != nil {

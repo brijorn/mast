@@ -33,12 +33,34 @@ type Config struct {
 	ProxyEnabled    bool              `json:"proxy_enabled"`
 	LockPortrait    bool              `json:"lock_portrait"`
 	KeepDisplayOff  bool              `json:"keep_display_off"`
-	Runners         map[string]string `json:"runners,omitempty"`
+
+	// Encoder settings for viewer streams. They take effect on the next stream
+	// a device starts, so a new value can be tried by updating config and
+	// reopening the stream rather than rebuilding the caller.
+	StreamMaxSize           int    `json:"stream_max_size"`
+	StreamVideoBitrate      int    `json:"stream_video_bitrate"`
+	StreamVideoCodecOptions string `json:"stream_video_codec_options"`
+
+	Runners map[string]string `json:"runners,omitempty"`
 }
+
+// StreamDefaults are the encoder settings a node uses when a caller does not
+// specify its own. They match what the dashboard asked for before the settings
+// became configurable, so an existing node keeps its current picture.
+const (
+	DefaultStreamMaxSize           = 1080
+	DefaultStreamVideoBitrate      = 1_500_000
+	DefaultStreamVideoCodecOptions = "i-frame-interval=1"
+)
 
 func (c *Config) UnmarshalJSON(data []byte) error {
 	type configAlias Config
-	*c = Config{KeepDisplayOff: true}
+	*c = Config{
+		KeepDisplayOff:          true,
+		StreamMaxSize:           DefaultStreamMaxSize,
+		StreamVideoBitrate:      DefaultStreamVideoBitrate,
+		StreamVideoCodecOptions: DefaultStreamVideoCodecOptions,
+	}
 	return json.Unmarshal(data, (*configAlias)(c))
 }
 
@@ -117,6 +139,26 @@ func (c *Config) Set(key string, value string) error {
 			return err
 		}
 		c.KeepDisplayOff = parsed
+	case "stream_max_size":
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return err
+		}
+		if parsed < 0 {
+			return fmt.Errorf("stream_max_size must not be negative")
+		}
+		c.StreamMaxSize = parsed
+	case "stream_video_bitrate":
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return err
+		}
+		if parsed < 0 {
+			return fmt.Errorf("stream_video_bitrate must not be negative")
+		}
+		c.StreamVideoBitrate = parsed
+	case "stream_video_codec_options":
+		c.StreamVideoCodecOptions = strings.TrimSpace(value)
 	default:
 		return fmt.Errorf("invalid config key: %s", key)
 	}
@@ -244,6 +286,10 @@ func Default() Config {
 		AndroidEnabled: false,
 		ProxyEnabled:   false,
 		KeepDisplayOff: true,
+
+		StreamMaxSize:           DefaultStreamMaxSize,
+		StreamVideoBitrate:      DefaultStreamVideoBitrate,
+		StreamVideoCodecOptions: DefaultStreamVideoCodecOptions,
 	}
 }
 
@@ -353,6 +399,18 @@ func changedKeys(before Config, after Config, requested []string) []string {
 			}
 		case "keep_display_off":
 			if before.KeepDisplayOff != after.KeepDisplayOff {
+				changed = append(changed, key)
+			}
+		case "stream_max_size":
+			if before.StreamMaxSize != after.StreamMaxSize {
+				changed = append(changed, key)
+			}
+		case "stream_video_bitrate":
+			if before.StreamVideoBitrate != after.StreamVideoBitrate {
+				changed = append(changed, key)
+			}
+		case "stream_video_codec_options":
+			if before.StreamVideoCodecOptions != after.StreamVideoCodecOptions {
 				changed = append(changed, key)
 			}
 		}

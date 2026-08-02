@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	mastconfig "github.com/brijorn/mast/internal/config"
+	streamcfg "github.com/brijorn/mast/internal/stream"
 	"github.com/brijorn/mast/internal/transport"
 )
 
@@ -98,6 +99,26 @@ func (n *Node) getLocalConfig() (*mastconfig.Config, error) {
 	}
 	cfg := n.configState.Clone()
 	return &cfg, nil
+}
+
+// StreamDefaults reports the encoder settings a stream falls back to when the
+// caller omits them. Reading it per stream start is what lets a new bitrate be
+// tried by updating config and reopening the stream, with no restart.
+func (n *Node) StreamDefaults() streamcfg.Defaults {
+	n.configMu.RLock()
+	defer n.configMu.RUnlock()
+	if !n.configReady {
+		return streamcfg.Defaults{
+			MaxSize:           mastconfig.DefaultStreamMaxSize,
+			VideoBitrate:      mastconfig.DefaultStreamVideoBitrate,
+			VideoCodecOptions: mastconfig.DefaultStreamVideoCodecOptions,
+		}
+	}
+	return streamcfg.Defaults{
+		MaxSize:           n.configState.StreamMaxSize,
+		VideoBitrate:      n.configState.StreamVideoBitrate,
+		VideoCodecOptions: n.configState.StreamVideoCodecOptions,
+	}
 }
 
 func (n *Node) updateLocalConfig(values map[string]string) (*mastconfig.UpdateResult, error) {

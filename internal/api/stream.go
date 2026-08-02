@@ -38,8 +38,8 @@ func (s *Server) StartStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "serial required", http.StatusBadRequest)
 		return
 	}
-	req.Options = req.Options.WithDefaults()
-
+	// Node applies its own encoder defaults, so the request is passed through
+	// as written and only the fields the caller set survive as overrides.
 	stream, err := s.node.EnsureStream(req.Serial, req.Options)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

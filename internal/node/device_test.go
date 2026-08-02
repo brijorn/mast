@@ -1036,6 +1036,9 @@ func TestStartStreamSetsUpLocalDeviceStream(t *testing.T) {
 				"control=false",
 				"stay_awake=true",
 				"clipboard_autosync=false",
+				// The caller set bitrate and size but no codec options, so the
+				// node default supplies that one field and leaves the rest.
+				"video_codec_options=" + mastconfig.DefaultStreamVideoCodecOptions,
 				"video_bit_rate=8000000",
 				"max_size=1080",
 			},

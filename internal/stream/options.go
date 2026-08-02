@@ -15,7 +15,26 @@ type Options struct {
 	DisableCleanup      bool   `json:"-"`
 }
 
-func (s Options) WithDefaults() Options {
+// Defaults are the node-level encoder settings a stream falls back to. They
+// exist so the encoder can be retuned through the config API without a Runway
+// rebuild: a caller that omits a field gets the node's current value, and a
+// caller that sets one still wins.
+type Defaults struct {
+	MaxSize           int
+	VideoBitrate      int
+	VideoCodecOptions string
+}
+
+func (s Options) WithDefaults(d Defaults) Options {
+	if s.MaxSize == 0 {
+		s.MaxSize = d.MaxSize
+	}
+	if s.VideoBitrate == 0 {
+		s.VideoBitrate = d.VideoBitrate
+	}
+	if s.VideoCodecOptions == "" {
+		s.VideoCodecOptions = d.VideoCodecOptions
+	}
 	return s
 }
 

@@ -1693,6 +1693,60 @@ func TestAutostartRestartSkipsSerialsAlreadyWorkingAndStaleHistory(t *testing.T)
 	}
 }
 
+// A program that finishes on a clean exit has done the work it was configured
+// for, and restarting it makes that configuration unenforceable: a run bounded
+// at twenty levels was resumed every time it reached twenty, and because a run
+// keeps its progress across a resume it played one more level per attempt and
+// reported twenty-eight of a limit of twenty. A licensed executable that closes
+// after a session declares nothing and is still resumed, which is the whole
+// reason the crash watch restarts an ordinary exit at all.
+func TestCrashRestartSkipsAProgramThatFinishedOnACleanExit(t *testing.T) {
+	completed := time.Now()
+	zero, failure := 0, 1
+	store := &Store{
+		runs:              map[string]*runState{},
+		autostartRestarts: map[string]*autostartRestartState{},
+		programs: map[string]Program{
+			"framekit": {ID: "framekit", FinishesOnCleanExit: true},
+			"licensed": {ID: "licensed"},
+		},
+		devices: &mutableFakeDevices{
+			devices: []node.DeviceInfo{
+				{Serial: "phone-finished", State: "device", NodeID: "n"},
+				{Serial: "phone-failed", State: "device", NodeID: "n"},
+				{Serial: "phone-licensed", State: "device", NodeID: "n"},
+			},
+		},
+	}
+	for _, run := range []*Run{
+		{ID: "finished", ProgramID: "framekit", Serial: "phone-finished", Status: RunStatusExited, ExitCode: &zero},
+		{ID: "failed", ProgramID: "framekit", Serial: "phone-failed", Status: RunStatusExited, ExitCode: &failure},
+		{ID: "licensed", ProgramID: "licensed", Serial: "phone-licensed", Status: RunStatusExited, ExitCode: &zero},
+	} {
+		run.Autostart, run.AutostartCrashRestart, run.Cmd = true, true, "/bin/sh"
+		run.StartedAt, run.CompletedAt = completed.Add(-time.Minute), &completed
+		store.runs[run.ID] = &runState{run: run}
+	}
+
+	store.checkAutostartRestarts()
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	scheduled := func(id string) bool {
+		supervisor := store.runs[id].run.AutostartSupervisor
+		return supervisor != nil && supervisor.NextRestartAt != nil
+	}
+	if scheduled("finished") {
+		t.Error("a run that reported it finished was scheduled for a crash restart")
+	}
+	if !scheduled("failed") {
+		t.Error("a non-zero exit is still a crash and must be restarted")
+	}
+	if !scheduled("licensed") {
+		t.Error("a program that does not finish on a clean exit must still be resumed")
+	}
+}
+
 // A crash loop must escalate. The streak used to be cleared the moment a resumed
 // run reached Running, so a run that died after a few seconds started again from
 // attempt one on every pass: the backoff never grew, the cap never fired, and one

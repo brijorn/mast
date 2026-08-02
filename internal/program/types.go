@@ -60,7 +60,13 @@ type Program struct {
 	ConfigFile     string          `json:"config_file,omitempty"`
 	ConfigMappings []ConfigMapping `json:"config_mappings,omitempty"`
 	Entry          Entry           `json:"entry"`
-	CreatedAt      time.Time       `json:"created_at"`
+	// FinishesOnCleanExit says a zero exit from this program means it completed
+	// the work it was given, so there is nothing for a crash restart to recover.
+	// Programs that end for their own reasons and expect to be started again —
+	// a licensed executable that closes after a session — leave it false and
+	// keep being resumed whenever they end on their own.
+	FinishesOnCleanExit bool      `json:"finishes_on_clean_exit,omitempty"`
+	CreatedAt           time.Time `json:"created_at"`
 }
 
 type AutostartSupervisorState struct {
@@ -120,12 +126,13 @@ type UploadFile struct {
 
 // RegisterUploadOptions describes a program bundle uploaded as individual files.
 type RegisterUploadOptions struct {
-	Name           string
-	Slug           string
-	ConfigFile     string
-	ConfigMappings []ConfigMapping
-	Entry          Entry
-	Files          []UploadFile
+	Name                string
+	Slug                string
+	ConfigFile          string
+	ConfigMappings      []ConfigMapping
+	Entry               Entry
+	FinishesOnCleanExit bool
+	Files               []UploadFile
 }
 
 type StartOptions struct {

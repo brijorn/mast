@@ -44,6 +44,7 @@ Content-Type: multipart/form-data
 | `entry` | JSON string | Main command plus optional managed companions (below). |
 | `config_file` | string | Path to the config file inside the bundle (optional) |
 | `config_mappings` | JSON string | `[{"section":"Settings","key":"DEVICE_ID","value":"{{phone.serial}}"}]` |
+| `finishes_on_clean_exit` | `"true"` | A zero exit means this program finished the work it was given, so a crash restart leaves it alone (optional; defaults to off) |
 | `files` | file (multiple) | Each file part's filename is its relative path in the bundle |
 
 Response: `201 Created` with the `Program` JSON object.
@@ -335,6 +336,17 @@ same run ID and workspace:
   it is resumed on a backoff instead. Without this the phone stays idle until a
   human notices, because the reconnect watch never fires for a program that
   simply exited.
+
+  A program registered with `finishes_on_clean_exit` narrows that watch: a zero
+  exit from one of those is the run reporting that it did the work it was
+  configured for, so it is left alone and only a failure or a non-zero exit is
+  restarted. Restarting a finished run makes its configuration unenforceable —
+  a run bounded at twenty levels was resumed every time it reached twenty, and
+  because a run keeps its progress across a resume it played one more level per
+  attempt and reported twenty-eight of a limit of twenty. A program that ends
+  for its own reasons and expects to be started again, such as a licensed
+  executable closing after a session, does not declare it and keeps being
+  resumed whenever it ends on its own.
 
 The backoff starts at 30 seconds and doubles per consecutive attempt to a
 15-minute ceiling. Restart attempts remain in the same incident until the run

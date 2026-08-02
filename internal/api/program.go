@@ -50,6 +50,7 @@ func (s *Server) UploadProgram(w http.ResponseWriter, r *http.Request) {
 	name := r.FormValue("name")
 	slug := r.FormValue("slug")
 	configFile := r.FormValue("config_file")
+	finishesOnCleanExit := r.FormValue("finishes_on_clean_exit") == "true"
 
 	var entry program.Entry
 	if entryStr := r.FormValue("entry"); entryStr != "" {
@@ -90,7 +91,9 @@ func (s *Server) UploadProgram(w http.ResponseWriter, r *http.Request) {
 		ConfigFile:     configFile,
 		ConfigMappings: configMappings,
 		Entry:          entry,
-		Files:          uploadFiles,
+
+		FinishesOnCleanExit: finishesOnCleanExit,
+		Files:               uploadFiles,
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)

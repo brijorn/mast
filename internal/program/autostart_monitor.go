@@ -36,11 +36,26 @@ const (
 // reconnect predicate. Only a run that ended on its own qualifies: `stopped` is
 // an explicit operator or scheduler decision and `lost` belongs to the startup
 // path, so resuming either here would override an intent Mast was given.
-func autostartRunEligibleForCrashRestart(run *Run) bool {
+//
+// A program that finishes on a clean exit narrows it further: a zero exit from
+// one of those is the run reporting that it did the work it was configured for,
+// and restarting it makes that configuration unenforceable. A run bounded at
+// twenty levels was resumed every time it reached twenty, and because the run
+// keeps its progress across a resume it played one more level per attempt and
+// reported twenty-eight of a limit of twenty. Programs that end for their own
+// reasons — a licensed executable closing after a session — do not declare
+// this, and are still resumed whenever they end on their own.
+func autostartRunEligibleForCrashRestart(run *Run, finishesOnCleanExit bool) bool {
 	if !run.AutostartCrashRestart || !autostartRunCanResume(run) {
 		return false
 	}
-	return run.Status == RunStatusFailed || run.Status == RunStatusExited
+	if run.Status == RunStatusFailed {
+		return true
+	}
+	if run.Status != RunStatusExited {
+		return false
+	}
+	return !(finishesOnCleanExit && run.ExitCode != nil && *run.ExitCode == 0)
 }
 
 type autostartRestartState struct {
@@ -128,7 +143,7 @@ func (s *Store) checkAutostartRestarts() {
 		if state.resuming {
 			continue
 		}
-		if !autostartRunEligibleForCrashRestart(run) {
+		if !autostartRunEligibleForCrashRestart(run, s.programs[run.ProgramID].FinishesOnCleanExit) {
 			// Recovery is based on time since the last failure, not the current
 			// process lifetime. This prevents an 11-minute crash loop from
 			// clearing a 10-minute "healthy" threshold on every attempt.

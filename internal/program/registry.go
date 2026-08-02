@@ -100,7 +100,9 @@ func (s *Store) RegisterUpload(opts RegisterUploadOptions) (*Program, error) {
 		ConfigFile:     opts.ConfigFile,
 		ConfigMappings: opts.ConfigMappings,
 		Entry:          opts.Entry,
-		CreatedAt:      time.Now().UTC(),
+
+		FinishesOnCleanExit: opts.FinishesOnCleanExit,
+		CreatedAt:           time.Now().UTC(),
 	}
 
 	bundlePath := s.bundlePath(id)

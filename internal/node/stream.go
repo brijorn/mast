@@ -412,7 +412,11 @@ func acceptScrcpySocket(ln net.Listener) (net.Conn, error) {
 }
 
 func readScrcpyVideoMetadata(conn net.Conn) (string, int, int, error) {
-	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+	// The metadata follows the encoder's initialization, and a phone under
+	// heavy automation load can take well over five seconds to get MediaCodec
+	// up. Give it the same patience the keyframe wait gets rather than failing
+	// a stream the device is still in the middle of starting.
+	if err := conn.SetReadDeadline(time.Now().Add(videoStartupWakeWait)); err != nil {
 		return "", 0, 0, err
 	}
 	defer func() {

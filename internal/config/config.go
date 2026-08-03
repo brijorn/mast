@@ -20,19 +20,24 @@ const (
 )
 
 type Config struct {
-	NodeID          string            `json:"node_id"`
-	BindAddr        string            `json:"bind_addr"`
-	ProxyAddr       string            `json:"proxy_addr"`
-	APIAddr         string            `json:"api_addr"`
-	AdvertiseHost   string            `json:"advertise_host"`
-	ADBPort         int               `json:"adb_port"`
-	ProgramsDir     string            `json:"programs_dir"`
-	DeviceBlacklist []string          `json:"device_blacklist,omitempty"`
-	AndroidEnabled  bool              `json:"android_enabled"`
-	IOSEnabled      bool              `json:"ios_enabled"`
-	ProxyEnabled    bool              `json:"proxy_enabled"`
-	LockPortrait    bool              `json:"lock_portrait"`
-	KeepDisplayOff  bool              `json:"keep_display_off"`
+	NodeID          string   `json:"node_id"`
+	BindAddr        string   `json:"bind_addr"`
+	ProxyAddr       string   `json:"proxy_addr"`
+	APIAddr         string   `json:"api_addr"`
+	AdvertiseHost   string   `json:"advertise_host"`
+	ADBPort         int      `json:"adb_port"`
+	ProgramsDir     string   `json:"programs_dir"`
+	DeviceBlacklist []string `json:"device_blacklist,omitempty"`
+	AndroidEnabled  bool     `json:"android_enabled"`
+	IOSEnabled      bool     `json:"ios_enabled"`
+	ProxyEnabled    bool     `json:"proxy_enabled"`
+	LockPortrait    bool     `json:"lock_portrait"`
+	KeepDisplayOff  bool     `json:"keep_display_off"`
+
+	// Address family the proxy dials out on: "ipv4", "ipv6", or "auto".
+	// Defaults to IPv4 because a proxy's job is a stable outward identity and
+	// a dual-stack cellular link does not have one.
+	ProxyAddressFamily string `json:"proxy_address_family"`
 
 	// Encoder settings for viewer streams. They take effect on the next stream
 	// a device starts, so a new value can be tried by updating config and
@@ -53,10 +58,22 @@ const (
 	DefaultStreamVideoCodecOptions = "i-frame-interval=1"
 )
 
+// Proxy address families. IPv4 is the default because carrier IPv4 is what
+// upstream sites are reached by in practice, and an IPv6-only egress would
+// strand IPv4-only destinations.
+const (
+	AddressFamilyIPv4 = "ipv4"
+	AddressFamilyIPv6 = "ipv6"
+	AddressFamilyAuto = "auto"
+
+	DefaultProxyAddressFamily = AddressFamilyIPv4
+)
+
 func (c *Config) UnmarshalJSON(data []byte) error {
 	type configAlias Config
 	*c = Config{
 		KeepDisplayOff:          true,
+		ProxyAddressFamily:      DefaultProxyAddressFamily,
 		StreamMaxSize:           DefaultStreamMaxSize,
 		StreamVideoBitrate:      DefaultStreamVideoBitrate,
 		StreamVideoCodecOptions: DefaultStreamVideoCodecOptions,
@@ -139,6 +156,14 @@ func (c *Config) Set(key string, value string) error {
 			return err
 		}
 		c.KeepDisplayOff = parsed
+	case "proxy_address_family":
+		family := strings.ToLower(strings.TrimSpace(value))
+		switch family {
+		case AddressFamilyIPv4, AddressFamilyIPv6, AddressFamilyAuto:
+		default:
+			return fmt.Errorf("proxy_address_family must be ipv4, ipv6, or auto")
+		}
+		c.ProxyAddressFamily = family
 	case "stream_max_size":
 		parsed, err := strconv.Atoi(value)
 		if err != nil {
@@ -287,6 +312,7 @@ func Default() Config {
 		ProxyEnabled:   false,
 		KeepDisplayOff: true,
 
+		ProxyAddressFamily:      DefaultProxyAddressFamily,
 		StreamMaxSize:           DefaultStreamMaxSize,
 		StreamVideoBitrate:      DefaultStreamVideoBitrate,
 		StreamVideoCodecOptions: DefaultStreamVideoCodecOptions,
@@ -399,6 +425,10 @@ func changedKeys(before Config, after Config, requested []string) []string {
 			}
 		case "keep_display_off":
 			if before.KeepDisplayOff != after.KeepDisplayOff {
+				changed = append(changed, key)
+			}
+		case "proxy_address_family":
+			if before.ProxyAddressFamily != after.ProxyAddressFamily {
 				changed = append(changed, key)
 			}
 		case "stream_max_size":

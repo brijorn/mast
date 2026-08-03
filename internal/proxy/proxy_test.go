@@ -9,7 +9,7 @@ import (
 
 func newTestProxy(t *testing.T) *url.URL {
 	t.Helper()
-	s := NewServer("")
+	s := NewServer("", NetworkAuto)
 	proxy := httptest.NewServer(s.Handler())
 	t.Cleanup(proxy.Close)
 	proxyUrl, err := url.Parse(proxy.URL)
@@ -64,4 +64,36 @@ func TestProxyHTTPS(t *testing.T) {
 		t.Fatal(res.Body)
 	}
 
+}
+
+// The family has to reach the plain-HTTP path as well as CONNECT, or a
+// request that never upgrades leaves by a different address than the tunnels
+// beside it — which is the split identity the pinning exists to prevent.
+func TestServerPinsBothPathsToTheSameFamily(t *testing.T) {
+	s := NewServer(":0", NetworkIPv4)
+	if got := s.dialNetwork(); got != NetworkIPv4 {
+		t.Fatalf("dialNetwork = %q, want %q", got, NetworkIPv4)
+	}
+	transport, ok := s.Client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("client transport = %T, want *http.Transport pinned to the family", s.Client.Transport)
+	}
+	if transport.DialContext == nil {
+		t.Fatal("client transport does not pin its dialer, so plain HTTP can leave by another family")
+	}
+}
+
+func TestServerNetworkIsCorrectableWithoutRebuilding(t *testing.T) {
+	s := NewServer(":0", NetworkIPv4)
+	s.SetNetwork(NetworkIPv6)
+	if got := s.dialNetwork(); got != NetworkIPv6 {
+		t.Fatalf("dialNetwork after change = %q, want %q", got, NetworkIPv6)
+	}
+}
+
+func TestServerRejectsUnknownNetworkRatherThanDialingIt(t *testing.T) {
+	s := NewServer(":0", "tcp5")
+	if got := s.dialNetwork(); got != NetworkAuto {
+		t.Fatalf("dialNetwork = %q, want the auto fallback %q", got, NetworkAuto)
+	}
 }

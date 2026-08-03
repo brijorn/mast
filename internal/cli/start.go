@@ -15,6 +15,7 @@ import (
 	"syscall"
 
 	"github.com/brijorn/mast/internal/api"
+	mastconfig "github.com/brijorn/mast/internal/config"
 	"github.com/brijorn/mast/internal/node"
 	"github.com/brijorn/mast/internal/program"
 	"github.com/brijorn/mast/internal/proxy"
@@ -54,7 +55,7 @@ func (s *StartCmd) Run() error {
 
 	proxyRuntime := &runtimeProxy{}
 	if cfg.ProxyEnabled {
-		if err := proxyRuntime.Ensure(cfg.ProxyAddr); err != nil {
+		if err := proxyRuntime.Ensure(cfg.ProxyAddr, cfg.ProxyAddressFamily); err != nil {
 			return err
 		}
 	}
@@ -146,9 +147,23 @@ func (a *runtimeConfigApplier) ApplyRuntimeConfig(cfg Config, changedKeys []stri
 		}
 	}
 	if a.proxy != nil {
-		return a.proxy.SetEnabled(cfg.ProxyEnabled, cfg.ProxyAddr)
+		return a.proxy.SetEnabled(cfg.ProxyEnabled, cfg.ProxyAddr, cfg.ProxyAddressFamily)
 	}
 	return nil
+}
+
+// proxyNetwork maps the operator-facing family name onto the network Go
+// dials with, defaulting anything unrecognised to the pinned IPv4 the config
+// default names rather than silently reverting to dual-stack.
+func proxyNetwork(family string) string {
+	switch family {
+	case mastconfig.AddressFamilyIPv6:
+		return proxy.NetworkIPv6
+	case mastconfig.AddressFamilyAuto:
+		return proxy.NetworkAuto
+	default:
+		return proxy.NetworkIPv4
+	}
 }
 
 func hasChangedKey(changedKeys []string, targets ...string) bool {
@@ -168,13 +183,14 @@ type runtimeProxy struct {
 	addr    string
 	server  *http.Server
 	ln      net.Listener
+	proxy   *proxy.Server
 }
 
-func (p *runtimeProxy) Ensure(addr string) error {
-	return p.SetEnabled(true, addr)
+func (p *runtimeProxy) Ensure(addr string, family string) error {
+	return p.SetEnabled(true, addr, family)
 }
 
-func (p *runtimeProxy) SetEnabled(enabled bool, addr string) error {
+func (p *runtimeProxy) SetEnabled(enabled bool, addr string, family string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if !enabled {
@@ -186,18 +202,24 @@ func (p *runtimeProxy) SetEnabled(enabled bool, addr string) error {
 		p.addr = ""
 		p.server = nil
 		p.ln = nil
+		p.proxy = nil
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
 		return err
 	}
 	if p.running && p.addr == addr {
+		// The family reaches live connections without a restart, so a
+		// corrected setting does not cost the sessions already tunnelling.
+		if p.proxy != nil {
+			p.proxy.SetNetwork(proxyNetwork(family))
+		}
 		return nil
 	}
 	if p.running {
 		return fmt.Errorf("proxy addr change requires restart")
 	}
-	server := proxy.NewServer(addr)
+	server := proxy.NewServer(addr, proxyNetwork(family))
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
@@ -207,6 +229,7 @@ func (p *runtimeProxy) SetEnabled(enabled bool, addr string) error {
 	p.addr = addr
 	p.server = httpServer
 	p.ln = listener
+	p.proxy = server
 	go func() {
 		if err := httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Println("proxy server listen err:", err)

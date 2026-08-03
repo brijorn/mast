@@ -114,3 +114,44 @@ func TestApplyValuesUpdatesDeviceBlacklistAndRequiresRestart(t *testing.T) {
 		t.Fatalf("restartKeys = %+v, want [device_blacklist]", restartKeys)
 	}
 }
+
+// The proxy exists to lend one stable outward identity, and a dual-stack
+// cellular link has two addresses, so the family defaults to pinned rather
+// than negotiated (observed 2026-08-02: Google refused a session as
+// "2600:387:15:201d::4 ≠ 166.199.116.76", both the same phone).
+func TestDefaultPinsProxyToOneAddressFamily(t *testing.T) {
+	if got := Default().ProxyAddressFamily; got != AddressFamilyIPv4 {
+		t.Fatalf("ProxyAddressFamily = %q, want %q", got, AddressFamilyIPv4)
+	}
+	var loaded Config
+	if err := json.Unmarshal([]byte(`{}`), &loaded); err != nil {
+		t.Fatalf("unmarshal returned error: %v", err)
+	}
+	if loaded.ProxyAddressFamily != AddressFamilyIPv4 {
+		t.Fatalf("config without the key = %q, want %q", loaded.ProxyAddressFamily, AddressFamilyIPv4)
+	}
+}
+
+func TestApplyValuesChangesProxyAddressFamilyWithoutRestart(t *testing.T) {
+	got, changed, restartKeys, err := ApplyValues(Default(), map[string]string{
+		"proxy_address_family": "auto",
+	})
+	if err != nil {
+		t.Fatalf("ApplyValues returned error: %v", err)
+	}
+	if got.ProxyAddressFamily != AddressFamilyAuto {
+		t.Fatalf("ProxyAddressFamily = %q, want %q", got.ProxyAddressFamily, AddressFamilyAuto)
+	}
+	if len(changed) != 1 || changed[0] != "proxy_address_family" {
+		t.Fatalf("changed = %+v, want [proxy_address_family]", changed)
+	}
+	if len(restartKeys) != 0 {
+		t.Fatalf("restartKeys = %+v, want none", restartKeys)
+	}
+}
+
+func TestApplyValuesRejectsUnknownProxyAddressFamily(t *testing.T) {
+	if _, _, _, err := ApplyValues(Default(), map[string]string{"proxy_address_family": "ipv5"}); err == nil {
+		t.Fatal("ApplyValues returned nil, want error for an unknown address family")
+	}
+}

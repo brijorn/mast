@@ -76,6 +76,10 @@ func (s *Store) ListRuns() []Run {
 	runs := make([]Run, 0, len(s.runs))
 	for _, state := range s.runs {
 		run := cloneRun(state.run)
+		if !state.checkpointPolledAt.IsZero() {
+			polled := state.checkpointPolledAt
+			run.CheckpointPolledAt = &polled
+		}
 		runs = append(runs, run)
 	}
 	sort.Slice(runs, func(i, j int) bool {
@@ -214,6 +218,9 @@ func (s *Store) RequestStop(id string) (*Run, error) {
 	return &run, nil
 }
 
+// StopRequest answers the program's own question, asked from its checkpoint
+// loop: is a stop pending? Asking is what identifies a program that can be
+// stopped softly at all, so the question is recorded as well as answered.
 func (s *Store) StopRequest(id string) (*StopRequest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -221,6 +228,7 @@ func (s *Store) StopRequest(id string) (*StopRequest, error) {
 	if state == nil {
 		return nil, errors.New("run not found")
 	}
+	state.checkpointPolledAt = time.Now().UTC()
 	return &StopRequest{RequestedAt: state.run.StopRequestedAt, AcknowledgedAt: state.run.StopAcknowledgedAt}, nil
 }
 
@@ -701,6 +709,7 @@ func (s *Store) Resume(opts ResumeOptions) (*Run, error) {
 	state.mainExited = false
 	state.companionFailure = ""
 	state.companionCmds = nil
+	state.checkpointPolledAt = time.Time{}
 	startingSnapshot := nextRunSnapshot(run)
 	s.mu.Unlock()
 
@@ -890,7 +899,13 @@ func (s *Store) waitRun(state *runState, stdout, stderr io.Closer) {
 	for index := range state.run.Companions {
 		state.run.Companions[index].PID = 0
 	}
-	if state.stopping {
+	// A run that ends after a stop was requested ended because it was asked to,
+	// whether the kill did it or the program reached its own checkpoint first.
+	// Recording that as `exited` loses the only thing that distinguishes it from
+	// a program finishing a session by itself, and the crash-restart watch —
+	// which exists to resume exactly that — would relaunch a run the operator
+	// just stopped.
+	if state.stopping || state.run.StopRequestedAt != nil {
 		state.run.ExitCode = nil
 		state.run.Status = RunStatusStopped
 		state.run.Error = ""

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/brijorn/mast/internal/node"
 )
@@ -71,6 +72,10 @@ type runState struct {
 	mainExited       bool
 	stopping         bool
 	resuming         bool
+	// checkpointPolledAt is when the program last asked whether a stop is
+	// pending. See Run.CheckpointPolledAt: it lives here, outside the persisted
+	// run, because it describes this process rather than this run.
+	checkpointPolledAt time.Time
 }
 
 func NewStore(root string, devices deviceLister) (*Store, error) {

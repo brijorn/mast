@@ -407,6 +407,19 @@ after cleanup, or the coordinator follows with the normal `/stop` endpoint.
 Both operations are idempotent and retain the first request and acknowledgement
 timestamps.
 
+A run that ends after `stop_requested_at` is recorded is `stopped`, however it
+ended: the program's own clean exit at a checkpoint is the request being obeyed,
+not a session finishing by itself, and recording it as `exited` would leave it
+eligible for the crash-restart watch that resumes such endings.
+
+Polling `GET /api/runs/{id}/stop-request` marks the run with
+`checkpoint_polled_at`. Only a program that watches for a stop asks the
+question, so the field tells a coordinator whether waiting out a grace period
+can accomplish anything — a licensed executable never asks and is never coming
+to a checkpoint. It reports the live process, so it appears in `GET /api/runs`
+and is deliberately absent from `run.json`: a value restored from disk would
+claim the capability for a process this Mast has never watched.
+
 Each workspace keeps a schema-versioned, monotonically revisioned `run.json`
 recovery checkpoint. Mast writes checkpoints through a same-directory temporary
 file, flushes them, and atomically replaces the prior snapshot so a crash cannot

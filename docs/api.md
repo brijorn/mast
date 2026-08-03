@@ -1068,7 +1068,13 @@ does not terminate it. A program can poll `GET /api/runs/{id}/stop-request`,
 perform its own cleanup, and call `POST /api/runs/{id}/stop-ack`; acknowledgement
 records `stop_acknowledged_at` but also does not terminate the process. Repeated
 request and acknowledgement calls preserve their original timestamps. The
-coordinator must still call `/stop` if the process does not exit itself.
+coordinator must still call `/stop` if the process does not exit itself. A run
+that ends after a request was recorded is `stopped` whichever of the two ended
+it.
+
+The `GET` also records `checkpoint_polled_at` on the run in `GET /api/runs`, so
+a coordinator can tell a program that watches for stops from one that never
+will before it spends a grace period waiting.
 
 Stop-request response:
 

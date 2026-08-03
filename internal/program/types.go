@@ -105,6 +105,17 @@ type Run struct {
 	CompletedAt        *time.Time   `json:"completed_at,omitempty"`
 	StopRequestedAt    *time.Time   `json:"stop_requested_at,omitempty"`
 	StopAcknowledgedAt *time.Time   `json:"stop_acknowledged_at,omitempty"`
+	// CheckpointPolledAt is the last time this run's program asked whether a
+	// stop is pending. Only a program built on FrameKit's checkpoint loop ever
+	// asks, so its presence is the proof that a soft stop can be honored at
+	// all: a licensed executable never polls, and waiting out a grace period
+	// for one is time spent on an acknowledgement that cannot arrive.
+	//
+	// It is live observation of a running process rather than run state, so it
+	// is filled in on the listing snapshot and never written to run.json — a
+	// value restored from disk would claim a capability for a process this Mast
+	// has never watched.
+	CheckpointPolledAt *time.Time `json:"checkpoint_polled_at,omitempty"`
 	// WorkspaceCleaned is true after the run's workspace directory has been
 	// removed by CleanupRun.
 	WorkspaceCleaned bool  `json:"workspace_cleaned,omitempty"`

@@ -206,6 +206,99 @@ func TestSoftStopRequestPersistsAndAcknowledges(t *testing.T) {
 	}
 }
 
+func TestCheckpointPollIsReportedLiveAndNotPersisted(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "programs", "instances", "run-checkpoint-poll")
+	if err := os.MkdirAll(workspace, 0700); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(filepath.Join(root, "programs"), fakeDevices{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := &Run{ID: "run-checkpoint-poll", Workspace: workspace, Status: RunStatusRunning, StartedAt: time.Now().UTC()}
+	store.mu.Lock()
+	store.runs[run.ID] = &runState{run: run}
+	store.mu.Unlock()
+
+	// A program that has never asked is indistinguishable from one that cannot.
+	if polled := findRun(t, store, run.ID).CheckpointPolledAt; polled != nil {
+		t.Fatalf("CheckpointPolledAt = %v before the program asked", polled)
+	}
+	if _, err := store.StopRequest(run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if findRun(t, store, run.ID).CheckpointPolledAt == nil {
+		t.Fatal("CheckpointPolledAt is nil after the program asked")
+	}
+	if _, err := store.RequestStop(run.ID); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(workspace, "run.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(data, []byte("checkpoint_polled_at")) {
+		t.Fatalf("run.json persisted a live observation: %s", data)
+	}
+}
+
+func TestRunEndingAfterAStopRequestIsStoppedNotExited(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("/bin/sh is not available on Windows")
+	}
+
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	// Stands in for a program that reaches its checkpoint and leaves cleanly.
+	script := "#!/bin/sh\nwhile [ ! -f stop ]; do sleep 0.02; done\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(source, "run.sh"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := NewStore(filepath.Join(root, "programs"), fakeDevices{
+		devices: []node.DeviceInfo{{Serial: "phone-1", Platform: node.PlatformAndroid, State: "device", NodeID: "node-1"}},
+		nodes:   []node.NodeInfo{{ID: "node-1", Local: true, Addr: "127.0.0.1"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err := registerTestProgram(t, store, source, RegisterUploadOptions{
+		Name:  "Checkpoint Exit",
+		Slug:  "checkpoint-exit",
+		Entry: Entry{Command: "./run.sh"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, err := store.Start(StartOptions{ProgramID: program.ID, Serials: []string{"phone-1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := runs[0]
+	if _, err := store.RequestStop(run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(run.Workspace, "stop"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, store, run.ID)
+
+	stopped := findRun(t, store, run.ID)
+	if stopped.Status != RunStatusStopped {
+		t.Fatalf("status = %q, want %q", stopped.Status, RunStatusStopped)
+	}
+	if stopped.ExitCode != nil {
+		t.Fatalf("exit code = %v, want none: a stop is not a result", *stopped.ExitCode)
+	}
+	if autostartRunEligibleForCrashRestart(&stopped, false) {
+		t.Fatal("a run stopped on request is eligible for crash restart")
+	}
+}
+
 func TestStartMakesLocalEntryExecutable(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("executable bit is not meaningful on Windows")

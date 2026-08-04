@@ -331,6 +331,15 @@ same run ID and workspace:
 
 - **Device reconnect (`autostart_reconnect`).** A run whose device leaves and
   returns is resumed on the ready-state transition.
+
+  A `stopped` run is not, because only an explicit stop produces that status: an
+  operator, a scheduler reaching the end of its window, a coordinator taking the
+  phone for something else. The run was not running when the device went, so the
+  reconnect interrupted nothing and has nothing to restore, and resuming it would
+  overturn a decision Mast was given — the same reason the crash-restart watch
+  leaves `stopped` alone. Nothing this watch exists for is lost: a run the device
+  takes down with it ends `failed`, or `lost` when Mast never collected an exit
+  status.
 - **Ended on its own (`autostart_crash_restart`).** A run that reached `failed`
   or `exited` while its device stayed connected produces no such transition, so
   it is resumed on a backoff instead. Without this the phone stays idle until a
@@ -389,11 +398,14 @@ migrates that value into both new fields and rewrites the checkpoint as schema
 version 2. Consequently every legacy run with `autostart: true` keeps both
 reconnect and crash recovery enabled after upgrading.
 
-Manual `POST /api/runs/{id}/stop` preserves autostart for that run. Clients can
-send `{"autostart_paused": true}` with the stop request when a run should stay
-stopped until an explicit resume, such as battery protection waiting for a
-resume threshold. Mast's own shutdown path stops active programs without
-pausing autostart, so configured runs come back when Mast is launched again.
+Manual `POST /api/runs/{id}/stop` preserves autostart for that run, so it can be
+resumed later with its behavior intact — but neither watch resumes it while Mast
+runs, because both leave `stopped` alone. What that preserved autostart still
+reaches is the startup path: Mast's own shutdown path stops active programs
+without pausing autostart, so configured runs come back when Mast is launched
+again. Clients send `{"autostart_paused": true}` with the stop when a run should
+stay stopped across that too, until an explicit resume — battery protection
+waiting for a recovery threshold is the case it was built for.
 
 When Mast restarts while a run is active, it restores that run as `lost` rather
 than `failed`, because Mast no longer knows whether the program itself failed.

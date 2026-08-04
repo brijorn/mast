@@ -1119,7 +1119,8 @@ Do not combine `enabled` with behavior-specific fields in one request.
 
 `autostart` is a compatibility aggregate and is true when either behavior is
 enabled. `autostart_reconnect` controls startup/lost recovery and device
-ready-state reconnects. `autostart_crash_restart` controls the bounded backoff
+ready-state reconnects; a run that was stopped on purpose is not brought back by
+a reconnect. `autostart_crash_restart` controls the bounded backoff
 supervisor for runs that exit or fail while their device stays connected. A
 failed or exited run with a scheduled attempt includes
 `autostart_supervisor.next_restart_at`; the field clears when that attempt

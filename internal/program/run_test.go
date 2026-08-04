@@ -1477,7 +1477,11 @@ func TestAutostartReconnectResumesAfterDeviceReturns(t *testing.T) {
 	if err := os.MkdirAll(source, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(source, "run.sh"), []byte("#!/bin/sh\nsleep 10\n"), 0700); err != nil {
+	// A device that leaves takes its run down with it, so the run this watch
+	// exists for is a failed one. The program comes up healthy on the second
+	// launch, which is what makes the resume visible as a running run.
+	script := "#!/bin/sh\nif [ ! -f crashed ]; then touch crashed; exit 1; fi\nsleep 10\n"
+	if err := os.WriteFile(filepath.Join(source, "run.sh"), []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1508,10 +1512,10 @@ func TestAutostartReconnectResumesAfterDeviceReturns(t *testing.T) {
 		t.Fatal(err)
 	}
 	store.checkAutostartReconnects()
-	if _, err := store.Stop(StopOptions{ID: started[0].ID}); err != nil {
-		t.Fatal(err)
-	}
 	waitForRun(t, store, started[0].ID)
+	if failed := findRun(t, store, started[0].ID); failed.Status != RunStatusFailed {
+		t.Fatalf("Status = %q, want %q", failed.Status, RunStatusFailed)
+	}
 
 	devices.SetDevices(nil)
 	store.checkAutostartReconnects()
@@ -1531,6 +1535,66 @@ func TestAutostartReconnectResumesAfterDeviceReturns(t *testing.T) {
 	if !resumed.AutostartReconnect || resumed.AutostartCrashRestart {
 		t.Fatalf("behavior flags = reconnect %v crash %v, want true/false",
 			resumed.AutostartReconnect, resumed.AutostartCrashRestart)
+	}
+}
+
+func TestAutostartReconnectDoesNotResumeStoppedRun(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("/bin/sh is not available on Windows")
+	}
+
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "run.sh"), []byte("#!/bin/sh\nsleep 10\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	devices := &mutableFakeDevices{
+		devices: []node.DeviceInfo{{Serial: "phone-1", State: "device", NodeID: "node-1"}},
+	}
+	store, err := NewStore(filepath.Join(root, "programs"), devices)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Shutdown()
+	registered, err := registerTestProgram(t, store, source, RegisterUploadOptions{
+		Name:  "autostart reconnect runner",
+		Entry: Entry{Command: "/bin/sh", Args: []string{"run.sh"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := store.Start(StartOptions{ProgramID: registered.ID, Serials: []string{"phone-1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetRunAutostart(started[0].ID, true); err != nil {
+		t.Fatal(err)
+	}
+	store.checkAutostartReconnects()
+
+	// Stopped on purpose, with autostart left armed for a later resume. A phone
+	// that then drops off and returns must not overturn that: the run was not
+	// running when the device went, so the reconnect has nothing to restore.
+	if _, err := store.Stop(StopOptions{ID: started[0].ID}); err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, store, started[0].ID)
+
+	devices.SetDevices(nil)
+	store.checkAutostartReconnects()
+	devices.SetDevices([]node.DeviceInfo{{Serial: "phone-1", State: "device", NodeID: "node-1"}})
+	store.checkAutostartReconnects()
+
+	stopped := findRun(t, store, started[0].ID)
+	if stopped.Status != RunStatusStopped {
+		t.Fatalf("Status = %q, want %q", stopped.Status, RunStatusStopped)
+	}
+	if !stopped.AutostartReconnect {
+		t.Fatalf("AutostartReconnect = false, want the run left armed for an explicit resume")
 	}
 }
 

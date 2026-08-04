@@ -365,12 +365,24 @@ func autostartRunCanResume(run *Run) bool {
 	return !run.AutostartPaused && !run.WorkspaceCleaned && run.Cmd != ""
 }
 
+// autostartRunEligibleForReconnect leaves a stopped run alone for the same
+// reason the crash-restart predicate does: `stopped` is only ever produced by an
+// explicit Stop — an operator, a scheduler at the end of its window, a
+// coordinator freeing the phone for something else — and a device leaving and
+// returning is not new information about that decision. The run was not running
+// when the device went, so nothing was interrupted to resume.
+//
+// This watch loses nothing by it. A run the device takes down with it ends
+// `failed`, or `lost` when Mast never collected an exit status, never `stopped`.
+// A stop that does want its run back is still asked for: Mast's own shutdown
+// stops runs and resumes them on the startup path, which reads `stopped` and is
+// what `autostart_paused` exists to opt out of.
 func autostartRunEligibleForReconnect(run *Run) bool {
 	if !run.AutostartReconnect || !autostartRunCanResume(run) {
 		return false
 	}
 	switch run.Status {
-	case RunStatusStopped, RunStatusLost, RunStatusFailed, RunStatusExited:
+	case RunStatusLost, RunStatusFailed, RunStatusExited:
 		return true
 	default:
 		return false

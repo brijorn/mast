@@ -763,6 +763,84 @@ func TestListDevicesKeepsAPeerWirelessDeviceTransport(t *testing.T) {
 	}
 }
 
+// A phone plugged into one node and reachable wirelessly from another is one
+// phone. It has to be listed once, under the node a control call reaches.
+func TestListDevicesReportsAPhoneTwoNodesReachOnce(t *testing.T) {
+	nodeA, nodeB := createNodePair(t)
+	defer func() { _ = nodeA.Close() }()
+	defer func() { _ = nodeB.Close() }()
+
+	nodeA.adb = &fakeADB{
+		outputs: map[string][]byte{"": []byte("List of devices attached\n100.118.136.63:5555\tdevice\n")},
+		shellCommandOutputs: map[string][]byte{
+			shellCommandKey("100.118.136.63:5555", "getprop", "ro.serialno"): []byte("R5GL51DZM0F\n"),
+		},
+	}
+	nodeB.adb = &fakeADB{
+		outputs: map[string][]byte{"": []byte("List of devices attached\nR5GL51DZM0F\tdevice\n")},
+	}
+	nodeA.AndroidEnabled = true
+	nodeB.AndroidEnabled = true
+
+	connectNodePair(t, nodeA, nodeB)
+
+	got, err := nodeA.ListDevices()
+	if err != nil {
+		t.Fatalf("ListDevices returned error: %v", err)
+	}
+
+	expected := []DeviceInfo{
+		{
+			Serial:   "R5GL51DZM0F",
+			Address:  "100.118.136.63:5555",
+			Platform: PlatformAndroid,
+			State:    "device",
+			NodeID:   "a",
+		},
+	}
+	if diff := cmp.Diff(expected, got); diff != "" {
+		t.Fatalf("devices mismatch (-want +got):\n%s", diff)
+	}
+
+	// The surviving entry decides the transport, so a control call dials the
+	// route the owning node has rather than the peer's USB name for it.
+	if address := nodeA.deviceAddress("R5GL51DZM0F"); address != "100.118.136.63:5555" {
+		t.Fatalf("device address = %q, want the local transport", address)
+	}
+}
+
+// Emulators are named by their transport on purpose, so the same name on two
+// nodes is two emulators. Collapsing them would delete a real device.
+func TestListDevicesKeepsSameNamedEmulatorsOnDifferentNodes(t *testing.T) {
+	nodeA, nodeB := createNodePair(t)
+	defer func() { _ = nodeA.Close() }()
+	defer func() { _ = nodeB.Close() }()
+
+	nodeA.adb = &fakeADB{
+		outputs: map[string][]byte{"": []byte("List of devices attached\nemulator-5554\tdevice\n")},
+	}
+	nodeB.adb = &fakeADB{
+		outputs: map[string][]byte{"": []byte("List of devices attached\nemulator-5554\tdevice\n")},
+	}
+	nodeA.AndroidEnabled = true
+	nodeB.AndroidEnabled = true
+
+	connectNodePair(t, nodeA, nodeB)
+
+	got, err := nodeA.ListDevices()
+	if err != nil {
+		t.Fatalf("ListDevices returned error: %v", err)
+	}
+
+	expected := []DeviceInfo{
+		{Serial: "emulator-5554", Address: "emulator-5554", Platform: PlatformAndroid, State: "device", NodeID: "a"},
+		{Serial: "emulator-5554", Address: "emulator-5554", Platform: PlatformAndroid, State: "device", NodeID: "b"},
+	}
+	if diff := cmp.Diff(expected, got); diff != "" {
+		t.Fatalf("devices mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestListDevicesReturnsLocalDevicesWhenPeerListingFails(t *testing.T) {
 	nodeA, nodeB := createNodePair(t)
 	defer func() { _ = nodeA.Close() }()

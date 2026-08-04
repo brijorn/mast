@@ -232,11 +232,43 @@ func (n *Node) ListDevices() ([]DeviceInfo, error) {
 		devices = append(devices, result.devices...)
 	}
 
+	devices = keepOneDeviceEachSerial(devices)
+
 	// Peer devices are resolved by the node that owns them; recording their
 	// addresses here lets a host-directed adb call dial a peer phone by the
-	// serial Runway knows it as.
+	// serial Runway knows it as. Deduplication comes first so the address
+	// recorded is the owning node's, not whichever peer answered last.
 	n.rememberDeviceAddresses(devices)
 	return devices, nil
+}
+
+// keepOneDeviceEachSerial collapses a phone that more than one node can reach.
+// A USB cable on one node and a wireless route from another are two transports
+// to one piece of hardware, and the serial names the hardware, so the fleet has
+// to report it once. The first entry wins, which makes the local node the owner
+// because its devices are listed before any peer's — the same precedence
+// DeviceBySerial already uses, so the list names the node a control call
+// actually reaches.
+//
+// A node-local transport is exempt. identity.go deliberately leaves emulators
+// and loopback devices named by their transport rather than a synthetic
+// ro.serialno, so "emulator-5554" on two machines is two emulators, not one
+// seen twice, and merging them would hide a real device.
+func keepOneDeviceEachSerial(devices []DeviceInfo) []DeviceInfo {
+	kept := make([]DeviceInfo, 0, len(devices))
+	seen := make(map[string]struct{}, len(devices))
+	for _, device := range devices {
+		key := device.Serial
+		if isNodeLocalTransport(device.Serial) {
+			key = device.NodeID + "\x00" + device.Serial
+		}
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		kept = append(kept, device)
+	}
+	return kept
 }
 
 func parseBatteryLevel(output string) (*int, error) {

@@ -69,6 +69,12 @@ Devices in a node's startup blacklist are omitted and cannot be selected for
 streams, screenshots, control, DNS, or program runs through normal serial
 lookup.
 
+A device more than one node can reach — plugged into one and wireless from
+another — appears once, under the node that serves control calls for it. The
+local node wins over a peer. The exception is a device named by its transport
+rather than a hardware serial, such as an emulator: `emulator-5554` on two
+nodes is two emulators, so both are listed.
+
 ```json
 [
   {

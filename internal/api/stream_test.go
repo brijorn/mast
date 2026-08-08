@@ -22,18 +22,20 @@ import (
 type fakeBackend struct {
 	mu sync.Mutex
 
-	session        *node.StreamSession
-	err            error
-	devices        []node.DeviceInfo
-	accounts       *node.DeviceAccounts
-	dns            *node.DeviceDNSStatus
-	dnsSet         *node.DeviceDNSStatus
-	orientation    *node.DeviceOrientationStatus
-	orientationSet node.DeviceOrientation
-	calls          int
-	serials        []string
-	options        []streamcfg.Options
-	stopped        []string
+	session         *node.StreamSession
+	err             error
+	devices         []node.DeviceInfo
+	accounts        *node.DeviceAccounts
+	dns             *node.DeviceDNSStatus
+	dnsSet          *node.DeviceDNSStatus
+	orientation     *node.DeviceOrientationStatus
+	orientationSet  node.DeviceOrientation
+	displayPower    *node.DeviceDisplayPowerStatus
+	displayPowerSet node.DeviceDisplayPower
+	calls           int
+	serials         []string
+	options         []streamcfg.Options
+	stopped         []string
 
 	started      chan struct{}
 	release      chan struct{}
@@ -77,6 +79,24 @@ func (f *fakeBackend) SetDeviceOrientation(serial string, orientation node.Devic
 	f.serials = append(f.serials, serial)
 	f.orientationSet = orientation
 	return f.orientation, f.err
+}
+
+func (f *fakeBackend) DeviceDisplayPower(serial string) (*node.DeviceDisplayPowerStatus, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.serials = append(f.serials, serial)
+	return f.displayPower, f.err
+}
+
+func (f *fakeBackend) SetDeviceDisplayPower(
+	serial string,
+	requested node.DeviceDisplayPower,
+) (*node.DeviceDisplayPowerStatus, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.serials = append(f.serials, serial)
+	f.displayPowerSet = requested
+	return f.displayPower, f.err
 }
 
 func (f *fakeBackend) ListNodes() []node.NodeInfo {

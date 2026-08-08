@@ -160,6 +160,12 @@ func (n *Node) ObserveDeviceReady(device DeviceInfo, ready bool) {
 		retry = n.devicePowerRetries[device.Serial]
 		delete(n.devicePowerRetries, device.Serial)
 		delete(n.devicePowerFailures, device.Serial)
+		// A per-device override is one operator instruction about the handset in
+		// front of them, not a setting. A phone that left and came back is not
+		// that handset any more, so it returns to the node's policy rather than
+		// staying lit by a decision nobody remembers making.
+		delete(n.devicePowerOverride, device.Serial)
+		delete(n.devicePowerAsserted, device.Serial)
 	}
 	session := n.devicePowerSessions[device.Serial]
 	if !ready {
@@ -221,17 +227,61 @@ func (n *Node) devicePowerConfig() (managed bool, keepDisplayOff bool) {
 	return true, n.configState.KeepDisplayOff
 }
 
-func (n *Node) reconcileDevicePowerPolicy() {
+// devicePowerIntent resolves what one device's panel should be doing, from the
+// node's steady-state policy and any override an operator set for that handset
+// alone.
+//
+// `keep_display_off` describes the fleet; an override is a deliberate
+// instruction about one phone, so it wins for as long as it lasts. Both answers
+// come back together because "on" is not merely the absence of "off": holding a
+// panel lit against a policy that re-darkens it every thirty seconds needs a
+// control session exactly as much as darkening it does.
+func (n *Node) devicePowerIntent(serial string) (hold bool, on bool) {
 	managed, keepDisplayOff := n.devicePowerConfig()
+	if !managed {
+		return false, false
+	}
+	n.devicePowerMu.Lock()
+	defer n.devicePowerMu.Unlock()
+	return n.devicePowerIntentLocked(serial, keepDisplayOff)
+}
+
+// devicePowerIntentLocked answers for one serial with devicePowerMu already
+// held, and takes `keepDisplayOff` from its caller so that a sweep over every
+// device reads the node config once rather than per phone.
+func (n *Node) devicePowerIntentLocked(serial string, keepDisplayOff bool) (hold bool, on bool) {
+	if override, overridden := n.devicePowerOverride[serial]; overridden {
+		return true, override
+	}
+	return keepDisplayOff, false
+}
+
+// applyDevicePower records what was last successfully asserted, so the node can
+// answer "is this panel dark" with something it did rather than a guess. Only a
+// write that the device accepted counts; a failed one leaves the previous
+// answer standing until the session is discarded.
+func (n *Node) applyDevicePower(serial string, session *devicePowerSession, on bool) error {
+	if err := session.setDisplayPower(on); err != nil {
+		return err
+	}
+	n.devicePowerMu.Lock()
+	if n.devicePowerAsserted == nil {
+		n.devicePowerAsserted = make(map[string]bool)
+	}
+	n.devicePowerAsserted[serial] = on
+	n.devicePowerMu.Unlock()
+	return nil
+}
+
+func (n *Node) reconcileDevicePowerPolicy() {
+	managed, _ := n.devicePowerConfig()
 	if !managed {
 		n.stopAllDevicePowerSessions()
 		return
 	}
-	if !keepDisplayOff {
-		// Disarm active, pending, and retrying display-off work before applying
-		// the independent stay-awake policy below.
-		n.stopAllDevicePowerSessions()
-	}
+	// Disarm active, pending, and retrying work for devices that no longer want
+	// a session, before applying the independent stay-awake policy below.
+	n.stopUnwantedDevicePowerSessions()
 
 	n.devicePowerMu.Lock()
 	serials := make([]string, 0, len(n.devicePowerReady))
@@ -249,8 +299,8 @@ func (n *Node) reconcileDevicePower(serial string) {
 	if err := n.assertDeviceStayAwake(serial); err != nil {
 		log.Printf("apply stay-awake policy to %s: %v", serial, err)
 	}
-	managed, keepDisplayOff := n.devicePowerConfig()
-	if !managed || !keepDisplayOff {
+	hold, wantOn := n.devicePowerIntent(serial)
+	if !hold {
 		return
 	}
 
@@ -261,8 +311,8 @@ func (n *Node) reconcileDevicePower(serial string) {
 	}
 	if session := n.devicePowerSessions[serial]; session != nil {
 		n.devicePowerMu.Unlock()
-		if err := session.setDisplayPower(false); err != nil {
-			log.Printf("re-assert display-off policy for %s: %v", serial, err)
+		if err := n.applyDevicePower(serial, session, wantOn); err != nil {
+			log.Printf("re-assert display power for %s: %v", serial, err)
 			n.discardDevicePowerSession(serial, session)
 		}
 		return
@@ -280,13 +330,13 @@ func (n *Node) reconcileDevicePower(serial string) {
 
 	session, err := n.startDevicePowerSession(attempt, serial)
 	attemptCanceled := attempt.ctx.Err() != nil
-	managed, policyEnabled := n.devicePowerConfig()
+	stillWanted, wantOn := n.devicePowerIntent(serial)
 
 	n.devicePowerMu.Lock()
 	if n.devicePowerStarting[serial] == attempt {
 		delete(n.devicePowerStarting, serial)
 	}
-	keepSession := err == nil && managed && policyEnabled && n.devicePowerReady[serial] && n.devicePowerSessions[serial] == nil
+	keepSession := err == nil && stillWanted && n.devicePowerReady[serial] && n.devicePowerSessions[serial] == nil
 	if keepSession {
 		n.devicePowerSessions[serial] = session
 		delete(n.devicePowerFailures, serial)
@@ -295,8 +345,8 @@ func (n *Node) reconcileDevicePower(serial string) {
 	attempt.release()
 
 	if err != nil {
-		if !attemptCanceled && managed && policyEnabled {
-			log.Printf("start display-off policy for %s: %v", serial, err)
+		if !attemptCanceled && stillWanted {
+			log.Printf("start display power session for %s: %v", serial, err)
 			n.scheduleDevicePowerPolicyRetry(serial)
 		}
 		return
@@ -305,14 +355,16 @@ func (n *Node) reconcileDevicePower(serial string) {
 		_ = session.stop()
 		return
 	}
-	if currentManaged, currentEnabled := n.devicePowerConfig(); !currentManaged || !currentEnabled {
+	currentHold, currentOn := n.devicePowerIntent(serial)
+	if !currentHold {
 		n.discardDevicePowerSession(serial, session)
 		return
 	}
+	wantOn = currentOn
 
 	go n.watchDevicePowerSession(serial, session)
-	if err := session.setDisplayPower(false); err != nil {
-		log.Printf("apply display-off policy to %s: %v", serial, err)
+	if err := n.applyDevicePower(serial, session, wantOn); err != nil {
+		log.Printf("apply display power to %s: %v", serial, err)
 		n.discardDevicePowerSession(serial, session)
 	}
 }
@@ -394,6 +446,7 @@ func (n *Node) discardDevicePowerSession(serial string, session *devicePowerSess
 	removed := false
 	if n.devicePowerSessions[serial] == session {
 		delete(n.devicePowerSessions, serial)
+		delete(n.devicePowerAsserted, serial)
 		removed = true
 	}
 	n.devicePowerMu.Unlock()
@@ -420,8 +473,7 @@ func devicePowerRetryDelay(failures uint) time.Duration {
 }
 
 func (n *Node) scheduleDevicePowerPolicyRetry(serial string) {
-	managed, keepDisplayOff := n.devicePowerConfig()
-	if !managed || !keepDisplayOff {
+	if hold, _ := n.devicePowerIntent(serial); !hold {
 		return
 	}
 
@@ -462,8 +514,8 @@ func (n *Node) scheduleDevicePowerPolicyRetry(serial string) {
 			delete(n.devicePowerRetries, serial)
 			ready := n.devicePowerReady[serial]
 			n.devicePowerMu.Unlock()
-			managed, keepDisplayOff := n.devicePowerConfig()
-			if !ready || !managed || !keepDisplayOff {
+			hold, _ := n.devicePowerIntent(serial)
+			if !ready || !hold {
 				return
 			}
 			n.requestDevicePowerPolicy()
@@ -472,8 +524,7 @@ func (n *Node) scheduleDevicePowerPolicyRetry(serial string) {
 }
 
 func (n *Node) reassertDevicePowerPolicy(serial string) {
-	managed, keepDisplayOff := n.devicePowerConfig()
-	if !managed {
+	if managed, _ := n.devicePowerConfig(); !managed {
 		return
 	}
 	n.devicePowerMu.Lock()
@@ -486,7 +537,8 @@ func (n *Node) reassertDevicePowerPolicy(serial string) {
 	if err := n.assertDeviceStayAwake(serial); err != nil {
 		log.Printf("re-assert stay-awake policy for %s: %v", serial, err)
 	}
-	if !keepDisplayOff {
+	hold, wantOn := n.devicePowerIntent(serial)
+	if !hold {
 		return
 	}
 
@@ -494,30 +546,69 @@ func (n *Node) reassertDevicePowerPolicy(serial string) {
 		n.requestDevicePowerPolicy()
 		return
 	}
-	if err := session.setDisplayPower(false); err != nil {
-		log.Printf("re-assert display-off policy for %s after stream churn: %v", serial, err)
+	if err := n.applyDevicePower(serial, session, wantOn); err != nil {
+		log.Printf("re-assert display power for %s after stream churn: %v", serial, err)
 		n.discardDevicePowerSession(serial, session)
 	}
 }
 
 func (n *Node) stopAllDevicePowerSessions() {
+	n.stopDevicePowerSessions(true)
+}
+
+// stopUnwantedDevicePowerSessions tears down only the devices whose intent no
+// longer asks for a session. A node-wide `keep_display_off` of false used to
+// mean "stop everything", which is no longer true: a phone the operator darkened
+// by hand still needs its session on a node running no policy at all.
+func (n *Node) stopUnwantedDevicePowerSessions() {
+	n.stopDevicePowerSessions(false)
+}
+
+func (n *Node) stopDevicePowerSessions(all bool) {
+	managed, keepDisplayOff := n.devicePowerConfig()
+
 	n.devicePowerMu.Lock()
+	unwanted := func(serial string) bool {
+		if all || !managed {
+			return true
+		}
+		hold, _ := n.devicePowerIntentLocked(serial, keepDisplayOff)
+		return !hold
+	}
 	sessions := make([]*devicePowerSession, 0, len(n.devicePowerSessions))
 	for serial, session := range n.devicePowerSessions {
+		if !unwanted(serial) {
+			continue
+		}
 		sessions = append(sessions, session)
 		delete(n.devicePowerSessions, serial)
+		delete(n.devicePowerAsserted, serial)
 	}
 	attempts := make([]*devicePowerAttempt, 0, len(n.devicePowerStarting))
 	for serial, attempt := range n.devicePowerStarting {
+		if !unwanted(serial) {
+			continue
+		}
 		attempts = append(attempts, attempt)
 		delete(n.devicePowerStarting, serial)
 	}
 	retries := make([]*devicePowerRetry, 0, len(n.devicePowerRetries))
 	for serial, retry := range n.devicePowerRetries {
+		if !unwanted(serial) {
+			continue
+		}
 		retries = append(retries, retry)
 		delete(n.devicePowerRetries, serial)
 	}
-	clear(n.devicePowerFailures)
+	if all {
+		clear(n.devicePowerFailures)
+	} else {
+		for serial := range n.devicePowerFailures {
+			if unwanted(serial) {
+				delete(n.devicePowerFailures, serial)
+			}
+		}
+	}
 	n.devicePowerMu.Unlock()
 
 	for _, retry := range retries {

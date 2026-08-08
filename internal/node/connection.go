@@ -367,6 +367,20 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				break
 			}
 			go n.handleDeviceOrientationSetRequest(peer, req)
+		case transport.TypeDisplayPowerGetRequest:
+			var req transport.DisplayPowerGetRequest
+			if err := json.Unmarshal(message, &req); err != nil {
+				log.Println("decode display power get request:", err)
+				break
+			}
+			go n.handleDisplayPowerGetRequest(peer, req)
+		case transport.TypeDisplayPowerSetRequest:
+			var req transport.DisplayPowerSetRequest
+			if err := json.Unmarshal(message, &req); err != nil {
+				log.Println("decode display power set request:", err)
+				break
+			}
+			go n.handleDisplayPowerSetRequest(peer, req)
 		case transport.TypeStartStreamRequest:
 			var req transport.StartStreamRequest
 			if err := json.Unmarshal(message, &req); err != nil {

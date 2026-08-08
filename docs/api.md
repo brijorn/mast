@@ -16,6 +16,8 @@ network.
 | `GET` | `/api/devices/{serial}/dns` | Read Android private DNS mode for a device. |
 | `PUT` | `/api/devices/{serial}/dns` | Set Android private DNS explicitly. |
 | `PUT` | `/api/devices/{serial}/orientation` | Force an Android device into portrait or landscape. |
+| `GET` | `/api/devices/{serial}/display-power` | Report a device's panel power, the override on it, and the node policy. |
+| `PUT` | `/api/devices/{serial}/display-power` | Turn one device's physical panel on or off, or return it to node policy. |
 | `GET` | `/api/nodes` | List the local node and connected peers. |
 | `GET` | `/api/nodes/{id}/config` | Read local or peer node config. |
 | `PUT` | `/api/nodes/{id}/config` | Update local or peer node config. |
@@ -260,6 +262,47 @@ unsupported error.
   "orientation": "landscape"
 }
 ```
+
+## Device Display Power
+
+```http
+GET /api/devices/{serial}/display-power
+PUT /api/devices/{serial}/display-power
+Content-Type: application/json
+
+{"requested":"on"}
+```
+
+Operator control of one local or peer-owned Android device's physical panel.
+`requested` is `on`, `off`, or `policy` to clear the override and hand the
+device back to the node's `keep_display_off` setting. iOS returns an unsupported
+error.
+
+This drives the panel through the same scrcpy `SET_DISPLAY_POWER` control the
+node policy uses, not Android's power manager. `KEYCODE_SLEEP`, `KEYCODE_WAKEUP`
+and `KEYCODE_POWER` address a different layer and cannot lift a panel a display
+power session is holding down; a caller reaching for them is working the wrong
+control. The Android device stays awake and interactive either way, so
+screenshots and injected input are unaffected.
+
+An override outranks the node policy while it lasts, including across the
+policy's thirty-second re-assertion, and is cleared when the device disconnects
+so a reconnected phone returns to policy.
+
+```json
+{
+  "serial": "android-serial",
+  "platform": "android",
+  "requested": "on",
+  "panel": "on",
+  "policy": "off"
+}
+```
+
+`requested` is the override in force. `panel` is the last display power Mast
+asserted and the device accepted, or `unknown` when Mast holds no session for
+the device — it is deliberately not a guess. `policy` is what the node's config
+alone would hold the panel at, or `unknown` when `keep_display_off` is disabled.
 
 ## Device Accounts
 

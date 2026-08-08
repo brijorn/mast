@@ -195,3 +195,66 @@ func (s *Server) SetDeviceOrientation(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
+
+// Display power is read as well as written, because the caller drawing a button
+// for it must not have to remember what it last asked for. A console that keeps
+// its own memory of "I turned this off" is wrong the moment anything else moves
+// the panel, or the moment it restarts; the node holding the control session is
+// the only thing that can answer.
+func (s *Server) DeviceDisplayPower(w http.ResponseWriter, r *http.Request) {
+	serial := r.PathValue("serial")
+	if serial == "" {
+		http.Error(w, "serial required", http.StatusBadRequest)
+		return
+	}
+
+	status, err := s.node.DeviceDisplayPower(serial)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	if err := json.NewEncoder(w).Encode(status); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+type setDeviceDisplayPowerRequest struct {
+	Requested node.DeviceDisplayPower `json:"requested"`
+}
+
+func (s *Server) SetDeviceDisplayPower(w http.ResponseWriter, r *http.Request) {
+	serial := r.PathValue("serial")
+	if serial == "" {
+		http.Error(w, "serial required", http.StatusBadRequest)
+		return
+	}
+
+	var desired setDeviceDisplayPowerRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&desired); err != nil {
+		http.Error(w, "invalid display power request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	switch desired.Requested {
+	case node.DeviceDisplayPowerOn, node.DeviceDisplayPowerOff, node.DeviceDisplayPowerPolicy:
+	default:
+		http.Error(w, "requested must be on, off, or policy", http.StatusBadRequest)
+		return
+	}
+
+	status, err := s.node.SetDeviceDisplayPower(serial, desired.Requested)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	if err := json.NewEncoder(w).Encode(status); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}

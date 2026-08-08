@@ -264,8 +264,14 @@ func writeFakeScrcpySockets(port int, video bool, audio bool, control bool, send
 			_, _ = io.Copy(io.Discard, conn)
 			return
 		}
-		message := make([]byte, 2)
-		if _, err := io.ReadFull(conn, message); err == nil {
+		// A real control socket stays open for the life of the session, so the
+		// fake has to as well: a reader that hung up after one message made every
+		// later write look like a device that had gone away.
+		for {
+			message := make([]byte, 2)
+			if _, err := io.ReadFull(conn, message); err != nil {
+				return
+			}
 			controlMessages <- message
 		}
 	}

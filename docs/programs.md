@@ -199,8 +199,14 @@ wakes the device from this path and re-asserts the panel-off policy instead.
 Failure to query power state or send a recovery command is logged and does not,
 by itself, abort the stream.
 
-To allow deliberate operator control of the physical panel, opt out at runtime
-through the node config API:
+To move one phone's panel without disturbing the rest of the fleet, use the
+per-device override at `PUT /api/devices/{serial}/display-power`. It writes the
+same `SET_DISPLAY_POWER` control, outranks this policy for that serial alone
+including across the thirty-second re-assertion, and is cleared when the device
+disconnects. See [Device Display Power](api.md#device-display-power).
+
+To take the whole node out of the policy instead, opt out at runtime through the
+node config API:
 
 ```http
 PUT /api/nodes/{node-id}/config

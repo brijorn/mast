@@ -67,6 +67,8 @@ type Node struct {
 	devicePowerStarting map[string]*devicePowerAttempt
 	devicePowerRetries  map[string]*devicePowerRetry
 	devicePowerFailures map[string]uint
+	devicePowerOverride map[string]bool
+	devicePowerAsserted map[string]bool
 	devicePowerWake     chan struct{}
 	batteryMu           sync.RWMutex
 	batteryCache        map[string]batterySnapshot
@@ -122,6 +124,8 @@ func NewNode(id string, addr string, advertiseHost string, androidEnabled bool, 
 		devicePowerStarting: make(map[string]*devicePowerAttempt),
 		devicePowerRetries:  make(map[string]*devicePowerRetry),
 		devicePowerFailures: make(map[string]uint),
+		devicePowerOverride: make(map[string]bool),
+		devicePowerAsserted: make(map[string]bool),
 		devicePowerWake:     make(chan struct{}, 1),
 	}
 	go n.monitorDevicePowerPolicy()

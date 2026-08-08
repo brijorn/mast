@@ -222,6 +222,111 @@ func TestSetDeviceOrientationRejectsInvalidValue(t *testing.T) {
 	}
 }
 
+func TestSetDeviceDisplayPowerReturnsStatus(t *testing.T) {
+	backend := &fakeBackend{
+		displayPower: &node.DeviceDisplayPowerStatus{
+			Serial:    "phone-1",
+			Platform:  node.PlatformAndroid,
+			Requested: node.DeviceDisplayPowerOn,
+			Panel:     node.DeviceDisplayPowerOn,
+			Policy:    node.DeviceDisplayPowerOff,
+		},
+	}
+	server := NewServer(backend)
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodPut,
+		"/api/devices/phone-1/display-power",
+		bytes.NewReader([]byte(`{"requested":"on"}`)),
+	)
+	server.Handler().ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusOK, res.Body.String())
+	}
+	if backend.displayPowerSet != node.DeviceDisplayPowerOn {
+		t.Fatalf("requested = %q, want on", backend.displayPowerSet)
+	}
+	var got node.DeviceDisplayPowerStatus
+	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.Panel != node.DeviceDisplayPowerOn || got.Policy != node.DeviceDisplayPowerOff {
+		t.Fatalf("display power status = %+v, want panel on against an off policy", got)
+	}
+}
+
+// "policy" is the third value, and dropping it would leave an operator unable to
+// hand a phone back to the node once they had taken it.
+func TestSetDeviceDisplayPowerAcceptsPolicy(t *testing.T) {
+	backend := &fakeBackend{displayPower: &node.DeviceDisplayPowerStatus{Serial: "phone-1"}}
+	server := NewServer(backend)
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodPut,
+		"/api/devices/phone-1/display-power",
+		bytes.NewReader([]byte(`{"requested":"policy"}`)),
+	)
+	server.Handler().ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusOK, res.Body.String())
+	}
+	if backend.displayPowerSet != node.DeviceDisplayPowerPolicy {
+		t.Fatalf("requested = %q, want policy", backend.displayPowerSet)
+	}
+}
+
+func TestSetDeviceDisplayPowerRejectsInvalidValue(t *testing.T) {
+	backend := &fakeBackend{}
+	server := NewServer(backend)
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodPut,
+		"/api/devices/phone-1/display-power",
+		bytes.NewReader([]byte(`{"requested":"dim"}`)),
+	)
+	server.Handler().ServeHTTP(res, req)
+
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusBadRequest, res.Body.String())
+	}
+	if len(backend.serials) != 0 {
+		t.Fatalf("backend serials = %+v, want no display power call", backend.serials)
+	}
+}
+
+func TestDeviceDisplayPowerReadsWithoutChangingAnything(t *testing.T) {
+	backend := &fakeBackend{
+		displayPower: &node.DeviceDisplayPowerStatus{
+			Serial: "phone-1",
+			Panel:  node.DeviceDisplayPowerUnknown,
+		},
+	}
+	server := NewServer(backend)
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/devices/phone-1/display-power", nil)
+	server.Handler().ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusOK, res.Body.String())
+	}
+	if backend.displayPowerSet != "" {
+		t.Fatalf("reading display power wrote %q", backend.displayPowerSet)
+	}
+	var got node.DeviceDisplayPowerStatus
+	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.Panel != node.DeviceDisplayPowerUnknown {
+		t.Fatalf("panel = %q, want unknown", got.Panel)
+	}
+}
+
 func TestGetDeviceBlacklistReturnsConfiguredSerials(t *testing.T) {
 	backend := &configNodeBackend{
 		config: &mastconfig.Config{DeviceBlacklist: []string{"ios-2", "android-1", "ios-2"}},

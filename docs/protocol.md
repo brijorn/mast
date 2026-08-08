@@ -244,6 +244,88 @@ settings commands complete.
 }
 ```
 
+## display_power_get_request
+
+Reads the panel power of a local Android device on the destination node: the
+operator override in force, the last power Mast asserted and the device
+accepted, and what the node's `keep_display_off` config alone would hold. `panel`
+is `unknown` when the destination node holds no display power session for the
+device, which is reported rather than guessed.
+
+```json
+{
+  "type": "display_power_get_request",
+  "id": "message-id",
+  "from": "node-a",
+  "to": "node-b",
+  "timestamp": "2026-06-22T17:00:00Z",
+  "payload": {
+    "serial": "remote-123"
+  }
+}
+```
+
+```json
+{
+  "type": "display_power_get_response",
+  "id": "message-id",
+  "from": "node-b",
+  "to": "node-a",
+  "timestamp": "2026-06-22T17:00:01Z",
+  "payload": {
+    "result": {
+      "serial": "remote-123",
+      "platform": "android",
+      "requested": "policy",
+      "panel": "off",
+      "policy": "off"
+    }
+  }
+}
+```
+
+## display_power_set_request
+
+Turns one local Android device's physical panel on or off on the destination
+node, or returns it to that node's policy. `requested` is `on`, `off`, or
+`policy`. The override outranks the destination node's `keep_display_off`
+re-assertion for that serial alone, and the destination node clears it when the
+device disconnects. The response reports the state after the control write, so a
+caller learns whether the panel moved rather than only that the message arrived.
+
+```json
+{
+  "type": "display_power_set_request",
+  "id": "message-id",
+  "from": "node-a",
+  "to": "node-b",
+  "timestamp": "2026-06-22T17:00:00Z",
+  "payload": {
+    "serial": "remote-123",
+    "requested": "on"
+  }
+}
+```
+
+```json
+{
+  "type": "display_power_set_response",
+  "id": "message-id",
+  "from": "node-b",
+  "to": "node-a",
+  "timestamp": "2026-06-22T17:00:01Z",
+  "payload": {
+    "result": {
+      "serial": "remote-123",
+      "platform": "android",
+      "requested": "on",
+      "panel": "on",
+      "policy": "off"
+    }
+  }
+}
+```
+
 ## screenshot_request
 
 Requests a PNG screenshot from a device owned by the destination node.

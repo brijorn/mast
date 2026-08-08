@@ -19,6 +19,10 @@ const (
 	TypeDeviceAccountsGetResponse    = "device_accounts_get_response"
 	TypeDeviceOrientationSetRequest  = "device_orientation_set_request"
 	TypeDeviceOrientationSetResponse = "device_orientation_set_response"
+	TypeDisplayPowerGetRequest       = "display_power_get_request"
+	TypeDisplayPowerGetResponse      = "display_power_get_response"
+	TypeDisplayPowerSetRequest       = "display_power_set_request"
+	TypeDisplayPowerSetResponse      = "display_power_set_response"
 	TypeScreenshotRequest            = "screenshot_request"
 	TypeScreenshotResponse           = "screenshot_response"
 	TypeElementsRequest              = "elements_request"
@@ -214,6 +218,53 @@ type DeviceOrientationSetResponsePayload struct {
 type DeviceOrientationSetResponse struct {
 	RawMessage
 	Payload DeviceOrientationSetResponsePayload `json:"payload"`
+}
+
+type DisplayPowerStatusPayload struct {
+	Serial    string `json:"serial"`
+	Platform  string `json:"platform"`
+	Requested string `json:"requested"`
+	Panel     string `json:"panel"`
+	Policy    string `json:"policy"`
+}
+
+type DisplayPowerGetRequestPayload struct {
+	Serial string `json:"serial"`
+}
+
+type DisplayPowerGetRequest struct {
+	RawMessage
+	Payload DisplayPowerGetRequestPayload `json:"payload"`
+}
+
+type DisplayPowerGetResponsePayload struct {
+	Result *DisplayPowerStatusPayload `json:"result,omitempty"`
+	Error  string                     `json:"error,omitempty"`
+}
+
+type DisplayPowerGetResponse struct {
+	RawMessage
+	Payload DisplayPowerGetResponsePayload `json:"payload"`
+}
+
+type DisplayPowerSetRequestPayload struct {
+	Serial    string `json:"serial"`
+	Requested string `json:"requested"`
+}
+
+type DisplayPowerSetRequest struct {
+	RawMessage
+	Payload DisplayPowerSetRequestPayload `json:"payload"`
+}
+
+type DisplayPowerSetResponsePayload struct {
+	Result *DisplayPowerStatusPayload `json:"result,omitempty"`
+	Error  string                     `json:"error,omitempty"`
+}
+
+type DisplayPowerSetResponse struct {
+	RawMessage
+	Payload DisplayPowerSetResponsePayload `json:"payload"`
 }
 
 type ScreenshotRequestPayload struct {

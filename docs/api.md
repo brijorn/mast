@@ -33,7 +33,7 @@ network.
 | `POST` | `/api/streams` | Start or reuse a scrcpy stream. |
 | `DELETE` | `/api/streams/{serial}` | Stop a local or peer-owned scrcpy stream. |
 | `GET` | `/api/streams/video?serial=...` | Subscribe to binary video packets over websocket. |
-| `GET` | `/api/control/ws?serial=...` | Open a live touch-control websocket. |
+| `GET` | `/api/control/ws?serial=...` | Open a live control websocket (touch, swipe, keypress, button, text). |
 | `POST` | `/api/control/touch` | Send one live touch event. |
 | `POST` | `/api/control/tap` | Send a tap. |
 | `POST` | `/api/control/swipe` | Send a swipe. |
@@ -1044,6 +1044,17 @@ Swipe message:
   "end_x": 320,
   "end_y": 200
 }
+```
+
+The socket carries every control the `POST /api/control/*` routes do, so a
+client holding one open does not have to fall back to HTTP for the discrete
+ones. `keypress` takes `keycode` and an optional `meta_state`, `button` takes
+`name`, and `text` takes `text`:
+
+```json
+{ "type": "keypress", "keycode": 4 }
+{ "type": "button", "name": "back" }
+{ "type": "text", "text": "hello" }
 ```
 
 Error message:

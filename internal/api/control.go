@@ -91,6 +91,10 @@ type controlWSRequest struct {
 	EndX      int     `json:"end_x,omitempty"`
 	EndY      int     `json:"end_y,omitempty"`
 	PointerID *uint64 `json:"pointer_id,omitempty"`
+	Keycode   uint32  `json:"keycode,omitempty"`
+	MetaState uint32  `json:"meta_state,omitempty"`
+	Name      string  `json:"name,omitempty"`
+	Text      string  `json:"text,omitempty"`
 }
 
 type controlWSErrorResponse struct {
@@ -250,6 +254,12 @@ func (s *Server) handleControlWSRequest(conn *websocket.Conn, writeMu *sync.Mute
 		}
 	case "swipe":
 		err = s.node.Swipe(serial, req.StartX, req.StartY, req.EndX, req.EndY)
+	case "keypress":
+		err = s.node.PressKey(serial, req.Keycode, req.MetaState)
+	case "button":
+		err = s.node.PressButton(serial, req.Name)
+	case "text":
+		err = s.node.TypeText(serial, req.Text)
 	}
 	if err != nil {
 		_ = writeControlWSError(conn, writeMu, err.Error())
@@ -269,8 +279,23 @@ func validateControlWSRequest(req controlWSRequest) string {
 		if req.StartX < 0 || req.StartY < 0 || req.EndX < 0 || req.EndY < 0 {
 			return "non-negative coordinates required"
 		}
+	case "keypress":
+		if req.Keycode == 0 {
+			return "keycode required"
+		}
+	case "button":
+		if req.Name == "" {
+			return "button name required"
+		}
+	case "text":
+		if req.Text == "" {
+			return "text required"
+		}
 	default:
-		return "type must be touch or swipe"
+		// Named in full because the socket carries every control the HTTP
+		// routes do: a client that reaches for one and is told only about
+		// pointers reads it as the control being unsupported.
+		return "type must be touch, swipe, keypress, button, or text"
 	}
 
 	return ""

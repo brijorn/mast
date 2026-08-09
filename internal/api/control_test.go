@@ -551,6 +551,7 @@ type controlBackend struct {
 	touchDone  chan struct{}
 	blockTouch chan struct{}
 	swipeDone  chan struct{}
+	buttonDone chan struct{}
 	err        error
 }
 
@@ -610,6 +611,9 @@ func (b *controlBackend) PressKey(serial string, keycode uint32, metaState uint3
 func (b *controlBackend) PressButton(serial string, name string) error {
 	b.buttonSerial = serial
 	b.buttonName = name
+	if b.buttonDone != nil {
+		b.buttonDone <- struct{}{}
+	}
 	return b.err
 }
 
@@ -658,4 +662,33 @@ func (b *controlBackend) SetClipboard(serial string, text string) error {
 
 func wsURL(serverURL string, path string) string {
 	return "ws" + strings.TrimPrefix(serverURL, "http") + path
+}
+
+// The console reaches for the socket first for every control it sends, not
+// just pointers. A socket that answered "type must be touch or swipe" left the
+// Back button — and keypresses and typed text — failing with that message,
+// because the caller had already treated the send as delivered.
+func TestControlWebSocketPressesButton(t *testing.T) {
+	backend := &controlBackend{buttonDone: make(chan struct{}, 1)}
+	server := httptest.NewServer(NewServer(backend).Handler())
+	defer server.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL(server.URL, "/api/control/ws?serial=local-123"), nil)
+	if err != nil {
+		t.Fatalf("dial control websocket: %v", err)
+	}
+	defer conn.Close()
+
+	if err := conn.WriteJSON(map[string]any{"type": "button", "name": "back"}); err != nil {
+		t.Fatalf("write control message: %v", err)
+	}
+
+	select {
+	case <-backend.buttonDone:
+	case <-time.After(time.Second):
+		t.Fatal("button press never reached the backend")
+	}
+	if backend.buttonSerial != "local-123" || backend.buttonName != "back" {
+		t.Fatalf("button = %s on %s", backend.buttonName, backend.buttonSerial)
+	}
 }

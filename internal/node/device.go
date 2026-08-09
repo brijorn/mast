@@ -68,6 +68,10 @@ const (
 
 const peerDeviceRPCTimeout = 10 * time.Second
 
+// Matches the identity probe's bound: both are per-device readings the device
+// listing waits on, and both have a cached answer to fall back to.
+const deviceBatteryTimeout = 3 * time.Second
+
 type adbRunner interface {
 	Devices(ctx context.Context, host string) ([]byte, error)
 	Push(ctx context.Context, host string, serial string, localPath string, remotePath string) error
@@ -491,8 +495,21 @@ func (n *Node) cachedBattery(serial string) (batterySnapshot, bool) {
 	return snapshot, ok
 }
 
+// deviceBattery is bounded for the same reason probeDeviceSerial is: a phone
+// whose transport has gone away is still listed as `device` and answers
+// nothing, and the whole listing waits on the slowest reading. Without a bound
+// of its own this inherits adb's, which is long enough that one dead handset
+// decides how fast the console's phone page loads. A reading that overruns is
+// not fatal — the caller falls back to the last cached percentage.
 func (n *Node) deviceBattery(serial string) (batterySnapshot, error) {
-	output, err := n.adbShell(n.ctx, "", serial, "dumpsys", "battery")
+	ctx := n.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, deviceBatteryTimeout)
+	defer cancel()
+
+	output, err := n.adbShell(ctx, "", serial, "dumpsys", "battery")
 	if err != nil {
 		return batterySnapshot{}, err
 	}

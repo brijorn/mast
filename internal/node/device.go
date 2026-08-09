@@ -553,6 +553,11 @@ func (n *Node) listLocalDevices() ([]DeviceInfo, error) {
 		return nil, err
 	}
 
+	// Each reading is an adb round-trip, so a fleet's worth of them in series is
+	// the whole listing's latency; one unreachable phone alone spends its full
+	// timeout before the next is even asked. Peers are already gathered
+	// concurrently below, and local devices answer independently too.
+	var wg sync.WaitGroup
 	for i := range devices {
 		if devices[i].Platform != PlatformAndroid {
 			continue
@@ -561,17 +566,22 @@ func (n *Node) listLocalDevices() ([]DeviceInfo, error) {
 			continue
 		}
 
-		battery, err := n.deviceBattery(devices[i].Serial)
-		if err != nil {
-			log.Printf("get battery for %s: %v", devices[i].Serial, err)
-			if cached, ok := n.cachedBattery(devices[i].Serial); ok {
-				applyBatterySnapshot(&devices[i], cached)
+		wg.Add(1)
+		go func(device *DeviceInfo) {
+			defer wg.Done()
+			battery, err := n.deviceBattery(device.Serial)
+			if err != nil {
+				log.Printf("get battery for %s: %v", device.Serial, err)
+				if cached, ok := n.cachedBattery(device.Serial); ok {
+					applyBatterySnapshot(device, cached)
+				}
+				return
 			}
-			continue
-		}
-		n.cacheBattery(devices[i].Serial, battery)
-		applyBatterySnapshot(&devices[i], battery)
+			n.cacheBattery(device.Serial, battery)
+			applyBatterySnapshot(device, battery)
+		}(&devices[i])
 	}
+	wg.Wait()
 
 	return devices, nil
 }

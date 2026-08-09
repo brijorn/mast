@@ -335,6 +335,7 @@ func (s *Store) UpdateRunAutostart(id string, opts AutostartOptions) (*Run, erro
 }
 
 func (s *Store) Shutdown() {
+	s.shuttingDown.Store(true)
 	s.monitorCancel()
 	s.mu.Lock()
 	states := make([]*runState, 0, len(s.runs))
@@ -899,13 +900,24 @@ func (s *Store) waitRun(state *runState, stdout, stderr io.Closer) {
 	for index := range state.run.Companions {
 		state.run.Companions[index].PID = 0
 	}
-	// A run that ends after a stop was requested ended because it was asked to,
-	// whether the kill did it or the program reached its own checkpoint first.
-	// Recording that as `exited` loses the only thing that distinguishes it from
-	// a program finishing a session by itself, and the crash-restart watch —
-	// which exists to resume exactly that — would relaunch a run the operator
-	// just stopped.
-	if state.stopping || state.run.StopRequestedAt != nil {
+	// Mast going down is not a decision about the run. Recording it as
+	// `stopped` makes it indistinguishable from a stop somebody asked for, and
+	// the startup resume — which exists to bring back exactly the runs the
+	// daemon took down with it — would relaunch a run an operator had
+	// deliberately stopped. `lost` is what a Mast killed outright already
+	// leaves behind, so both shutdowns now read the same.
+	if s.shuttingDown.Load() {
+		state.run.ExitCode = nil
+		state.run.Status = RunStatusLost
+		state.run.CompletedAt = nil
+		state.run.Error = "mast restarted; run was stopped for shutdown"
+	} else if state.stopping || state.run.StopRequestedAt != nil {
+		// A run that ends after a stop was requested ended because it was asked
+		// to, whether the kill did it or the program reached its own checkpoint
+		// first. Recording that as `exited` loses the only thing that
+		// distinguishes it from a program finishing a session by itself, and
+		// the crash-restart watch — which exists to resume exactly that — would
+		// relaunch a run the operator just stopped.
 		state.run.ExitCode = nil
 		state.run.Status = RunStatusStopped
 		state.run.Error = ""

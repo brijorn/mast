@@ -405,16 +405,20 @@ version 2. Consequently every legacy run with `autostart: true` keeps both
 reconnect and crash recovery enabled after upgrading.
 
 Manual `POST /api/runs/{id}/stop` preserves autostart for that run, so it can be
-resumed later with its behavior intact — but neither watch resumes it while Mast
-runs, because both leave `stopped` alone. What that preserved autostart still
-reaches is the startup path: Mast's own shutdown path stops active programs
-without pausing autostart, so configured runs come back when Mast is launched
-again. Clients send `{"autostart_paused": true}` with the stop when a run should
-stay stopped across that too, until an explicit resume — battery protection
-waiting for a recovery threshold is the case it was built for.
+resumed later with its behavior intact — but no watch resumes it, because all
+three leave `stopped` alone. A stop is a decision somebody made, and neither a
+device returning nor Mast being restarted is new information about it, so a
+stopped run stays stopped until an explicit resume. Clients still send
+`{"autostart_paused": true}` with the stop when a run should additionally not
+be resumed by hand-adjacent paths until a recovery condition is met — battery
+protection waiting for a threshold is the case it was built for.
 
 When Mast restarts while a run is active, it restores that run as `lost` rather
 than `failed`, because Mast no longer knows whether the program itself failed.
+Mast's own shutdown records the runs it kills the same way, so a graceful stop
+and an outright kill leave the same state behind. `lost` is exactly what the
+startup path resumes: it brings back the runs the daemon took down with it,
+and only those.
 
 ### Cooperative stop
 

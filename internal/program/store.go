@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/brijorn/mast/internal/node"
@@ -29,6 +30,10 @@ type Store struct {
 	observedDeviceReady map[string]bool
 	observedDevices     map[string]node.DeviceInfo
 	autostartRestarts   map[string]*autostartRestartState
+	// Read by the exit handler, which runs on the process's own goroutine and
+	// so cannot be holding the store's lock when the shutdown that killed it is
+	// still holding it.
+	shuttingDown atomic.Bool
 }
 
 func (s *Store) SetMastAPIURL(value string) {

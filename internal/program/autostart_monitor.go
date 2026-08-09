@@ -327,8 +327,13 @@ func (s *Store) autostartRunIDsForStartup() []string {
 	ids := make([]string, 0)
 	for id, state := range s.runs {
 		run := state.run
+		// `lost` alone, for the same reason the reconnect watch leaves a
+		// stopped run alone: a stop is a decision, and Mast being restarted is
+		// not new information about it. Everything the daemon took down with
+		// it — killed on shutdown, or killed outright and found dead by
+		// loadRuns — is `lost`, so nothing that should come back is missed.
 		if run.AutostartReconnect && autostartRunCanResume(run) &&
-			(run.Status == RunStatusStopped || run.Status == RunStatusLost) {
+			run.Status == RunStatusLost {
 			ids = append(ids, id)
 		}
 	}
@@ -374,9 +379,9 @@ func autostartRunCanResume(run *Run) bool {
 //
 // This watch loses nothing by it. A run the device takes down with it ends
 // `failed`, or `lost` when Mast never collected an exit status, never `stopped`.
-// A stop that does want its run back is still asked for: Mast's own shutdown
-// stops runs and resumes them on the startup path, which reads `stopped` and is
-// what `autostart_paused` exists to opt out of.
+// Mast's own shutdown ends its runs `lost` for that same reason — the daemon
+// going down says nothing about whether the run was wanted — so the startup
+// path can resume those without reviving a stop anybody asked for.
 func autostartRunEligibleForReconnect(run *Run) bool {
 	if !run.AutostartReconnect || !autostartRunCanResume(run) {
 		return false

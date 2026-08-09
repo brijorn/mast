@@ -1976,3 +1976,114 @@ func TestAutostartRestartStreakSurvivesShortLivedRuns(t *testing.T) {
 		t.Fatal("a run beyond the failure-free recovery window kept its streak")
 	}
 }
+
+// A stop somebody asked for is a decision, and restarting Mast is not new
+// information about it. The startup resume used to read `stopped`, which meant
+// a daemon restart revived every run an operator had deliberately stopped.
+func TestExplicitStopIsNotResumedOnStartup(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("/bin/sh is not available on Windows")
+	}
+
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "run.sh"), []byte("#!/bin/sh\nsleep 10\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	devices := &mutableFakeDevices{
+		devices: []node.DeviceInfo{{Serial: "phone-1", State: "device", NodeID: "node-1"}},
+	}
+	store, err := NewStore(filepath.Join(root, "programs"), devices)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Shutdown()
+	registered, err := registerTestProgram(t, store, source, RegisterUploadOptions{
+		Name:  "stopped runner",
+		Entry: Entry{Command: "/bin/sh", Args: []string{"run.sh"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := store.Start(StartOptions{ProgramID: registered.ID, Serials: []string{"phone-1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconnectEnabled := true
+	crashDisabled := false
+	if _, err := store.UpdateRunAutostart(started[0].ID, AutostartOptions{
+		Reconnect: &reconnectEnabled, CrashRestart: &crashDisabled,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// No AutostartPaused: an ordinary stop, the kind the console sends.
+	if _, err := store.Stop(StopOptions{ID: started[0].ID}); err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, store, started[0].ID)
+
+	if status := findRun(t, store, started[0].ID).Status; status != RunStatusStopped {
+		t.Fatalf("stopped run status = %s, want %s", status, RunStatusStopped)
+	}
+	if ids := store.autostartRunIDsForStartup(); len(ids) != 0 {
+		t.Fatalf("startup autostart ids = %+v, want none", ids)
+	}
+}
+
+// The runs Mast itself takes down have to come back, so they must not be
+// recorded the same way as a stop that was asked for.
+func TestShutdownLeavesItsRunsResumable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("/bin/sh is not available on Windows")
+	}
+
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "run.sh"), []byte("#!/bin/sh\nsleep 10\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	devices := &mutableFakeDevices{
+		devices: []node.DeviceInfo{{Serial: "phone-1", State: "device", NodeID: "node-1"}},
+	}
+	store, err := NewStore(filepath.Join(root, "programs"), devices)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registered, err := registerTestProgram(t, store, source, RegisterUploadOptions{
+		Name:  "shutdown runner",
+		Entry: Entry{Command: "/bin/sh", Args: []string{"run.sh"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := store.Start(StartOptions{ProgramID: registered.ID, Serials: []string{"phone-1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconnectEnabled := true
+	crashDisabled := false
+	if _, err := store.UpdateRunAutostart(started[0].ID, AutostartOptions{
+		Reconnect: &reconnectEnabled, CrashRestart: &crashDisabled,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	store.Shutdown()
+
+	run := findRun(t, store, started[0].ID)
+	if run.Status != RunStatusLost {
+		t.Fatalf("run status after shutdown = %s, want %s", run.Status, RunStatusLost)
+	}
+	ids := store.autostartRunIDsForStartup()
+	if len(ids) != 1 || ids[0] != started[0].ID {
+		t.Fatalf("startup autostart ids = %+v, want [%s]", ids, started[0].ID)
+	}
+}

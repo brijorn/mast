@@ -469,8 +469,10 @@ func (s *Store) startRunProcesses(state *runState, stdout, stderr io.Writer, env
 	command := run.Cmd
 	args := append([]string(nil), run.CmdArgs...)
 	workspace := run.Workspace
+	runID := run.ID
 	s.mu.Unlock()
 
+	command, args = scopedCommand(runID, command, args)
 	cmd := s.startCmd(command, args...)
 	configureRunCommand(cmd)
 	cmd.Dir = workspace
@@ -490,7 +492,8 @@ func (s *Store) startRunProcesses(state *runState, stdout, stderr io.Writer, env
 		process := run.Companions[index]
 		mainPID := run.PID
 		s.mu.Unlock()
-		companionCmd := s.startCmd(process.Cmd, process.CmdArgs...)
+		companionCommand, companionArgs := scopedCommand(runID, process.Cmd, process.CmdArgs)
+		companionCmd := s.startCmd(companionCommand, companionArgs...)
 		configureCompanionRunCommand(companionCmd, mainPID)
 		companionCmd.Dir = workspace
 		companionCmd.Stdout = stdout
@@ -805,7 +808,11 @@ func (s *Store) startOne(p Program, device node.DeviceInfo, nodes []node.NodeInf
 	for key, value := range runVariables {
 		env[key] = value
 	}
+	// Applied after the program's own variables, not before: the MAST_ names
+	// are Mast's answer to who this run is, and a program that declares one
+	// cannot be allowed to answer for it.
 	env["MAST_RUN_ID"] = id
+	env["MAST_DEVICE_ID"] = device.Serial
 
 	command := p.Entry.Command
 	resolvedArgs := make([]string, len(p.Entry.Args))

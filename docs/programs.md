@@ -52,7 +52,8 @@ Response: `201 Created` with the `Program` JSON object.
 ### Managed companions
 
 An entry can declare helper processes that share the main run's workspace,
-environment, logs, process group, Stop action, and resume snapshot:
+environment, logs, process group, cgroup slice, Stop action, and resume
+snapshot:
 
 ```json
 {
@@ -155,6 +156,7 @@ Mast injects the device-routing contract into every new run:
 | `DEVICE_ID` | The device's durable identity: hardware serial or iOS UDID. |
 | `DEVICE_PLATFORM` | `android` or `ios`. |
 | `MAST_NODE_ID` | Node that owns the selected device. |
+| `MAST_DEVICE_ID` | `DEVICE_ID` again, under a name only Mast writes. |
 | `ANDROID_SERIAL` | Android-only compatibility alias for `DEVICE_SERIAL`. |
 
 `DEVICE_SERIAL` and `DEVICE_ID` differ only for a wirelessly connected device.
@@ -163,6 +165,13 @@ adb carries that address; `adb -s` with a hardware serial fails with "device
 not found". `DEVICE_ID` is the value Mast and Runway key durable state on, and
 is what a program should record in evidence or report upward — it survives the
 reconnect that changes the address.
+
+A program's own configuration variables are applied over these, so a program
+that declares a `DEVICE_ID` of its own gets the value it asked for.
+`MAST_RUN_ID` and `MAST_DEVICE_ID` are applied afterwards and cannot be
+redefined that way: anything keying per-phone state that must survive a
+program's configuration — a runner's sandbox, a cache directory — should read
+`MAST_DEVICE_ID`.
 
 Programs are expected to use these values to route screenshots and controls
 through Mast rather than starting their own ADB, WDA, tunnel, or ioslink
@@ -492,6 +501,26 @@ If a program with entry command `test.py` and arguments `["arg1"]` is executed, 
 ```sh
 python3 -u test.py arg1
 ```
+
+### Runners that start their own daemons
+A runner may start background services the program never sees — wine starts a
+`wineserver` on demand, and it outlives the launcher that needed it. Such a
+service leaves the run's process group, which would put it beyond the reach of
+the kill that ends the run, and while it holds the run's inherited log pipes
+Mast cannot observe the run finishing at all.
+
+So on a Linux host with a user manager, each run's processes are started in a
+transient systemd scope under a slice of the run's own, `mast-run-<id>.slice`,
+and a stop kills the slice as well as the process group. A cgroup is not
+escaped by opening a new session, so a daemon a runner starts is stopped with
+the run that started it. Where transient units cannot be made — a macOS peer, a
+Termux node — the process-group kill is still the whole story, and a runner
+that daemonizes on such a host will still leak.
+
+A runner should also keep whatever per-machine state it owns separate per
+phone, keyed on `MAST_DEVICE_ID`. A single shared sandbox reintroduces the same
+problem one level up: one daemon serving every run, which no single run can be
+allowed to kill.
 
 ## Run environment
 

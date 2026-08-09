@@ -41,6 +41,12 @@ func runProcessStatus(run *Run) (alive bool, matches bool) {
 }
 
 func killRunProcess(run *Run) error {
+	// The process group goes first and the slice second, though the slice is
+	// the more complete kill. Callers read a failure here as "there was no
+	// process to kill" and reconcile a run that had already finished; a slice
+	// kill reaps the group's leader too, so leading with it would answer that
+	// question with the corpse it had just made.
+	defer killRunSlice(run.ID)
 	if run.PID <= 0 {
 		return nil
 	}

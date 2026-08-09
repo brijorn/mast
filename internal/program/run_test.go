@@ -50,6 +50,7 @@ printf 'DEVICE_PLATFORM=%s\n' "$DEVICE_PLATFORM"
 printf 'MAST_NODE_ID=%s\n' "$MAST_NODE_ID"
 printf 'MAST_API_URL=%s\n' "$MAST_API_URL"
 printf 'MAST_RUN_ID=%s\n' "$MAST_RUN_ID"
+printf 'MAST_DEVICE_ID=%s\n' "$MAST_DEVICE_ID"
 printf 'PYTHONUNBUFFERED=%s\n' "$PYTHONUNBUFFERED"
 printf 'ARGS=%s\n' "$*"
 `
@@ -123,6 +124,7 @@ printf 'ARGS=%s\n' "$*"
 		"MAST_NODE_ID=peer-a",
 		"MAST_API_URL=http://127.0.0.1:6271",
 		"MAST_RUN_ID=" + runs[0].ID,
+		"MAST_DEVICE_ID=remote-123",
 		"PYTHONUNBUFFERED=1",
 		"ARGS=",
 	} {

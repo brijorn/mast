@@ -55,6 +55,12 @@ func (s *Store) standardDeviceEnv(device node.DeviceInfo) map[string]string {
 		"DEVICE_ADDRESS":  deviceADBTarget(device),
 		"DEVICE_PLATFORM": device.Platform,
 		"MAST_NODE_ID":    device.NodeID,
+		// A program's own configuration may declare a DEVICE_ID of its own and
+		// win, so the durable serial is published a second time under a name
+		// only Mast writes. Anything that has to key per-phone state — a
+		// runner's sandbox, a cache directory — needs an identity a program
+		// cannot redefine out from under it.
+		"MAST_DEVICE_ID": device.Serial,
 	}
 	if apiURL != "" {
 		env["MAST_API_URL"] = apiURL

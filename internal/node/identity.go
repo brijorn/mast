@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -117,6 +118,12 @@ func (n *Node) loadDeviceIdentities(path string) {
 }
 
 func (n *Node) saveDeviceIdentities() {
+	// Identities resolve concurrently, and every saver writes the same temp
+	// path before renaming it into place; one at a time keeps a half-written
+	// file from being the one that gets renamed.
+	n.identitySaveMu.Lock()
+	defer n.identitySaveMu.Unlock()
+
 	n.identityMu.RLock()
 	path := n.identityPath
 	file := deviceIdentityFile{Addresses: make(map[string]deviceIdentityEntry, len(n.identityCache))}
@@ -280,13 +287,28 @@ func (n *Node) resolveDeviceIdentity(device *DeviceInfo, host string) bool {
 	return true
 }
 
+// Identities are probed concurrently because a dead transport answers nothing
+// until its probe times out, and in series every later phone waits behind it —
+// the bound on a single probe only limits the whole listing if the probes
+// overlap. The keep decisions are collected first so the surviving devices are
+// still compacted in the listed order.
 func (n *Node) resolveDeviceIdentities(devices []DeviceInfo, host string) []DeviceInfo {
+	keep := make([]bool, len(devices))
+	var wg sync.WaitGroup
+	for i := range devices {
+		wg.Add(1)
+		go func(device *DeviceInfo, keep *bool) {
+			defer wg.Done()
+			*keep = n.resolveDeviceIdentity(device, host)
+		}(&devices[i], &keep[i])
+	}
+	wg.Wait()
+
 	resolved := devices[:0]
 	for i := range devices {
-		if !n.resolveDeviceIdentity(&devices[i], host) {
-			continue
+		if keep[i] {
+			resolved = append(resolved, devices[i])
 		}
-		resolved = append(resolved, devices[i])
 	}
 	return resolved
 }

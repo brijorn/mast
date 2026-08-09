@@ -76,6 +76,7 @@ type Node struct {
 	identityPath        string
 	identityLoaded      bool
 	identityCache       map[string]deviceIdentityEntry
+	identitySaveMu      sync.Mutex
 	addressMu           sync.RWMutex
 	addressBySerial     map[string]string
 	configMu            sync.RWMutex

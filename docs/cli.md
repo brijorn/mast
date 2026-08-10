@@ -83,8 +83,10 @@ runners.<file_extension>
 ```
 
 `device_blacklist` is a comma- or whitespace-separated list of Android serials
-and iOS UDIDs. It is evaluated when Mast starts, so restart Mast after changing
-it.
+and iOS UDIDs. It is consulted on every device listing, so a change through
+`PUT /api/nodes/{id}/config` or the blacklist endpoints takes effect on the
+running node with no restart. `mast config set` writes the same value for a node
+that is not running.
 
 `keep_display_off` defaults to `true` (including when the key is absent from an
 older config). `mast config set` persists the value for the next start; updating
@@ -191,9 +193,17 @@ mast peer ls
 
 ## device blacklist
 
-Manages the startup blacklist in `config.json`. Blacklisted Android serials and
-iOS UDIDs are omitted from Mast's device list after the next restart, so normal
-stream, control, screenshot, DNS, and program-run paths cannot connect to them.
+Manages the blacklist in `config.json`. Blacklisted Android serials and iOS
+UDIDs are omitted from Mast's device list, so normal stream, control,
+screenshot, DNS, and program-run paths cannot connect to them.
+
+The list governs Mast only; the adb server keeps whatever transports it has, so
+a blacklisted phone stays reachable to `adb` by hand on that host. Excluding a
+phone from a node is therefore not the same as cutting the route to it.
+
+Where two nodes can reach one phone, the node holding it locally owns it, so
+blacklisting it on the node with the wireless route hands the phone back to the
+node holding its cable.
 
 ```sh
 mast device blacklist add android-serial

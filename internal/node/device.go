@@ -544,8 +544,12 @@ func (n *Node) listLocalDeviceStates() ([]DeviceInfo, error) {
 	// Identity is resolved before anything else sees the list, so a device is
 	// never reported — or written down by Runway — under a transport address.
 	devices = n.resolveDeviceIdentities(devices, "")
+	// Blacklisted devices are dropped before their addresses are remembered, so
+	// an excluded transport never becomes the route a host-directed adb call
+	// dials this serial by.
+	devices = n.filterBlacklistedDevices(devices)
 	n.rememberDeviceAddresses(devices)
-	return n.filterBlacklistedDevices(devices), nil
+	return devices, nil
 }
 
 func (n *Node) filterBlacklistedDevices(devices []DeviceInfo) []DeviceInfo {

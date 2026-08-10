@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -380,7 +381,7 @@ func TestParseDevicesOutput(t *testing.T) {
 	}
 }
 
-func TestListLocalDeviceStatesFiltersStartupBlacklist(t *testing.T) {
+func TestListLocalDeviceStatesFiltersBlacklist(t *testing.T) {
 	n, err := NewNode("node-a", ":0", "127.0.0.1", true, false, false)
 	if err != nil {
 		t.Fatal(err)
@@ -812,6 +813,64 @@ func TestListDevicesReportsAPhoneTwoNodesReachOnce(t *testing.T) {
 	// route the owning node has rather than the peer's USB name for it.
 	if address := nodeA.deviceAddress("R5GL51DZM0F"); address != "100.118.136.63:5555" {
 		t.Fatalf("device address = %q, want the local transport", address)
+	}
+}
+
+// The local transport wins that tie, so a wireless route is how a node takes a
+// phone off the node holding its cable. Blacklisting the route on the wireless
+// node is the operator's way of handing it back, and it has to work on a running
+// node: excluding one phone by restarting would stop every run on that node.
+func TestBlacklistedRouteHandsAPhoneBackToItsCableNode(t *testing.T) {
+	nodeA, nodeB := createNodePair(t)
+	defer func() { _ = nodeA.Close() }()
+	defer func() { _ = nodeB.Close() }()
+
+	nodeA.adb = &fakeADB{
+		outputs: map[string][]byte{"": []byte("List of devices attached\n100.118.136.63:5555\tdevice\n")},
+		shellCommandOutputs: map[string][]byte{
+			shellCommandKey("100.118.136.63:5555", "getprop", "ro.serialno"): []byte("R5GL51DZM0F\n"),
+		},
+	}
+	nodeB.adb = &fakeADB{
+		outputs: map[string][]byte{"": []byte("List of devices attached\nR5GL51DZM0F\tdevice\n")},
+	}
+	cfg := mastconfig.Default()
+	cfg.AndroidEnabled = true
+	nodeA.SetConfig(filepath.Join(t.TempDir(), "config.json"), cfg, nil)
+	nodeB.AndroidEnabled = true
+
+	connectNodePair(t, nodeA, nodeB)
+
+	result, err := nodeA.updateLocalConfig(map[string]string{"device_blacklist": "R5GL51DZM0F"})
+	if err != nil {
+		t.Fatalf("updateLocalConfig returned error: %v", err)
+	}
+	if result.RestartRequired {
+		t.Fatalf("restart_required_keys = %+v, want the blacklist applied to the running node", result.RestartRequiredKeys)
+	}
+
+	got, err := nodeA.ListDevices()
+	if err != nil {
+		t.Fatalf("ListDevices returned error: %v", err)
+	}
+
+	expected := []DeviceInfo{
+		{
+			Serial:   "R5GL51DZM0F",
+			Address:  "R5GL51DZM0F",
+			Platform: PlatformAndroid,
+			State:    "device",
+			NodeID:   "b",
+		},
+	}
+	if diff := cmp.Diff(expected, got); diff != "" {
+		t.Fatalf("devices mismatch (-want +got):\n%s", diff)
+	}
+
+	// The excluded route must not stay the recorded way to reach the serial, or
+	// a host-directed call would dial the transport the operator just banned.
+	if address := nodeA.deviceAddress("R5GL51DZM0F"); address != "R5GL51DZM0F" {
+		t.Fatalf("device address = %q, want the cable node's transport", address)
 	}
 }
 

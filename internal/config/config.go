@@ -452,7 +452,7 @@ func restartRequiredKeys(changed []string) []string {
 	restartKeys := make([]string, 0, len(changed))
 	for _, key := range changed {
 		switch key {
-		case "node_id", "bind_addr", "api_addr", "proxy_addr", "programs_dir", "device_blacklist":
+		case "node_id", "bind_addr", "api_addr", "proxy_addr", "programs_dir":
 			restartKeys = append(restartKeys, key)
 		}
 	}

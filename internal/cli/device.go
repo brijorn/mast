@@ -9,7 +9,7 @@ import (
 )
 
 type DeviceCmd struct {
-	Blacklist DeviceBlacklistCmd `cmd:"" help:"Manage the startup device blacklist"`
+	Blacklist DeviceBlacklistCmd `cmd:"" help:"Manage the device blacklist"`
 }
 
 type DeviceBlacklistCmd struct {

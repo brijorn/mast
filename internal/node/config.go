@@ -154,6 +154,12 @@ func (n *Node) persistLocalConfigUpdate(values map[string]string) (*mastconfig.U
 	}
 
 	n.applyNodeConfig(next)
+	// The blacklist is consulted on every listing, so a change to it takes hold
+	// as soon as the node's copy is replaced. Restarting to exclude one phone
+	// would stop every run on the node, which is a price no operator pays for a
+	// single serial — so the exclusion nobody could afford to apply never got
+	// applied at all. Applying it here is what makes the list usable.
+	n.setDeviceBlacklist(next.DeviceBlacklist)
 	n.configState = next.Clone()
 	return &mastconfig.UpdateResult{
 		Config:              next.Clone(),

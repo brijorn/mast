@@ -21,10 +21,10 @@ network.
 | `GET` | `/api/nodes` | List the local node and connected peers. |
 | `GET` | `/api/nodes/{id}/config` | Read local or peer node config. |
 | `PUT` | `/api/nodes/{id}/config` | Update local or peer node config. |
-| `GET` | `/api/nodes/{id}/device-blacklist` | Read a node's startup device blacklist. |
-| `PUT` | `/api/nodes/{id}/device-blacklist` | Replace a node's startup device blacklist. |
-| `POST` | `/api/nodes/{id}/device-blacklist` | Add one serial to a node's startup device blacklist. |
-| `DELETE` | `/api/nodes/{id}/device-blacklist` | Remove one serial from a node's startup device blacklist. |
+| `GET` | `/api/nodes/{id}/device-blacklist` | Read a node's device blacklist. |
+| `PUT` | `/api/nodes/{id}/device-blacklist` | Replace a node's device blacklist. |
+| `POST` | `/api/nodes/{id}/device-blacklist` | Add one serial to a node's device blacklist. |
+| `DELETE` | `/api/nodes/{id}/device-blacklist` | Remove one serial from a node's device blacklist. |
 | `GET` | `/api/update` | Check the local node for a Mast release update. |
 | `POST` | `/api/update` | Apply a Mast release update on the local node. |
 | `GET` | `/api/nodes/{id}/update` | Check a local or peer node for a Mast release update. |
@@ -67,7 +67,7 @@ GET /api/devices
 ```
 
 Returns Android and iOS devices visible to the local node and enabled peers.
-Devices in a node's startup blacklist are omitted and cannot be selected for
+Devices in a node's blacklist are omitted and cannot be selected for
 streams, screenshots, control, DNS, or program runs through normal serial
 lookup.
 
@@ -127,9 +127,14 @@ part of the public device contract.
 
 ## Device Blacklist
 
-The device blacklist is stored in node config and evaluated when Mast starts.
-Changing it through the API persists the next-start value and reports that a
-restart is required.
+The device blacklist is stored in node config and consulted on every device
+listing, so changing it through the API applies to the running node immediately —
+excluding one phone never costs the runs on the rest of the node.
+
+The list governs Mast's own view. Existing adb transports are left as they are,
+so a blacklisted phone remains reachable to `adb` by hand on that host, and a
+node excluded from owning a phone can still be the one a script drives it
+through.
 
 ```http
 GET /api/nodes/{id}/device-blacklist
@@ -172,8 +177,8 @@ Successful mutation response:
 {
   "serials": ["android-serial", "ios-udid"],
   "changed_keys": ["device_blacklist"],
-  "restart_required": true,
-  "restart_required_keys": ["device_blacklist"]
+  "restart_required": false,
+  "restart_required_keys": []
 }
 ```
 
@@ -482,7 +487,7 @@ Response body:
   },
   "changed_keys": ["adb_port", "android_enabled", "api_addr", "device_blacklist", "keep_display_off", "lock_portrait", "node_id", "proxy_enabled", "runners..py"],
   "restart_required": true,
-  "restart_required_keys": ["api_addr", "device_blacklist", "node_id"]
+  "restart_required_keys": ["api_addr", "node_id"]
 }
 ```
 
@@ -491,13 +496,14 @@ Supported config keys are `node_id`, `bind_addr`, `proxy_addr`, `api_addr`,
 `proxy_enabled`, `lock_portrait`, `keep_display_off`, `device_blacklist`, and
 `runners.<file_extension>`.
 
-Listener, directory, and startup device fields such as `bind_addr`, `api_addr`,
-`proxy_addr`, `programs_dir`, and `device_blacklist` are persisted immediately
-but require a restart to fully take effect. Changing `node_id` also requires a
-restart because it changes the peer identity advertised by the running node.
+Listener and directory fields such as `bind_addr`, `api_addr`, `proxy_addr`, and
+`programs_dir` are persisted immediately but require a restart to fully take
+effect. Changing `node_id` also requires a restart because it changes the peer
+identity advertised by the running node.
 
 Runtime fields such as Android/iOS visibility, ADB port, advertised host, proxy
-enablement, portrait locking, Android display power policy, and runner mappings are applied to the running
+enablement, portrait locking, Android display power policy, the device
+blacklist, and runner mappings are applied to the running
 node when possible. Changing `proxy_addr` while the proxy is already running
 still requires a restart.
 

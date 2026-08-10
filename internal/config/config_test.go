@@ -88,7 +88,7 @@ func TestApplyValuesUpdatesNodeIDAndRequiresRestart(t *testing.T) {
 	}
 }
 
-func TestApplyValuesUpdatesDeviceBlacklistAndRequiresRestart(t *testing.T) {
+func TestApplyValuesUpdatesDeviceBlacklistWithoutRequiringRestart(t *testing.T) {
 	cfg := Default()
 
 	got, changed, restartKeys, err := ApplyValues(cfg, map[string]string{
@@ -110,8 +110,10 @@ func TestApplyValuesUpdatesDeviceBlacklistAndRequiresRestart(t *testing.T) {
 	if len(changed) != 1 || changed[0] != "device_blacklist" {
 		t.Fatalf("changed = %+v, want [device_blacklist]", changed)
 	}
-	if len(restartKeys) != 1 || restartKeys[0] != "device_blacklist" {
-		t.Fatalf("restartKeys = %+v, want [device_blacklist]", restartKeys)
+	// Excluding one phone must not cost every run on the node, so the list is
+	// applied to the running node rather than deferred to the next start.
+	if len(restartKeys) != 0 {
+		t.Fatalf("restartKeys = %+v, want []", restartKeys)
 	}
 }
 

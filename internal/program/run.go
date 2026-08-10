@@ -105,7 +105,7 @@ func (s *Store) reconcileActiveRunProcesses() {
 			markRunLost(run, "process pid is now owned by another process")
 		} else {
 			markRunLost(run, "process finished before Mast collected exit status")
-			run.PID = 0
+			clearRunPID(run)
 		}
 		changed = append(changed, nextRunSnapshot(run))
 	}
@@ -170,7 +170,7 @@ func (s *Store) Stop(opts StopOptions) (*Run, error) {
 	}
 	state.stopping = true
 	if state.run.PID == 0 {
-		state.run.PID = state.cmd.Process.Pid
+		setRunPID(state.run, state.cmd.Process.Pid)
 	}
 	run := nextRunSnapshot(state.run)
 	s.mu.Unlock()
@@ -264,7 +264,7 @@ func markRunStopped(run *Run) {
 	run.CompletedAt = &now
 	run.ExitCode = nil
 	run.Error = ""
-	run.PID = 0
+	clearRunPID(run)
 }
 
 func markRunLost(run *Run, message string) {
@@ -345,7 +345,7 @@ func (s *Store) Shutdown() {
 			(state.run.Status == RunStatusRunning || state.run.Status == RunStatusStarting) {
 			state.stopping = true
 			if state.run.PID == 0 {
-				state.run.PID = state.cmd.Process.Pid
+				setRunPID(state.run, state.cmd.Process.Pid)
 			}
 			states = append(states, state)
 			runs = append(runs, cloneRun(state.run))
@@ -484,7 +484,7 @@ func (s *Store) startRunProcesses(state *runState, stdout, stderr io.Writer, env
 	}
 	s.mu.Lock()
 	state.cmd = cmd
-	run.PID = cmd.Process.Pid
+	setRunPID(run, cmd.Process.Pid)
 	s.mu.Unlock()
 
 	for index := range run.Companions {
@@ -703,7 +703,7 @@ func (s *Store) Resume(opts ResumeOptions) (*Run, error) {
 	run.ExitCode = nil
 	run.Error = ""
 	run.CompletedAt = nil
-	run.PID = 0
+	clearRunPID(run)
 	for index := range run.Companions {
 		run.Companions[index].PID = 0
 		run.Companions[index].Error = ""
@@ -903,7 +903,7 @@ func (s *Store) waitRun(state *runState, stdout, stderr io.Closer) {
 	now := time.Now().UTC()
 	s.mu.Lock()
 	state.run.CompletedAt = &now
-	state.run.PID = 0
+	clearRunPID(state.run)
 	for index := range state.run.Companions {
 		state.run.Companions[index].PID = 0
 	}

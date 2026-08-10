@@ -37,7 +37,49 @@ func runProcessStatus(run *Run) (alive bool, matches bool) {
 		return false, false
 	}
 
-	return true, processCwdMatchesRun(run)
+	return true, processIdentityMatchesRun(run)
+}
+
+// processIdentityMatchesRun reports whether the live PID is still the process
+// this run started.
+//
+// A run recorded before start times were kept has nothing better to be asked
+// than where it is standing, so the old test remains for those. It is the
+// weaker one — a process is free to move — and it is only ever reached by a
+// run that has been alive since before this Mast.
+func processIdentityMatchesRun(run *Run) bool {
+	if run.PIDStartTime > 0 {
+		started, ok := processStartTime(run.PID)
+		return ok && started == run.PIDStartTime
+	}
+	return processCwdMatchesRun(run)
+}
+
+// processStartTime reads a PID's start time from /proc.
+//
+// The command name sits in parentheses in the middle of the line and may hold
+// both spaces and parentheses of its own, so the fields are counted from the
+// last ')' rather than from the beginning. Everything after it is positional:
+// state is field 3, and start time is field 22.
+func processStartTime(pid int) (uint64, bool) {
+	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		return 0, false
+	}
+	end := strings.LastIndexByte(string(data), ')')
+	if end < 0 {
+		return 0, false
+	}
+	fields := strings.Fields(string(data)[end+1:])
+	const startTimeField = 22 - 3
+	if len(fields) <= startTimeField {
+		return 0, false
+	}
+	started, err := strconv.ParseUint(fields[startTimeField], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return started, true
 }
 
 func killRunProcess(run *Run) error {

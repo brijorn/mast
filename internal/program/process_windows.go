@@ -35,6 +35,11 @@ func runProcessStatus(run *Run) (alive bool, matches bool) {
 	return true, true
 }
 
+// processStartTime has no counterpart here. The Windows check asks the task
+// list whether the PID exists at all and never has to tell one owner of a PID
+// from another, so there is no start time worth recording.
+func processStartTime(_ int) (uint64, bool) { return 0, false }
+
 func killRunProcess(run *Run) error {
 	var errs []error
 	for _, companion := range run.Companions {

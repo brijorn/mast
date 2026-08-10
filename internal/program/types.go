@@ -97,14 +97,27 @@ type Run struct {
 	Env                   map[string]string `json:"env,omitempty"`
 	// Cmd and CmdArgs are the resolved command and arguments used to start this
 	// run. They are persisted so that Resume can re-execute the same process.
-	Cmd                string       `json:"cmd,omitempty"`
-	CmdArgs            []string     `json:"cmd_args,omitempty"`
-	Companions         []RunProcess `json:"companions,omitempty"`
-	PID                int          `json:"pid,omitempty"`
-	StartedAt          time.Time    `json:"started_at"`
-	CompletedAt        *time.Time   `json:"completed_at,omitempty"`
-	StopRequestedAt    *time.Time   `json:"stop_requested_at,omitempty"`
-	StopAcknowledgedAt *time.Time   `json:"stop_acknowledged_at,omitempty"`
+	Cmd        string       `json:"cmd,omitempty"`
+	CmdArgs    []string     `json:"cmd_args,omitempty"`
+	Companions []RunProcess `json:"companions,omitempty"`
+	PID        int          `json:"pid,omitempty"`
+	// PIDStartTime is when the kernel started PID, in the clock ticks since
+	// boot that /proc reports. It is the run's claim on that number: a PID is
+	// only reused by a process that started later, so a start time that still
+	// matches is proof this is the same process and not a stranger wearing its
+	// PID.
+	//
+	// The process itself is what has to be recognized, and nothing it does to
+	// its own environment may change the answer. Identifying it by working
+	// directory instead cost a run its life: Wine moves into the wineserver's
+	// socket directory while it starts that server, and a run checked inside
+	// those few hundred milliseconds looked like a stranger and was declared
+	// lost while it was running perfectly well.
+	PIDStartTime       uint64     `json:"pid_start_time,omitempty"`
+	StartedAt          time.Time  `json:"started_at"`
+	CompletedAt        *time.Time `json:"completed_at,omitempty"`
+	StopRequestedAt    *time.Time `json:"stop_requested_at,omitempty"`
+	StopAcknowledgedAt *time.Time `json:"stop_acknowledged_at,omitempty"`
 	// CheckpointPolledAt is the last time this run's program asked whether a
 	// stop is pending. Only a program built on FrameKit's checkpoint loop ever
 	// asks, so its presence is the proof that a soft stop can be honored at

@@ -229,20 +229,51 @@ Cache-Control: no-store
 GET /api/devices/{serial}/elements
 ```
 
-Returns the current Android UIAutomator hierarchy as normalized elements for a
-local or peer-owned device. Labels prefer `content-desc` and fall back to
-visible text. Bounds use physical Android screen coordinates.
+Returns the device's accessibility hierarchy as normalized elements, for a
+local or peer-owned device on either platform.
+
+Android reads the UIAutomator hierarchy over ADB: `identifier` is `resource-id`,
+`label` prefers `content-desc` and falls back to visible text, and bounds use
+physical screen coordinates.
+
+iOS reads WebDriverAgent's source tree through the device's ioslink session,
+which is opened if the phone is not already streaming. `identifier` is the
+accessibility `name` — the attribute an automation matches on — and `clickable`
+reports WDA's `visible`, since WDA has no clickable attribute of its own.
+Rectangles are in logical points, the same space `/api/control/tap` takes.
+
+On both platforms a node without a usable rectangle is omitted rather than
+reported at the origin, where it would read as a real control in the top-left
+corner and be tapped.
 
 ```json
 [
   {
-    "type": "android.widget.ImageButton",
+    "type": "XCUIElementTypeButton",
+    "identifier": "closeButton",
     "label": "Close",
-    "rect": {"x": 810, "y": 2227, "width": 270, "height": 90},
+    "rect": {"x": 16, "y": 64, "width": 44, "height": 44},
     "clickable": true,
     "enabled": true
   }
 ]
+```
+
+## Device Foreground App
+
+```http
+GET /api/devices/{serial}/foreground-app
+```
+
+Reports the bundle identifier of the app currently in front. iOS only: Android
+programs read the foreground package through ADB themselves, while iOS control
+sessions are owned by Mast. Every WDA spelling of the key is tried, so a build
+that names it differently fails loudly rather than reporting no app in front.
+
+```json
+{
+  "bundle_id": "com.pocketchamps.game"
+}
 ```
 
 ## Device Orientation
@@ -877,11 +908,92 @@ Successful response:
 POST /api/control/launch
 ```
 
-Foregrounds an installed app by its package name. Android only: the owning
-node runs `monkey -p {package} 1` over ADB, which resolves the launcher
-activity itself. iOS devices return an error. The package must match
-`^[A-Za-z0-9._]+$`. Requests for peer-owned devices are forwarded to the
-owning node fire-and-forget, like other control requests.
+Foregrounds an installed app by its package or bundle identifier. Android runs
+`monkey -p {package} 1` over ADB, which resolves the launcher activity itself;
+iOS launches through the device's ioslink session. The identifier must match
+`^[A-Za-z0-9._-]+$` — hyphens are accepted because an iOS bundle identifier may
+contain them and never reaches a shell. Requests for peer-owned devices are
+forwarded to the owning node fire-and-forget, like other control requests.
+
+## Terminate App
+
+```http
+POST /api/control/terminate
+```
+
+Stops a named app. Android runs `am force-stop`; iOS terminates through its
+ioslink session. This is the counterpart to launch, not a way to background an
+app — a terminated app loses whatever state it held.
+
+Request body:
+
+```json
+{
+  "serial": "00008140-001D38D11129401C",
+  "package": "com.pocketchamps.game"
+}
+```
+
+Successful response:
+
+```http
+204 No Content
+```
+
+## Hold
+
+```http
+POST /api/control/hold
+```
+
+Presses one point and keeps the pointer down. iOS only. A game that tells a
+long press from a tap measures how long the pointer stayed down, which a swipe
+between two points does not promise. `duration_ms` defaults to 500 — below
+that a press reads as an ordinary tap.
+
+Request body:
+
+```json
+{
+  "serial": "00008140-001D38D11129401C",
+  "x": 120,
+  "y": 340,
+  "duration_ms": 900
+}
+```
+
+Successful response:
+
+```http
+204 No Content
+```
+
+## Drag
+
+```http
+POST /api/control/drag
+```
+
+Delivers a whole touch path as one gesture. iOS only. At least two points are
+required; the intermediate points are the reason this is not a swipe, since a
+caller that shaped a curve to look human loses it if the transport keeps only
+the endpoints. `duration_ms` defaults to 300.
+
+Request body:
+
+```json
+{
+  "serial": "00008140-001D38D11129401C",
+  "points": [{"x": 10, "y": 20}, {"x": 30, "y": 40}, {"x": 50, "y": 60}],
+  "duration_ms": 450
+}
+```
+
+Successful response:
+
+```http
+204 No Content
+```
 
 Request body:
 

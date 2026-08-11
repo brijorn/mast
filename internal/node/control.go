@@ -33,6 +33,19 @@ type SwipeCommand struct {
 
 const iosTouchMinMoveDistance = 2
 
+const (
+	// A press shorter than this reads as an ordinary tap on iOS, so it is the
+	// floor a caller gets when it asks for a hold without saying how long.
+	defaultHoldDurationMS = 500
+	defaultDragDurationMS = 300
+)
+
+// DragPoint is one step of a drag path in device input coordinates.
+type DragPoint struct {
+	X int `json:"x"`
+	Y int `json:"y"`
+}
+
 func (n *Node) touchLocal(serial string, action string, x int, y int) error {
 	session, err := n.controlSession(serial)
 	if err != nil {
@@ -241,14 +254,221 @@ func (n *Node) launchAppLocal(serial string, packageName string) error {
 		return err
 	}
 
+	if device.Platform == PlatformIOS {
+		session, err := n.controlSession(serial)
+		if err != nil {
+			return err
+		}
+		return n.launchAppLocalIOS(session, packageName)
+	}
 	if device.Platform != PlatformAndroid {
-		return errors.New("launch app is only supported on Android devices")
+		return fmt.Errorf("launch app is unavailable for platform %s", device.Platform)
 	}
 
 	// monkey resolves the package's launcher activity itself, so a bare
 	// package name is enough to foreground the app.
 	_, err = n.adbShell(n.ctx, "", serial, "monkey", "-p", packageName, "1")
 	return err
+}
+
+func (n *Node) launchAppLocalIOS(session *StreamSession, bundleID string) error {
+	if session.iosDevice == nil {
+		return errors.New("iOS control connection not available")
+	}
+	ctx, cancel := context.WithTimeout(n.ctx, iosCommandTimeout)
+	defer cancel()
+	return session.iosDevice.LaunchApp(ctx, bundleID)
+}
+
+// TerminateApp stops one named app. It is the counterpart to LaunchApp rather
+// than a way to background one: an app terminated here loses whatever state it
+// held, which is why AppActivator exists separately for the caller that only
+// wants the app out of the way.
+func (n *Node) TerminateApp(serial string, packageName string) error {
+	device, err := n.DeviceBySerial(serial)
+	if err != nil {
+		return err
+	}
+
+	if device.NodeID == n.ID {
+		return n.terminateAppLocal(serial, packageName)
+	}
+
+	payload := transport.TerminateAppRequestPayload{
+		Serial:  serial,
+		Package: packageName,
+	}
+
+	return n.sendPeerRequest(device.NodeID, transport.TypeTerminateAppRequest, payload)
+}
+
+func (n *Node) terminateAppLocal(serial string, packageName string) error {
+	device, err := n.localDeviceBySerial(serial)
+	if err != nil {
+		return err
+	}
+
+	if device.Platform == PlatformIOS {
+		session, err := n.controlSession(serial)
+		if err != nil {
+			return err
+		}
+		if session.iosDevice == nil {
+			return errors.New("iOS control connection not available")
+		}
+		ctx, cancel := context.WithTimeout(n.ctx, iosCommandTimeout)
+		defer cancel()
+		return session.iosDevice.TerminateApp(ctx, packageName)
+	}
+	if device.Platform != PlatformAndroid {
+		return fmt.Errorf("terminate app is unavailable for platform %s", device.Platform)
+	}
+
+	_, err = n.adbShell(n.ctx, "", serial, "am", "force-stop", packageName)
+	return err
+}
+
+// ForegroundApp reports the bundle identifier of the app currently in front.
+// Android programs read this through adb themselves, so only iOS — whose
+// control session Mast owns — needs it here.
+func (n *Node) ForegroundApp(serial string) (string, error) {
+	if serial == "" {
+		return "", errors.New("serial required")
+	}
+	device, err := n.DeviceBySerial(serial)
+	if err != nil {
+		return "", err
+	}
+
+	if device.NodeID == n.ID {
+		return n.foregroundAppLocal(serial)
+	}
+	return n.peerForegroundApp(n.ctx, device.NodeID, serial)
+}
+
+func (n *Node) foregroundAppLocal(serial string) (string, error) {
+	device, err := n.localDeviceBySerial(serial)
+	if err != nil {
+		return "", err
+	}
+	if device.Platform != PlatformIOS {
+		return "", fmt.Errorf("foreground app is unavailable for platform %s", device.Platform)
+	}
+
+	session, err := n.controlSession(serial)
+	if err != nil {
+		return "", err
+	}
+	if session.iosDevice == nil {
+		return "", errors.New("iOS control connection not available")
+	}
+	ctx, cancel := context.WithTimeout(n.ctx, iosCommandTimeout)
+	defer cancel()
+	info, err := session.iosDevice.ActiveAppInfo(ctx)
+	if err != nil {
+		return "", err
+	}
+	// WDA has spelled this key differently across builds, and an empty answer
+	// would read as "no app in front" rather than "this build names it something
+	// else", so every known spelling is tried before failing.
+	for _, key := range []string{"bundleId", "bundleID", "bundle_id", "CFBundleIdentifier"} {
+		if value, ok := info[key].(string); ok && strings.TrimSpace(value) != "" {
+			return value, nil
+		}
+	}
+	return "", fmt.Errorf("foreground bundle id not found in %+v", info)
+}
+
+// Hold presses one point and keeps the pointer down. A game that tells a long
+// press from a tap measures how long the pointer stayed down, which a swipe
+// between two points does not promise.
+func (n *Node) Hold(serial string, x int, y int, durationMS int) error {
+	device, err := n.DeviceBySerial(serial)
+	if err != nil {
+		return err
+	}
+
+	if device.NodeID == n.ID {
+		return n.holdLocal(serial, x, y, durationMS)
+	}
+
+	payload := transport.HoldRequestPayload{
+		Serial:     serial,
+		X:          x,
+		Y:          y,
+		DurationMS: durationMS,
+	}
+
+	return n.sendPeerRequest(device.NodeID, transport.TypeHoldRequest, payload)
+}
+
+func (n *Node) holdLocal(serial string, x int, y int, durationMS int) error {
+	session, err := n.controlSession(serial)
+	if err != nil {
+		return err
+	}
+	if session.Platform != PlatformIOS {
+		return fmt.Errorf("hold is unavailable for platform %s", session.Platform)
+	}
+	if session.iosDevice == nil {
+		return errors.New("iOS control connection not available")
+	}
+	if durationMS <= 0 {
+		durationMS = defaultHoldDurationMS
+	}
+	ctx, cancel := context.WithTimeout(n.ctx, iosCommandTimeout+time.Duration(durationMS)*time.Millisecond)
+	defer cancel()
+	return session.iosDevice.Hold(ctx, ioslink.HoldRequest{
+		X:        float64(x),
+		Y:        float64(y),
+		Duration: float64(durationMS) / 1000,
+	})
+}
+
+// Drag delivers a whole touch path in one gesture. The path matters: a caller
+// that has shaped a curve to look human loses it if the transport keeps only
+// the endpoints.
+func (n *Node) Drag(serial string, points []DragPoint, durationMS int) error {
+	device, err := n.DeviceBySerial(serial)
+	if err != nil {
+		return err
+	}
+
+	if device.NodeID == n.ID {
+		return n.dragLocal(serial, points, durationMS)
+	}
+
+	payload := transport.DragRequestPayload{
+		Serial:     serial,
+		DurationMS: durationMS,
+		Points:     make([]transport.DragPoint, len(points)),
+	}
+	for index, point := range points {
+		payload.Points[index] = transport.DragPoint{X: point.X, Y: point.Y}
+	}
+
+	return n.sendPeerRequest(device.NodeID, transport.TypeDragRequest, payload)
+}
+
+func (n *Node) dragLocal(serial string, points []DragPoint, durationMS int) error {
+	if len(points) < 2 {
+		return errors.New("drag needs at least two points")
+	}
+	session, err := n.controlSession(serial)
+	if err != nil {
+		return err
+	}
+	if session.Platform != PlatformIOS {
+		return fmt.Errorf("drag is unavailable for platform %s", session.Platform)
+	}
+	if durationMS <= 0 {
+		durationMS = defaultDragDurationMS
+	}
+	path := make([]iosTouchPoint, len(points))
+	for index, point := range points {
+		path[index] = iosTouchPoint{X: point.X, Y: point.Y}
+	}
+	return n.dragLocalIOS(session, path, time.Duration(durationMS)*time.Millisecond)
 }
 
 func (n *Node) LaunchApp(serial string, packageName string) error {
@@ -460,6 +680,41 @@ func (n *Node) getPeerClipboard(ctx context.Context, peerID string, serial strin
 		return "", fmt.Errorf("clipboard from peer %s: %s", peerID, res.Payload.Error)
 	}
 	return res.Payload.Text, nil
+}
+
+func (n *Node) peerForegroundApp(ctx context.Context, peerID, serial string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, peerDeviceRPCTimeout)
+	defer cancel()
+	response, err := n.sendPeerRPC(ctx, peerID, transport.TypeForegroundAppRequest, transport.ForegroundAppRequestPayload{Serial: serial})
+	if err != nil {
+		return "", fmt.Errorf("foreground app from peer %s: %w", peerID, err)
+	}
+	if response.messageType != transport.TypeForegroundAppResponse {
+		return "", fmt.Errorf("unexpected response type: %s", response.messageType)
+	}
+	var result transport.ForegroundAppResponse
+	if err := json.Unmarshal(response.data, &result); err != nil {
+		return "", err
+	}
+	if result.Payload.Error != "" {
+		return "", fmt.Errorf("foreground app from peer %s: %s", peerID, result.Payload.Error)
+	}
+	return result.Payload.Result, nil
+}
+
+func (n *Node) handleForegroundAppRequest(peer *PeerConn, req transport.ForegroundAppRequest) {
+	bundleID, err := n.foregroundAppLocal(req.Payload.Serial)
+	payload := transport.ForegroundAppResponsePayload{}
+	if err != nil {
+		payload.Error = err.Error()
+	} else {
+		payload.Result = bundleID
+	}
+
+	n.writePeerResponse(peer, transport.TypeForegroundAppResponse, req.RawMessage, payload)
 }
 
 func (n *Node) handleClipboardGetRequest(peer *PeerConn, req transport.ClipboardGetRequest) {

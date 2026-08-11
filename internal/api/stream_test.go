@@ -355,6 +355,22 @@ func (f *fakeBackend) LaunchApp(_ string, _ string) error {
 	return nil
 }
 
+func (f *fakeBackend) TerminateApp(_ string, _ string) error {
+	return nil
+}
+
+func (f *fakeBackend) ForegroundApp(_ string) (string, error) {
+	return "", nil
+}
+
+func (f *fakeBackend) Hold(_ string, _, _ int, _ int) error {
+	return nil
+}
+
+func (f *fakeBackend) Drag(_ string, _ []node.DragPoint, _ int) error {
+	return nil
+}
+
 func (f *fakeBackend) GetClipboard(_ string) (string, error) {
 	return "", nil
 }

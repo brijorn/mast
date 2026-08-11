@@ -44,6 +44,10 @@ type nodeBackend interface {
 	PressButton(serial string, name string) error
 	TypeText(serial string, text string) error
 	LaunchApp(serial string, packageName string) error
+	TerminateApp(serial string, packageName string) error
+	ForegroundApp(serial string) (string, error)
+	Hold(serial string, x, y int, durationMS int) error
+	Drag(serial string, points []node.DragPoint, durationMS int) error
 	OpenURL(serial string, url string) error
 	DevToolsForward(serial string) (int, error)
 	DevToolsForwardRemove(serial string, port int) error
@@ -111,6 +115,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/devices/{serial}/screenshot", s.Screenshot)
 	mux.HandleFunc("GET /api/devices/{serial}/geometry", s.DeviceGeometry)
 	mux.HandleFunc("GET /api/devices/{serial}/elements", s.DeviceElements)
+	mux.HandleFunc("GET /api/devices/{serial}/foreground-app", s.DeviceForegroundApp)
 	mux.HandleFunc("GET /api/devices/{serial}/accounts", s.DeviceAccounts)
 	mux.HandleFunc("GET /api/devices/{serial}/dns", s.DeviceDNS)
 	mux.HandleFunc("PUT /api/devices/{serial}/dns", s.SetDeviceDNS)
@@ -160,6 +165,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/control/button", s.PressButton)
 	mux.HandleFunc("POST /api/control/text", s.TypeText)
 	mux.HandleFunc("POST /api/control/launch", s.LaunchApp)
+	mux.HandleFunc("POST /api/control/terminate", s.TerminateApp)
+	mux.HandleFunc("POST /api/control/hold", s.Hold)
+	mux.HandleFunc("POST /api/control/drag", s.Drag)
 	mux.HandleFunc("POST /api/control/open-url", s.OpenURL)
 	mux.HandleFunc("POST /api/control/devtools", s.DevToolsForward)
 	mux.HandleFunc("POST /api/control/devtools/remove", s.DevToolsForwardRemove)

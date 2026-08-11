@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/brijorn/mast/internal/node"
 	"github.com/brijorn/mast/internal/scrcpy"
 	"github.com/gorilla/websocket"
 )
@@ -35,8 +36,26 @@ type launchAppRequest struct {
 }
 
 // Package names reach an adb shell argument, so only plain Android
-// application-id characters are accepted.
-var launchPackagePattern = regexp.MustCompile(`^[A-Za-z0-9._]+$`)
+// application-id characters are accepted. Hyphens are allowed because an iOS
+// bundle identifier may contain them and does not reach a shell at all.
+var launchPackagePattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+type holdRequest struct {
+	Serial     string `json:"serial"`
+	X          int    `json:"x"`
+	Y          int    `json:"y"`
+	DurationMS int    `json:"duration_ms"`
+}
+
+type dragRequest struct {
+	Serial     string           `json:"serial"`
+	Points     []node.DragPoint `json:"points"`
+	DurationMS int              `json:"duration_ms"`
+}
+
+type foregroundAppResponse struct {
+	BundleID string `json:"bundle_id"`
+}
 
 type openURLRequest struct {
 	Serial string `json:"serial"`
@@ -399,6 +418,78 @@ func (s *Server) LaunchApp(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.node.LaunchApp(req.Serial, req.Package); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) TerminateApp(w http.ResponseWriter, r *http.Request) {
+	var req launchAppRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.Serial == "" {
+		http.Error(w, "serial required", http.StatusBadRequest)
+		return
+	}
+
+	if req.Package == "" || !launchPackagePattern.MatchString(req.Package) {
+		http.Error(w, "valid package required", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.node.TerminateApp(req.Serial, req.Package); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) Hold(w http.ResponseWriter, r *http.Request) {
+	var req holdRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.Serial == "" {
+		http.Error(w, "serial required", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.node.Hold(req.Serial, req.X, req.Y, req.DurationMS); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) Drag(w http.ResponseWriter, r *http.Request) {
+	var req dragRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.Serial == "" {
+		http.Error(w, "serial required", http.StatusBadRequest)
+		return
+	}
+
+	// A one-point path is not a drag, and accepting it would deliver a press
+	// that never moves while reporting success.
+	if len(req.Points) < 2 {
+		http.Error(w, "at least two points required", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.node.Drag(req.Serial, req.Points, req.DurationMS); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

@@ -435,6 +435,50 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				log.Println("launch app:", err)
 				break
 			}
+		case transport.TypeTerminateAppRequest:
+			var req transport.TerminateAppRequest
+			if err := json.Unmarshal(message, &req); err != nil {
+				log.Println("decode terminate app request:", err)
+				break
+			}
+
+			if err := n.TerminateApp(req.Payload.Serial, req.Payload.Package); err != nil {
+				log.Println("terminate app:", err)
+				break
+			}
+		case transport.TypeForegroundAppRequest:
+			var req transport.ForegroundAppRequest
+			if err := json.Unmarshal(message, &req); err != nil {
+				log.Println("decode foreground app request:", err)
+				break
+			}
+			go n.handleForegroundAppRequest(peer, req)
+		case transport.TypeHoldRequest:
+			var req transport.HoldRequest
+			if err := json.Unmarshal(message, &req); err != nil {
+				log.Println("decode hold request:", err)
+				break
+			}
+
+			if err := n.Hold(req.Payload.Serial, req.Payload.X, req.Payload.Y, req.Payload.DurationMS); err != nil {
+				log.Println("hold:", err)
+				break
+			}
+		case transport.TypeDragRequest:
+			var req transport.DragRequest
+			if err := json.Unmarshal(message, &req); err != nil {
+				log.Println("decode drag request:", err)
+				break
+			}
+
+			points := make([]DragPoint, len(req.Payload.Points))
+			for index, point := range req.Payload.Points {
+				points[index] = DragPoint{X: point.X, Y: point.Y}
+			}
+			if err := n.Drag(req.Payload.Serial, points, req.Payload.DurationMS); err != nil {
+				log.Println("drag:", err)
+				break
+			}
 		case transport.TypeOpenURLRequest:
 			var req transport.OpenURLRequest
 			if err := json.Unmarshal(message, &req); err != nil {

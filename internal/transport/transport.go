@@ -37,6 +37,11 @@ const (
 	TypePressButtonRequest           = "press_button_request"
 	TypeTextInputRequest             = "text_input_request"
 	TypeLaunchAppRequest             = "launch_app_request"
+	TypeTerminateAppRequest          = "terminate_app_request"
+	TypeForegroundAppRequest         = "foreground_app_request"
+	TypeForegroundAppResponse        = "foreground_app_response"
+	TypeHoldRequest                  = "hold_request"
+	TypeDragRequest                  = "drag_request"
 	TypeOpenURLRequest               = "open_url_request"
 	TypeClipboardGetRequest          = "clipboard_get_request"
 	TypeClipboardGetResponse         = "clipboard_get_response"
@@ -296,15 +301,19 @@ type ElementsRequest struct {
 }
 
 type ElementPayload struct {
-	Type      string  `json:"type,omitempty"`
-	Label     string  `json:"label,omitempty"`
-	Value     string  `json:"value,omitempty"`
-	X         float64 `json:"x"`
-	Y         float64 `json:"y"`
-	Width     float64 `json:"width"`
-	Height    float64 `json:"height"`
-	Clickable bool    `json:"clickable,omitempty"`
-	Enabled   bool    `json:"enabled,omitempty"`
+	Type string `json:"type,omitempty"`
+	// Identifier is the element's stable name — Android's resource-id, iOS's
+	// accessibility name. It is what an automation matches on, and it survives
+	// a label change that a display string does not.
+	Identifier string  `json:"identifier,omitempty"`
+	Label      string  `json:"label,omitempty"`
+	Value      string  `json:"value,omitempty"`
+	X          float64 `json:"x"`
+	Y          float64 `json:"y"`
+	Width      float64 `json:"width"`
+	Height     float64 `json:"height"`
+	Clickable  bool    `json:"clickable,omitempty"`
+	Enabled    bool    `json:"enabled,omitempty"`
 }
 
 type ElementsResponsePayload struct {
@@ -434,6 +443,63 @@ type LaunchAppRequest struct {
 type LaunchAppRequestPayload struct {
 	Serial  string `json:"serial"`
 	Package string `json:"package"`
+}
+
+type TerminateAppRequest struct {
+	RawMessage
+	Payload TerminateAppRequestPayload `json:"payload"`
+}
+
+type TerminateAppRequestPayload struct {
+	Serial  string `json:"serial"`
+	Package string `json:"package"`
+}
+
+type ForegroundAppRequest struct {
+	RawMessage
+	Payload ForegroundAppRequestPayload `json:"payload"`
+}
+
+type ForegroundAppRequestPayload struct {
+	Serial string `json:"serial"`
+}
+
+type ForegroundAppResponse struct {
+	RawMessage
+	Payload ForegroundAppResponsePayload `json:"payload"`
+}
+
+type ForegroundAppResponsePayload struct {
+	Result string `json:"result,omitempty"`
+	Error  string `json:"error,omitempty"`
+}
+
+type HoldRequest struct {
+	RawMessage
+	Payload HoldRequestPayload `json:"payload"`
+}
+
+type HoldRequestPayload struct {
+	Serial     string `json:"serial"`
+	X          int    `json:"x"`
+	Y          int    `json:"y"`
+	DurationMS int    `json:"duration_ms"`
+}
+
+type DragRequest struct {
+	RawMessage
+	Payload DragRequestPayload `json:"payload"`
+}
+
+type DragRequestPayload struct {
+	Serial     string      `json:"serial"`
+	Points     []DragPoint `json:"points"`
+	DurationMS int         `json:"duration_ms"`
+}
+
+type DragPoint struct {
+	X int `json:"x"`
+	Y int `json:"y"`
 }
 
 type OpenURLRequest struct {

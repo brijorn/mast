@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/brijorn/mast/internal/node"
+
 	"github.com/brijorn/mast/internal/scrcpy"
 	"github.com/gorilla/websocket"
 )
@@ -690,5 +692,183 @@ func TestControlWebSocketPressesButton(t *testing.T) {
 	}
 	if backend.buttonSerial != "local-123" || backend.buttonName != "back" {
 		t.Fatalf("button = %s on %s", backend.buttonName, backend.buttonSerial)
+	}
+}
+
+type iosControlBackend struct {
+	fakeBackend
+
+	terminateSerial  string
+	terminatePackage string
+	holdSerial       string
+	holdX            int
+	holdY            int
+	holdDuration     int
+	dragSerial       string
+	dragPoints       []node.DragPoint
+	dragDuration     int
+	foreground       string
+	err              error
+}
+
+func (b *iosControlBackend) TerminateApp(serial string, packageName string) error {
+	b.terminateSerial = serial
+	b.terminatePackage = packageName
+	return b.err
+}
+
+func (b *iosControlBackend) ForegroundApp(serial string) (string, error) {
+	if b.err != nil {
+		return "", b.err
+	}
+	return b.foreground, nil
+}
+
+func (b *iosControlBackend) Hold(serial string, x, y int, durationMS int) error {
+	b.holdSerial = serial
+	b.holdX = x
+	b.holdY = y
+	b.holdDuration = durationMS
+	return b.err
+}
+
+func (b *iosControlBackend) Drag(serial string, points []node.DragPoint, durationMS int) error {
+	b.dragSerial = serial
+	b.dragPoints = points
+	b.dragDuration = durationMS
+	return b.err
+}
+
+func TestTerminateAppCallsBackend(t *testing.T) {
+	backend := &iosControlBackend{}
+	server := NewServer(backend)
+
+	body := []byte(`{"serial":"00008140-001","package":"com.pocketchamps.game"}`)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/control/terminate", bytes.NewReader(body))
+
+	server.TerminateApp(res, req)
+
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusNoContent, res.Body.String())
+	}
+	if backend.terminateSerial != "00008140-001" || backend.terminatePackage != "com.pocketchamps.game" {
+		t.Fatalf("terminate call = serial %q package %q", backend.terminateSerial, backend.terminatePackage)
+	}
+}
+
+// An iOS bundle identifier may contain a hyphen, and rejecting it would refuse
+// a legitimate app.
+func TestTerminateAppAcceptsHyphenatedBundleID(t *testing.T) {
+	backend := &iosControlBackend{}
+	server := NewServer(backend)
+
+	body := []byte(`{"serial":"00008140-001","package":"com.my-company.game"}`)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/control/terminate", bytes.NewReader(body))
+
+	server.TerminateApp(res, req)
+
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusNoContent, res.Body.String())
+	}
+}
+
+func TestTerminateAppRejectsInjectedPackage(t *testing.T) {
+	backend := &iosControlBackend{}
+	server := NewServer(backend)
+
+	body := []byte(`{"serial":"local-123","package":"com.example; rm -rf /"}`)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/control/terminate", bytes.NewReader(body))
+
+	server.TerminateApp(res, req)
+
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", res.Code, http.StatusBadRequest)
+	}
+}
+
+func TestHoldCallsBackend(t *testing.T) {
+	backend := &iosControlBackend{}
+	server := NewServer(backend)
+
+	body := []byte(`{"serial":"00008140-001","x":120,"y":340,"duration_ms":900}`)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/control/hold", bytes.NewReader(body))
+
+	server.Hold(res, req)
+
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusNoContent, res.Body.String())
+	}
+	if backend.holdX != 120 || backend.holdY != 340 || backend.holdDuration != 900 {
+		t.Fatalf("hold call = (%d,%d) for %dms", backend.holdX, backend.holdY, backend.holdDuration)
+	}
+}
+
+func TestDragCallsBackendWithWholePath(t *testing.T) {
+	backend := &iosControlBackend{}
+	server := NewServer(backend)
+
+	body := []byte(`{"serial":"00008140-001","points":[{"x":10,"y":20},{"x":30,"y":40},{"x":50,"y":60}],"duration_ms":450}`)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/control/drag", bytes.NewReader(body))
+
+	server.Drag(res, req)
+
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusNoContent, res.Body.String())
+	}
+	// The middle point is the whole reason a drag is not a swipe: a caller that
+	// shaped a curve loses it if the transport keeps only the endpoints.
+	if len(backend.dragPoints) != 3 {
+		t.Fatalf("drag carried %d points, want 3", len(backend.dragPoints))
+	}
+	if backend.dragPoints[1] != (node.DragPoint{X: 30, Y: 40}) {
+		t.Errorf("middle point = %+v, want {30 40}", backend.dragPoints[1])
+	}
+	if backend.dragDuration != 450 {
+		t.Errorf("duration = %d, want 450", backend.dragDuration)
+	}
+}
+
+func TestDragRejectsSinglePointPath(t *testing.T) {
+	backend := &iosControlBackend{}
+	server := NewServer(backend)
+
+	body := []byte(`{"serial":"00008140-001","points":[{"x":10,"y":20}]}`)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/control/drag", bytes.NewReader(body))
+
+	server.Drag(res, req)
+
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", res.Code, http.StatusBadRequest)
+	}
+	if backend.dragSerial != "" {
+		t.Error("a one-point path reached the backend")
+	}
+}
+
+func TestDeviceForegroundAppReportsBundleID(t *testing.T) {
+	backend := &iosControlBackend{foreground: "com.pocketchamps.game"}
+	server := NewServer(backend)
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/devices/00008140-001/foreground-app", nil)
+	req.SetPathValue("serial", "00008140-001")
+
+	server.DeviceForegroundApp(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusOK, res.Body.String())
+	}
+	var decoded foregroundAppResponse
+	if err := json.Unmarshal(res.Body.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if decoded.BundleID != "com.pocketchamps.game" {
+		t.Fatalf("bundle_id = %q, want com.pocketchamps.game", decoded.BundleID)
 	}
 }

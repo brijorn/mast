@@ -18,12 +18,16 @@ const androidHierarchyPath = "/sdcard/mast-window.xml"
 var androidBoundsPattern = regexp.MustCompile(`^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$`)
 
 type DeviceElement struct {
-	Type      string      `json:"type,omitempty"`
-	Label     string      `json:"label,omitempty"`
-	Value     string      `json:"value,omitempty"`
-	Rect      ElementRect `json:"rect"`
-	Clickable bool        `json:"clickable,omitempty"`
-	Enabled   bool        `json:"enabled,omitempty"`
+	Type string `json:"type,omitempty"`
+	// Identifier is the element's stable name — Android's resource-id, iOS's
+	// accessibility name. An automation matches on this rather than on Label,
+	// which is a display string and changes with locale.
+	Identifier string      `json:"identifier,omitempty"`
+	Label      string      `json:"label,omitempty"`
+	Value      string      `json:"value,omitempty"`
+	Rect       ElementRect `json:"rect"`
+	Clickable  bool        `json:"clickable,omitempty"`
+	Enabled    bool        `json:"enabled,omitempty"`
 }
 
 type ElementRect struct {
@@ -35,12 +39,32 @@ type ElementRect struct {
 
 type androidHierarchyNode struct {
 	Class       string                 `xml:"class,attr"`
+	ResourceID  string                 `xml:"resource-id,attr"`
 	Text        string                 `xml:"text,attr"`
 	Description string                 `xml:"content-desc,attr"`
 	Bounds      string                 `xml:"bounds,attr"`
 	Clickable   bool                   `xml:"clickable,attr"`
 	Enabled     bool                   `xml:"enabled,attr"`
 	Children    []androidHierarchyNode `xml:"node"`
+}
+
+// iosSourceNode is one node of WDA's accessibility tree. Every XCUIElementType
+// shares this shape, so the element name is captured rather than enumerated:
+// WDA gains element types with iOS releases, and a list would silently drop the
+// ones this build had not heard of.
+type iosSourceNode struct {
+	XMLName  xml.Name
+	Type     string          `xml:"type,attr"`
+	Name     string          `xml:"name,attr"`
+	Label    string          `xml:"label,attr"`
+	Value    string          `xml:"value,attr"`
+	Enabled  string          `xml:"enabled,attr"`
+	Visible  string          `xml:"visible,attr"`
+	X        *float64        `xml:"x,attr"`
+	Y        *float64        `xml:"y,attr"`
+	Width    *float64        `xml:"width,attr"`
+	Height   *float64        `xml:"height,attr"`
+	Children []iosSourceNode `xml:",any"`
 }
 
 type androidHierarchy struct {
@@ -55,7 +79,7 @@ func (n *Node) Elements(serial string) ([]DeviceElement, error) {
 	if err != nil {
 		return nil, err
 	}
-	if device.Platform != PlatformAndroid {
+	if device.Platform != PlatformAndroid && device.Platform != PlatformIOS {
 		return nil, fmt.Errorf("element hierarchy is unavailable for platform %s", device.Platform)
 	}
 	if device.NodeID == n.ID {
@@ -65,6 +89,91 @@ func (n *Node) Elements(serial string) ([]DeviceElement, error) {
 }
 
 func (n *Node) localElements(serial string) ([]DeviceElement, error) {
+	device, err := n.localDeviceBySerial(serial)
+	if err != nil {
+		return nil, err
+	}
+	if device.Platform == PlatformIOS {
+		return n.localIOSElements(serial)
+	}
+	return n.localAndroidElements(serial)
+}
+
+// localIOSElements reads the tree through the device's ioslink session, which
+// controlSession opens if the phone is not already streaming.
+func (n *Node) localIOSElements(serial string) ([]DeviceElement, error) {
+	session, err := n.controlSession(serial)
+	if err != nil {
+		return nil, err
+	}
+	if session.iosDevice == nil {
+		return nil, errors.New("iOS control connection not available")
+	}
+	ctx, cancel := context.WithTimeout(n.ctx, iosCommandTimeout)
+	defer cancel()
+	document, err := session.iosDevice.Source(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read iOS element hierarchy: %w", err)
+	}
+	return parseIOSElements(document)
+}
+
+func parseIOSElements(document string) ([]DeviceElement, error) {
+	trimmed := strings.TrimSpace(document)
+	if trimmed == "" {
+		return nil, errors.New("decode iOS element hierarchy: empty source document")
+	}
+	var root iosSourceNode
+	if err := xml.Unmarshal([]byte(trimmed), &root); err != nil {
+		return nil, fmt.Errorf("decode iOS element hierarchy: %w", err)
+	}
+
+	elements := make([]DeviceElement, 0)
+	var appendNode func(iosSourceNode)
+	appendNode = func(node iosSourceNode) {
+		if rect, ok := iosNodeRect(node); ok {
+			elementType := strings.TrimSpace(node.Type)
+			if elementType == "" {
+				elementType = strings.TrimSpace(node.XMLName.Local)
+			}
+			elements = append(elements, DeviceElement{
+				Type:       elementType,
+				Identifier: strings.TrimSpace(node.Name),
+				Label:      strings.TrimSpace(node.Label),
+				Value:      strings.TrimSpace(node.Value),
+				Rect:       rect,
+				// WDA has no clickable attribute. An element that can be acted
+				// on is one the accessibility layer is currently showing.
+				Clickable: iosAttrBool(node.Visible),
+				Enabled:   iosAttrBool(node.Enabled),
+			})
+		}
+		for _, child := range node.Children {
+			appendNode(child)
+		}
+	}
+	appendNode(root)
+	return elements, nil
+}
+
+// iosNodeRect drops a node without a usable rectangle. Reporting it at the
+// origin instead would read as a real control in the top-left corner, and get
+// tapped.
+func iosNodeRect(node iosSourceNode) (ElementRect, bool) {
+	if node.X == nil || node.Y == nil || node.Width == nil || node.Height == nil {
+		return ElementRect{}, false
+	}
+	if *node.Width <= 0 || *node.Height <= 0 {
+		return ElementRect{}, false
+	}
+	return ElementRect{X: *node.X, Y: *node.Y, Width: *node.Width, Height: *node.Height}, true
+}
+
+func iosAttrBool(value string) bool {
+	return strings.EqualFold(strings.TrimSpace(value), "true")
+}
+
+func (n *Node) localAndroidElements(serial string) ([]DeviceElement, error) {
 	if _, err := n.adbShell(n.ctx, "", serial, "uiautomator", "dump", androidHierarchyPath); err != nil {
 		return nil, fmt.Errorf("dump Android element hierarchy: %w", err)
 	}
@@ -89,12 +198,13 @@ func parseAndroidElements(data []byte) ([]DeviceElement, error) {
 				label = strings.TrimSpace(node.Text)
 			}
 			elements = append(elements, DeviceElement{
-				Type:      node.Class,
-				Label:     label,
-				Value:     strings.TrimSpace(node.Text),
-				Rect:      rect,
-				Clickable: node.Clickable,
-				Enabled:   node.Enabled,
+				Type:       node.Class,
+				Identifier: strings.TrimSpace(node.ResourceID),
+				Label:      label,
+				Value:      strings.TrimSpace(node.Text),
+				Rect:       rect,
+				Clickable:  node.Clickable,
+				Enabled:    node.Enabled,
 			})
 		}
 		for _, child := range node.Children {
@@ -152,7 +262,7 @@ func (n *Node) peerElements(ctx context.Context, peerID, serial string) ([]Devic
 	elements := make([]DeviceElement, len(result.Payload.Result))
 	for index, element := range result.Payload.Result {
 		elements[index] = DeviceElement{
-			Type: element.Type, Label: element.Label, Value: element.Value,
+			Type: element.Type, Identifier: element.Identifier, Label: element.Label, Value: element.Value,
 			Rect:      ElementRect{X: element.X, Y: element.Y, Width: element.Width, Height: element.Height},
 			Clickable: element.Clickable, Enabled: element.Enabled,
 		}
@@ -169,7 +279,7 @@ func (n *Node) handleElementsRequest(peer *PeerConn, request transport.ElementsR
 		payload.Result = make([]transport.ElementPayload, len(elements))
 		for index, element := range elements {
 			payload.Result[index] = transport.ElementPayload{
-				Type: element.Type, Label: element.Label, Value: element.Value,
+				Type: element.Type, Identifier: element.Identifier, Label: element.Label, Value: element.Value,
 				X: element.Rect.X, Y: element.Rect.Y, Width: element.Rect.Width, Height: element.Rect.Height,
 				Clickable: element.Clickable, Enabled: element.Enabled,
 			}

@@ -6,6 +6,7 @@ import (
 	"mime"
 	"mime/multipart"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -449,4 +450,43 @@ func (s *Server) UpdateProgram(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(updated); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+// RunArtifact handles GET /api/runs/{id}/artifact?path=…
+//
+// A run reports evidence by absolute path, which only the node holding the
+// workspace can open. Serving it here is what lets a log row show the frame it
+// is describing instead of a file name the reader has to go and find.
+func (s *Server) RunArtifact(w http.ResponseWriter, r *http.Request) {
+	if s.programs == nil {
+		http.Error(w, "program runner not configured", http.StatusServiceUnavailable)
+		return
+	}
+	file, info, err := s.programs.OpenArtifact(r.PathValue("id"), r.URL.Query().Get("path"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	defer file.Close()
+
+	contentType := "application/octet-stream"
+	switch strings.ToLower(filepath.Ext(info.Name())) {
+	case ".png":
+		contentType = "image/png"
+	case ".jpg", ".jpeg":
+		contentType = "image/jpeg"
+	case ".webp":
+		contentType = "image/webp"
+	case ".json":
+		contentType = "application/json"
+	case ".txt", ".log":
+		contentType = "text/plain; charset=utf-8"
+	}
+	w.Header().Set("Content-Type", contentType)
+	// Evidence is written once under a timestamped name and never rewritten,
+	// so a fetched frame can be held for as long as the reader keeps the panel
+	// open rather than re-pulled on every poll.
+	w.Header().Set("Cache-Control", "private, max-age=86400, immutable")
+	w.Header().Set("Content-Disposition", "inline; filename="+strconv.Quote(info.Name()))
+	http.ServeContent(w, r, info.Name(), info.ModTime(), file.(io.ReadSeeker))
 }

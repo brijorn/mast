@@ -2,7 +2,9 @@ package api
 
 import (
 	"context"
+	"io"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -84,6 +86,7 @@ type programBackend interface {
 	UpdateRunAutostart(id string, opts program.AutostartOptions) (*program.Run, error)
 	Logs(id string) (string, string, error)
 	LogsSince(id string, offsets program.LogOffsets) (*program.LogsResult, error)
+	OpenArtifact(id, name string) (io.ReadCloser, os.FileInfo, error)
 	CleanupRun(id string) (*program.Run, error)
 	UpdateProgram(id string, name string, slug string, mappings []program.ConfigMapping) (*program.Program, error)
 	DeleteProgram(id string) error
@@ -155,6 +158,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/runs/{id}/resume", s.ResumeRun)
 	mux.HandleFunc("PUT /api/runs/{id}/autostart", s.SetRunAutostart)
 	mux.HandleFunc("GET /api/runs/{id}/logs", s.RunLogs)
+	mux.HandleFunc("GET /api/runs/{id}/artifact", s.RunArtifact)
 	mux.HandleFunc("POST /api/runs/{id}/cleanup", s.CleanupRun)
 
 	mux.HandleFunc("GET /api/control/ws", s.ControlWebSocket)

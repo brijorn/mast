@@ -3,9 +3,13 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/brijorn/mast/internal/program"
@@ -23,6 +27,8 @@ type fakeProgramBackend struct {
 	uploaded         program.RegisterUploadOptions
 	stopRequested    bool
 	stopAcknowledged bool
+	artifact         string
+	artifactPath     string
 }
 
 func (f *fakeProgramBackend) RequestStop(id string) (*program.Run, error) {
@@ -68,6 +74,25 @@ func (f *fakeProgramBackend) Stop(opts program.StopOptions) (*program.Run, error
 
 func (f *fakeProgramBackend) Logs(_ string) (string, string, error) {
 	return "out", "err", nil
+}
+
+// artifact is the file OpenArtifact hands back, and artifactPath records what
+// the handler asked for, so a test can assert the query reached the store.
+func (f *fakeProgramBackend) OpenArtifact(_ string, name string) (io.ReadCloser, os.FileInfo, error) {
+	f.artifactPath = name
+	if f.artifact == "" {
+		return nil, nil, errors.New("artifact not found")
+	}
+	file, err := os.Open(f.artifact)
+	if err != nil {
+		return nil, nil, err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return nil, nil, err
+	}
+	return file, info, nil
 }
 
 func (f *fakeProgramBackend) LogsSince(_ string, offsets program.LogOffsets) (*program.LogsResult, error) {
@@ -430,5 +455,45 @@ func TestDeleteProgramCallsBackend(t *testing.T) {
 	}
 	if programs.deletedID != "test-id" {
 		t.Fatalf("deletedID = %q, want test-id", programs.deletedID)
+	}
+}
+
+// The route is the gateway to a run's evidence, so it must pass the requested
+// path to the store that owns the containment check, and must not invent a
+// success when there is no such file.
+func TestRunArtifactServesTheStoresFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "frame.png")
+	if err := os.WriteFile(path, []byte("frame-bytes"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	programs := &fakeProgramBackend{artifact: path}
+	server := NewServer(nil, programs)
+
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet,
+		"/api/runs/run-1/artifact?path=debug%2Fframe.png", nil))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d", recorder.Code)
+	}
+	if got := recorder.Body.String(); got != "frame-bytes" {
+		t.Fatalf("body = %q", got)
+	}
+	if programs.artifactPath != "debug/frame.png" {
+		t.Fatalf("store asked for %q", programs.artifactPath)
+	}
+	if got := recorder.Header().Get("Content-Type"); got != "image/png" {
+		t.Fatalf("content type = %q", got)
+	}
+}
+
+func TestRunArtifactIsNotFoundWhenTheStoreRefuses(t *testing.T) {
+	server := NewServer(nil, &fakeProgramBackend{})
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet,
+		"/api/runs/run-1/artifact?path=../../etc/passwd", nil))
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d", recorder.Code)
 	}
 }

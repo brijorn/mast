@@ -164,6 +164,11 @@ type StartOptions struct {
 	Serials         []string          `json:"serials"`
 	Variables       map[string]string `json:"variables,omitempty"`
 	SecretVariables map[string]string `json:"secret_variables,omitempty"`
+	// RunOnOwningNode asks the gateway to execute the program on the node that
+	// owns the device rather than locally. When the owner is a peer, the start
+	// is forwarded to that peer's Mast; when it is local, this is a no-op. It
+	// keeps the program's device calls on the same machine as the phone.
+	RunOnOwningNode bool `json:"run_on_owning_node,omitempty"`
 }
 
 type ResumeOptions struct {

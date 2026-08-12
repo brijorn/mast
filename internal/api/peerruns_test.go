@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -89,6 +90,111 @@ func TestListRunsLocalOnlySkipsPeers(t *testing.T) {
 	}
 	if strings.Contains(res.Body.String(), "mac-run-1") {
 		t.Fatalf("local=1 response leaked a peer run: %s", res.Body.String())
+	}
+}
+
+func TestStartRunsForwardsToOwningPeer(t *testing.T) {
+	var gotBody string
+	var gotMarker string
+	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/runs" {
+			http.NotFound(w, r)
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		gotMarker = r.Header.Get(proxyMarker)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`[{"id":"peer-run","status":"running"}]`))
+	}))
+	defer peer.Close()
+
+	backend := &fakeBackend{
+		nodes:   []node.NodeInfo{{ID: "local", Local: true}, peerNode(t, peer.URL)},
+		devices: []node.DeviceInfo{{Serial: "IOS1", NodeID: "mac"}},
+	}
+	programs := &fakeProgramBackend{}
+	server := NewServer(backend, programs)
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/runs",
+		strings.NewReader(`{"program_id":"p","serials":["IOS1"],"run_on_owning_node":true}`))
+	server.Handler().ServeHTTP(res, req)
+
+	if res.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body: %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(gotBody, `"IOS1"`) {
+		t.Fatalf("peer did not receive the start; got body %q", gotBody)
+	}
+	if gotMarker != "1" {
+		t.Fatalf("forwarded start missing proxy marker (got %q); a peer that re-forwards would loop", gotMarker)
+	}
+	if programs.started.ProgramID != "" {
+		t.Fatalf("owning-peer start was also run locally: %+v", programs.started)
+	}
+	if !strings.Contains(res.Body.String(), "peer-run") {
+		t.Fatalf("gateway did not pass the peer's response through: %s", res.Body.String())
+	}
+}
+
+func TestStartRunsOnOwningNodeRunsLocallyWhenOwnerIsLocal(t *testing.T) {
+	peerHit := false
+	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		peerHit = true
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer peer.Close()
+
+	backend := &fakeBackend{
+		nodes:   []node.NodeInfo{{ID: "local", Local: true}, peerNode(t, peer.URL)},
+		devices: []node.DeviceInfo{{Serial: "LOCAL1", NodeID: "local"}},
+	}
+	programs := &fakeProgramBackend{}
+	server := NewServer(backend, programs)
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/runs",
+		strings.NewReader(`{"program_id":"p","serials":["LOCAL1"],"run_on_owning_node":true}`))
+	server.Handler().ServeHTTP(res, req)
+
+	if res.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body: %s", res.Code, res.Body.String())
+	}
+	if peerHit {
+		t.Fatal("a locally-owned device was forwarded to a peer; it should run here")
+	}
+	if programs.started.ProgramID != "p" {
+		t.Fatalf("local start was not invoked: %+v", programs.started)
+	}
+}
+
+func TestStartRunsAlreadyProxiedDoesNotReforward(t *testing.T) {
+	peerHit := false
+	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		peerHit = true
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer peer.Close()
+
+	backend := &fakeBackend{
+		nodes:   []node.NodeInfo{{ID: "local", Local: true}, peerNode(t, peer.URL)},
+		devices: []node.DeviceInfo{{Serial: "IOS1", NodeID: "mac"}},
+	}
+	programs := &fakeProgramBackend{}
+	server := NewServer(backend, programs)
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/runs",
+		strings.NewReader(`{"program_id":"p","serials":["IOS1"],"run_on_owning_node":true}`))
+	req.Header.Set(proxyMarker, "1")
+	server.Handler().ServeHTTP(res, req)
+
+	if peerHit {
+		t.Fatal("an already-forwarded start was forwarded again; recursion guard failed")
+	}
+	if programs.started.ProgramID != "p" {
+		t.Fatalf("forwarded start did not execute locally on the owner: %+v", programs.started)
 	}
 }
 

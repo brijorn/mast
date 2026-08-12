@@ -160,6 +160,22 @@ func (s *Server) StartRuns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Run on the node that owns the device when asked. A start already forwarded
+	// to us (proxy marker) is not forwarded again — the owning peer runs it
+	// locally, so on that hop the owner resolves as local and this is skipped.
+	if req.RunOnOwningNode && r.Header.Get(proxyMarker) == "" && len(req.Serials) > 0 {
+		peerBase, err := s.resolveSingleOwnerPeerBase(req.Serials)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if peerBase != "" {
+			if s.forwardStartToNode(w, r, peerBase, req) {
+				return
+			}
+		}
+	}
+
 	runs, err := s.programs.Start(req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)

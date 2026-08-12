@@ -49,7 +49,7 @@ network.
 | `POST` | `/api/programs/upload` | Upload a program bundle. |
 | `PUT` | `/api/programs/{id}` | Update program metadata and config mappings. |
 | `DELETE` | `/api/programs/{id}` | Delete a current program bundle. |
-| `GET` | `/api/runs` | List program runs. |
+| `GET` | `/api/runs` | List program runs across the local node and its peers. |
 | `POST` | `/api/runs` | Start program runs. |
 | `POST` | `/api/runs/{id}/stop` | Stop a run. |
 | `POST` | `/api/runs/{id}/stop-request` | Request cooperative run shutdown. |
@@ -1195,7 +1195,7 @@ template variables are covered in [Programs](programs.md). The HTTP surface is:
 | `POST` | `/api/programs/upload` | Upload a multipart program bundle. |
 | `PUT` | `/api/programs/{id}` | Update `name`, `slug`, and `config_mappings`. |
 | `DELETE` | `/api/programs/{id}` | Delete a program by content ID or slug. |
-| `GET` | `/api/runs` | List known runs. |
+| `GET` | `/api/runs` | List this node's runs and every peer's, de-duplicated. |
 | `POST` | `/api/runs` | Start the current program by slug or content ID. |
 | `POST` | `/api/runs/{id}/stop` | Stop a run, optionally pausing autostart. |
 | `POST` | `/api/runs/{id}/stop-request` | Idempotently request cooperative shutdown. |
@@ -1205,6 +1205,17 @@ template variables are covered in [Programs](programs.md). The HTTP surface is:
 | `PUT` | `/api/runs/{id}/autostart` | Set reconnect/crash recovery independently or together. |
 | `GET` | `/api/runs/{id}/logs` | Read stdout/stderr with optional offsets. |
 | `POST` | `/api/runs/{id}/cleanup` | Delete a completed run workspace. |
+
+A run executes on the node that started it, so a program driving an iOS phone
+the mac owns runs on the mac, not here. To let an operator watch and control
+every run through one node, `GET /api/runs` returns this node's runs plus each
+peer's, de-duplicated by id, and every per-run operation this node does not
+recognize — stop, resume, logs, artifact, cleanup, and the cooperative-shutdown
+calls — is forwarded to the peer that owns the run. Aggregation asks each peer
+with `?local=1` so a peer that also aggregates answers with only its own runs
+rather than querying back; a forwarded per-run call carries a marker header for
+the same reason, so a run present on no node fails on the second hop instead of
+bouncing between nodes.
 
 Start run request:
 

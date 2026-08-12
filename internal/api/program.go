@@ -173,14 +173,33 @@ func (s *Server) StartRuns(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) ListRuns(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) ListRuns(w http.ResponseWriter, r *http.Request) {
 	if s.programs == nil {
 		http.Error(w, "program runner not configured", http.StatusServiceUnavailable)
 		return
 	}
 
+	// A peer aggregating our runs asks with local=1 so we answer with only the
+	// runs we own; without that guard two aggregating nodes would query each
+	// other forever.
+	if isTruthy(r.URL.Query().Get("local")) {
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(s.programs.ListRuns()); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+
+	// Local runs plus every peer's, so an operator monitoring through one node
+	// sees runs executing on the nodes that own their phones too.
+	local := make([]json.RawMessage, 0)
+	for _, run := range s.programs.ListRuns() {
+		if encoded, err := json.Marshal(run); err == nil {
+			local = append(local, encoded)
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(s.programs.ListRuns()); err != nil {
+	if err := json.NewEncoder(w).Encode(s.mergedRuns(local)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -202,6 +221,9 @@ func (s *Server) StopRun(w http.ResponseWriter, r *http.Request) {
 
 	run, err := s.programs.Stop(req)
 	if err != nil {
+		if s.proxyToPeerWithRun(w, r, "/api/runs/"+r.PathValue("id")+"/stop") {
+			return
+		}
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
@@ -220,6 +242,10 @@ func (s *Server) RequestRunStop(w http.ResponseWriter, r *http.Request) {
 	}
 	run, err := programs.RequestStop(r.PathValue("id"))
 	if err != nil {
+		if strings.Contains(err.Error(), "not found") &&
+			s.proxyToPeerWithRun(w, r, "/api/runs/"+r.PathValue("id")+"/stop-request") {
+			return
+		}
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -235,6 +261,9 @@ func (s *Server) GetRunStopRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	request, err := programs.StopRequest(r.PathValue("id"))
 	if err != nil {
+		if s.proxyToPeerWithRun(w, r, "/api/runs/"+r.PathValue("id")+"/stop-request") {
+			return
+		}
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
@@ -251,6 +280,10 @@ func (s *Server) AcknowledgeRunStop(w http.ResponseWriter, r *http.Request) {
 	}
 	run, err := programs.AcknowledgeStop(r.PathValue("id"))
 	if err != nil {
+		if strings.Contains(err.Error(), "not found") &&
+			s.proxyToPeerWithRun(w, r, "/api/runs/"+r.PathValue("id")+"/stop-ack") {
+			return
+		}
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -278,6 +311,9 @@ func (s *Server) ResumeRun(w http.ResponseWriter, r *http.Request) {
 	run, err := s.programs.Resume(req)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
+			if s.proxyToPeerWithRun(w, r, "/api/runs/"+r.PathValue("id")+"/resume") {
+				return
+			}
 			http.Error(w, err.Error(), http.StatusNotFound)
 		} else {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -326,6 +362,9 @@ func (s *Server) SetRunAutostart(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
+			if s.proxyToPeerWithRun(w, r, "/api/runs/"+r.PathValue("id")+"/autostart") {
+				return
+			}
 			http.Error(w, err.Error(), http.StatusNotFound)
 		} else {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -350,6 +389,9 @@ func (s *Server) CleanupRun(w http.ResponseWriter, r *http.Request) {
 	run, err := s.programs.CleanupRun(r.PathValue("id"))
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
+			if s.proxyToPeerWithRun(w, r, "/api/runs/"+r.PathValue("id")+"/cleanup") {
+				return
+			}
 			http.Error(w, err.Error(), http.StatusNotFound)
 		} else {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -376,6 +418,10 @@ func (s *Server) RunLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	logs, err := s.programs.LogsSince(r.PathValue("id"), offsets)
 	if err != nil {
+		// Not in this node's store — the run may be executing on a peer.
+		if s.proxyToPeerWithRun(w, r, "/api/runs/"+r.PathValue("id")+"/logs") {
+			return
+		}
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
@@ -464,6 +510,9 @@ func (s *Server) RunArtifact(w http.ResponseWriter, r *http.Request) {
 	}
 	file, info, err := s.programs.OpenArtifact(r.PathValue("id"), r.URL.Query().Get("path"))
 	if err != nil {
+		if s.proxyToPeerWithRun(w, r, "/api/runs/"+r.PathValue("id")+"/artifact") {
+			return
+		}
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}

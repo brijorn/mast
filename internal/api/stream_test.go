@@ -41,6 +41,8 @@ type fakeBackend struct {
 	release      chan struct{}
 	videoStarts  chan string
 	videoCancels chan string
+
+	nodes []node.NodeInfo
 }
 
 func (f *fakeBackend) ListDevices() ([]node.DeviceInfo, error) {
@@ -100,7 +102,7 @@ func (f *fakeBackend) SetDeviceDisplayPower(
 }
 
 func (f *fakeBackend) ListNodes() []node.NodeInfo {
-	return nil
+	return f.nodes
 }
 
 func (f *fakeBackend) Connect(_ string) error {

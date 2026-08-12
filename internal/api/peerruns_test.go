@@ -343,6 +343,43 @@ func TestReadBodyPreservingAllowsProxyReplay(t *testing.T) {
 	}
 }
 
+func TestProxyToPeerWithRunCarriesTheBodyPastAPeerThatDeclines(t *testing.T) {
+	// The owning peer is rarely the first one asked. Every peer before it
+	// answers 404, and the body has to survive those attempts intact — an
+	// autostart arriving empty is decoded as EOF and answered 400, which is how
+	// a run start on the device's own node failed after the run was up.
+	declining := httptest.NewServer(http.HandlerFunc(http.NotFound))
+	defer declining.Close()
+
+	var owningSaw string
+	owning := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		owningSaw = string(body)
+		_, _ = w.Write([]byte("armed"))
+	}))
+	defer owning.Close()
+
+	first := peerNode(t, declining.URL)
+	first.ID = "proxy-phone"
+	second := peerNode(t, owning.URL)
+	backend := &fakeBackend{nodes: []node.NodeInfo{first, second}}
+	server := NewServer(backend, &fakeProgramBackend{})
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/api/runs/mac-run-1/autostart",
+		strings.NewReader(`{"autostart_reconnect":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	if !server.proxyToPeerWithRun(res, req, "/api/runs/mac-run-1/autostart") {
+		t.Fatal("proxyToPeerWithRun returned false for a run the second peer owns")
+	}
+	if owningSaw != `{"autostart_reconnect":true}` {
+		t.Fatalf("owning peer read body %q, want the original body", owningSaw)
+	}
+	if res.Body.String() != "armed" {
+		t.Fatalf("proxied body = %q, want %q", res.Body.String(), "armed")
+	}
+}
+
 func TestProxyToPeerWithRunForwardsAndStopsRecursion(t *testing.T) {
 	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/runs/mac-run-1/stop" {

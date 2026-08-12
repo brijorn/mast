@@ -268,8 +268,13 @@ func (s *Server) proxyToPeerWithRun(w http.ResponseWriter, r *http.Request, path
 	if r.Header.Get(proxyMarker) != "" {
 		return false
 	}
+	// The body is read once, here, because every peer in this loop needs it. A
+	// peer that does not own the run answers 404 and the search moves on, so
+	// reading the request stream per attempt would hand the owning peer — which
+	// is rarely the first one tried — an empty body to decode.
+	body := readBodyPreserving(r)
 	for _, base := range s.peerAPIBases() {
-		if s.proxyRunRequest(w, r, base+path) {
+		if s.proxyRunRequest(w, r, base+path, body) {
 			return true
 		}
 	}
@@ -279,14 +284,13 @@ func (s *Server) proxyToPeerWithRun(w http.ResponseWriter, r *http.Request, path
 // proxyRunRequest replays the request against one peer URL. A 404 means the peer
 // does not own the run, so the caller tries the next; any other status is the
 // peer's answer and is passed through.
-func (s *Server) proxyRunRequest(w http.ResponseWriter, r *http.Request, target string) bool {
+func (s *Server) proxyRunRequest(w http.ResponseWriter, r *http.Request, target string, body []byte) bool {
 	target += queryString(r)
-	var body io.Reader
-	if r.Body != nil {
-		data, _ := io.ReadAll(r.Body)
-		body = strings.NewReader(string(data))
+	var reader io.Reader
+	if len(body) > 0 {
+		reader = bytes.NewReader(body)
 	}
-	req, err := http.NewRequestWithContext(r.Context(), r.Method, target, body)
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, target, reader)
 	if err != nil {
 		return false
 	}

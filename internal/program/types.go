@@ -140,6 +140,33 @@ type Run struct {
 	AutostartSupervisor *AutostartSupervisorState `json:"autostart_supervisor,omitempty"`
 }
 
+// BuildRecipe describes how to build a program's native bundle from source on
+// the node that will run it. It generalizes run-on-mac.sh: ship the named
+// source repos, run Command in Workdir, and collect the Artifacts globs as the
+// bundle. gocv's CGO+OpenCV means the darwin/windows build cannot be
+// cross-compiled, so the build must happen on a host of the target OS.
+type BuildRecipe struct {
+	// Sources are the repo directory names shipped and laid out side by side
+	// under the build root (e.g. "framekit", "ioslink", "framekit-programs"),
+	// so a program's module replace-paths resolve.
+	Sources []string `json:"sources"`
+	// Workdir is the build directory relative to the build root, e.g.
+	// "framekit-programs/programs/pocket-champs".
+	Workdir string `json:"workdir"`
+	// Command is run in Workdir through a login shell, e.g.
+	// "go build -o pocket-champs ./cmd/pocket-champs".
+	Command string `json:"command"`
+	// Artifacts are globs relative to Workdir that become the bundle files at
+	// their matched relative paths (the binary, program.json, assets, profiles).
+	Artifacts           []string        `json:"artifacts"`
+	Name                string          `json:"name"`
+	Slug                string          `json:"slug"`
+	Entry               Entry           `json:"entry"`
+	ConfigFile          string          `json:"config_file,omitempty"`
+	ConfigMappings      []ConfigMapping `json:"config_mappings,omitempty"`
+	FinishesOnCleanExit bool            `json:"finishes_on_clean_exit,omitempty"`
+}
+
 // UploadFile is a single file within a directory upload.
 // Path is the relative path inside the program bundle (e.g. "config.ini").
 type UploadFile struct {
@@ -169,6 +196,11 @@ type StartOptions struct {
 	// is forwarded to that peer's Mast; when it is local, this is a no-op. It
 	// keeps the program's device calls on the same machine as the phone.
 	RunOnOwningNode bool `json:"run_on_owning_node,omitempty"`
+	// Build, when present with RunOnOwningNode and a peer owner, is built on the
+	// peer from shipped source before the start is forwarded — the peer's
+	// content-addressed program id replaces ProgramID. It is dropped before the
+	// start is forwarded, so the peer runs the built bundle without rebuilding.
+	Build *BuildRecipe `json:"build,omitempty"`
 }
 
 type ResumeOptions struct {

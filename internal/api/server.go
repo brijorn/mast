@@ -77,6 +77,7 @@ type videoViewerKey struct {
 
 type programBackend interface {
 	RegisterUpload(opts program.RegisterUploadOptions) (*program.Program, error)
+	BuildFromSource(recipe program.BuildRecipe, sources []program.UploadFile) (*program.Program, error)
 	ListPrograms() []program.Program
 	Start(opts program.StartOptions) ([]program.Run, error)
 	ListRuns() []program.Run
@@ -155,6 +156,7 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /api/programs", s.ListPrograms)
 	mux.HandleFunc("POST /api/programs/upload", s.UploadProgram)
+	mux.HandleFunc("POST /api/programs/build", s.BuildProgram)
 	mux.HandleFunc("PUT /api/programs/{id}", s.UpdateProgram)
 	mux.HandleFunc("DELETE /api/programs/{id}", s.DeleteProgram)
 	mux.HandleFunc("GET /api/runs", s.ListRuns)

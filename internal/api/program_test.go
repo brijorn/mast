@@ -29,6 +29,8 @@ type fakeProgramBackend struct {
 	stopAcknowledged bool
 	artifact         string
 	artifactPath     string
+	builtRecipe      program.BuildRecipe
+	builtSourceCount int
 }
 
 func (f *fakeProgramBackend) RequestStop(id string) (*program.Run, error) {
@@ -47,6 +49,12 @@ func (f *fakeProgramBackend) AcknowledgeStop(id string) (*program.Run, error) {
 
 func (f *fakeProgramBackend) ListPrograms() []program.Program {
 	return []program.Program{{ID: "sha256-test", Name: "Example"}}
+}
+
+func (f *fakeProgramBackend) BuildFromSource(recipe program.BuildRecipe, sources []program.UploadFile) (*program.Program, error) {
+	f.builtRecipe = recipe
+	f.builtSourceCount = len(sources)
+	return &program.Program{ID: "sha256-built", Name: recipe.Name, Slug: recipe.Slug}, nil
 }
 
 func (f *fakeProgramBackend) Start(opts program.StartOptions) ([]program.Run, error) {

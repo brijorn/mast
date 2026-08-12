@@ -1,11 +1,15 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -195,6 +199,118 @@ func TestStartRunsAlreadyProxiedDoesNotReforward(t *testing.T) {
 	}
 	if programs.started.ProgramID != "p" {
 		t.Fatalf("forwarded start did not execute locally on the owner: %+v", programs.started)
+	}
+}
+
+func TestBuildProgramRejectsUntrustedCaller(t *testing.T) {
+	backend := &fakeBackend{nodes: []node.NodeInfo{{ID: "local", Local: true}}}
+	programs := &fakeProgramBackend{}
+	server := NewServer(backend, programs)
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/programs/build", strings.NewReader(""))
+	req.RemoteAddr = "203.0.113.9:5000" // not loopback, not a known node
+	server.Handler().ServeHTTP(res, req)
+
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; a stranger must not trigger a build", res.Code)
+	}
+	if programs.builtSourceCount != 0 {
+		t.Fatal("untrusted caller still reached BuildFromSource")
+	}
+}
+
+func TestBuildProgramBuildsForLoopbackCaller(t *testing.T) {
+	backend := &fakeBackend{nodes: []node.NodeInfo{{ID: "local", Local: true}}}
+	programs := &fakeProgramBackend{}
+	server := NewServer(backend, programs)
+
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	_ = mw.WriteField("recipe", `{"name":"Demo","slug":"demo","command":"go build","entry":{"command":"./demo"}}`)
+	part, _ := mw.CreateFormFile("source", "myrepo/go.mod")
+	_, _ = part.Write([]byte("module demo\n"))
+	_ = mw.Close()
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/programs/build", &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.RemoteAddr = "127.0.0.1:5000"
+	server.Handler().ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", res.Code, res.Body.String())
+	}
+	if programs.builtRecipe.Slug != "demo" || programs.builtSourceCount != 1 {
+		t.Fatalf("BuildFromSource got recipe %+v, %d sources", programs.builtRecipe, programs.builtSourceCount)
+	}
+	if !strings.Contains(res.Body.String(), "sha256-built") {
+		t.Fatalf("build response missing program id: %s", res.Body.String())
+	}
+}
+
+func TestStartRunsBuildsOnPeerThenForwards(t *testing.T) {
+	srcRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(srcRoot, "myrepo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcRoot, "myrepo", "go.mod"), []byte("module x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MAST_SOURCE_ROOT", srcRoot)
+
+	var buildSaw string
+	var sawSourcePath bool
+	var startSawProgramID string
+	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/programs/build":
+			_ = r.ParseMultipartForm(1 << 20)
+			buildSaw = r.FormValue("recipe")
+			// The source file's full relative path must survive as the field
+			// name — a bare "source" key would mean the path was lost.
+			if r.MultipartForm != nil {
+				_, sawSourcePath = r.MultipartForm.File["myrepo/go.mod"]
+			}
+			_, _ = w.Write([]byte(`{"id":"peer-built"}`))
+		case "/api/runs":
+			body, _ := io.ReadAll(r.Body)
+			var opts struct {
+				ProgramID string `json:"program_id"`
+			}
+			_ = json.Unmarshal(body, &opts)
+			startSawProgramID = opts.ProgramID
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`[{"id":"peer-run"}]`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer peer.Close()
+
+	backend := &fakeBackend{
+		nodes:   []node.NodeInfo{{ID: "local", Local: true}, peerNode(t, peer.URL)},
+		devices: []node.DeviceInfo{{Serial: "IOS1", NodeID: "mac"}},
+	}
+	server := NewServer(backend, &fakeProgramBackend{})
+
+	start := `{"program_id":"bmo-linux","serials":["IOS1"],"run_on_owning_node":true,` +
+		`"build":{"sources":["myrepo"],"workdir":"myrepo","command":"true","artifacts":["bin"],` +
+		`"name":"Demo","slug":"demo","entry":{"command":"./bin"}}}`
+	res := httptest.NewRecorder()
+	server.Handler().ServeHTTP(res, httptest.NewRequest(http.MethodPost, "/api/runs", strings.NewReader(start)))
+
+	if res.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body: %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(buildSaw, `"slug":"demo"`) {
+		t.Fatalf("peer build did not receive the recipe; saw %q", buildSaw)
+	}
+	if !sawSourcePath {
+		t.Fatal("source file did not arrive under its relative path; the path was flattened")
+	}
+	if startSawProgramID != "peer-built" {
+		t.Fatalf("forwarded start used program_id %q, want the peer-built id", startSawProgramID)
 	}
 }
 

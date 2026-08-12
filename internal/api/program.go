@@ -170,6 +170,18 @@ func (s *Server) StartRuns(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if peerBase != "" {
+			// Build the native bundle on the peer first when a recipe is given,
+			// then start the built program there. gocv can't cross-compile, so
+			// the peer that owns the phone is the only host that can build it.
+			if req.Build != nil {
+				builtID, err := s.buildOnPeer(r.Context(), peerBase, *req.Build)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadGateway)
+					return
+				}
+				req.ProgramID = builtID
+			}
+			req.Build = nil
 			if s.forwardStartToNode(w, r, peerBase, req) {
 				return
 			}

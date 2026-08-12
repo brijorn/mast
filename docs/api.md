@@ -47,6 +47,7 @@ network.
 | `POST` | `/api/control/clipboard/set` | Set clipboard text. |
 | `GET` | `/api/programs` | List uploaded programs. |
 | `POST` | `/api/programs/upload` | Upload a program bundle. |
+| `POST` | `/api/programs/build` | Build a native bundle from shipped source. |
 | `PUT` | `/api/programs/{id}` | Update program metadata and config mappings. |
 | `DELETE` | `/api/programs/{id}` | Delete a current program bundle. |
 | `GET` | `/api/runs` | List program runs across the local node and its peers. |
@@ -1193,6 +1194,7 @@ template variables are covered in [Programs](programs.md). The HTTP surface is:
 |---|---|---|
 | `GET` | `/api/programs` | List current uploaded programs. |
 | `POST` | `/api/programs/upload` | Upload a multipart program bundle. |
+| `POST` | `/api/programs/build` | Build a native bundle from shipped source and register it. |
 | `PUT` | `/api/programs/{id}` | Update `name`, `slug`, and `config_mappings`. |
 | `DELETE` | `/api/programs/{id}` | Delete a program by content ID or slug. |
 | `GET` | `/api/runs` | List this node's runs and every peer's, de-duplicated. |
@@ -1232,6 +1234,49 @@ Start run request:
 Licensed or otherwise sensitive config fields use the sibling
 `secret_variables` object. Values are rendered into the private workspace but
 are not returned in run `env` or stored on the public program record.
+
+### Running on the node that owns the device
+
+A run executes on the node whose store receives the start. Set
+`run_on_owning_node: true` to execute on the node that owns the target device
+instead: the gateway resolves each serial's owner and forwards the whole start
+to that peer's `/api/runs` (all serials must share one owner). When the owner is
+local this is a no-op, and a start already forwarded is not forwarded again, so
+the owning peer runs it locally rather than bouncing it back.
+
+Because a program built with gocv cannot be cross-compiled, running on a peer
+also needs a bundle built for that peer's OS. Include a `build` recipe and the
+gateway packs the named source repos, builds on the owner, and starts the
+built bundle:
+
+```json
+{
+  "serials": ["00008140-001448993AEB801C"],
+  "run_on_owning_node": true,
+  "build": {
+    "sources": ["ioslink", "framekit", "framekit-programs"],
+    "workdir": "framekit-programs/programs/pocket-champs",
+    "command": "go build -o pocket-champs ./cmd/pocket-champs",
+    "artifacts": ["pocket-champs", "program.json", "assets/*.png", "profiles/*.json"],
+    "name": "Pocket Champs",
+    "slug": "pocket-champs",
+    "entry": { "command": "./pocket-champs", "args": ["run"] }
+  }
+}
+```
+
+`POST /api/programs/build` is the endpoint the owner receives: a multipart body
+of the `build` recipe plus the source files, laid out as `{repo}/{relpath}` so
+the repos sit side by side. It builds in `workdir` through a login shell,
+collects the `artifacts` globs as the bundle, registers it (content-addressed),
+and returns the program. Builds are **cached** by a hash of the source, command,
+and target `GOOS/GOARCH`, so an unchanged program reuses its last build instead
+of recompiling. The endpoint executes the recipe's command, so it accepts calls
+only from the local host or a connected peer. The owning peer must be a
+provisioned build host (Go with CGO, OpenCV matching gocv, and per-program deps
+such as Xcode/WDA for iOS); a missing toolchain surfaces as the build's own
+error and the run does not start. The source root packed on the gateway is
+`MAST_SOURCE_ROOT` (default `~/Documents`).
 
 Resume run request:
 

@@ -69,6 +69,20 @@ func TestListRunsAggregatesPeerRuns(t *testing.T) {
 	if !ids["run-1"] || !ids["mac-run-1"] {
 		t.Fatalf("aggregated runs = %v, want both local run-1 and peer mac-run-1", ids)
 	}
+	// Each run is stamped with the node that runs it: the local run with this
+	// node's id, the peer's run with the peer's.
+	host := map[string]string{}
+	for _, run := range runs {
+		id, _ := run["id"].(string)
+		h, _ := run["host_node_id"].(string)
+		host[id] = h
+	}
+	if host["run-1"] != "local" {
+		t.Fatalf("local run host_node_id = %q, want %q", host["run-1"], "local")
+	}
+	if host["mac-run-1"] != "mac" {
+		t.Fatalf("peer run host_node_id = %q, want %q", host["mac-run-1"], "mac")
+	}
 }
 
 func TestListRunsLocalOnlySkipsPeers(t *testing.T) {

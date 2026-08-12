@@ -162,7 +162,10 @@ func peerRuns(base string) []json.RawMessage {
 	return runs
 }
 
-// mergedRuns returns this node's runs plus every peer's, de-duplicated by id.
+// mergedRuns returns this node's runs plus every peer's, de-duplicated by id,
+// each stamped with host_node_id: the node whose Mast actually runs the process.
+// That is distinct from a run's node_id, which names the node that owns the
+// device — the two differ when a run drives a peer's phone from the gateway.
 func (s *Server) mergedRuns(local []json.RawMessage) []json.RawMessage {
 	seen := make(map[string]bool, len(local))
 	combined := make([]json.RawMessage, 0, len(local))
@@ -178,11 +181,61 @@ func (s *Server) mergedRuns(local []json.RawMessage) []json.RawMessage {
 			combined = append(combined, rm)
 		}
 	}
-	add(local)
-	for _, base := range s.peerAPIBases() {
-		add(peerRuns(base))
+	add(stampHostNode(local, s.localNodeID()))
+	if s.node != nil {
+		for _, n := range s.node.ListNodes() {
+			if n.Local || strings.TrimSpace(n.Addr) == "" {
+				continue
+			}
+			port := strings.TrimPrefix(strings.TrimSpace(n.APIAddr), ":")
+			if port == "" {
+				port = "6271"
+			}
+			base := fmt.Sprintf("http://%s:%s", n.Addr, port)
+			add(stampHostNode(peerRuns(base), n.ID))
+		}
 	}
 	return combined
+}
+
+// localNodeID is this node's own id, as it appears in the node list.
+func (s *Server) localNodeID() string {
+	if s.node == nil {
+		return ""
+	}
+	for _, n := range s.node.ListNodes() {
+		if n.Local {
+			return n.ID
+		}
+	}
+	return ""
+}
+
+// stampHostNode records, on each run, the node whose store holds it — the node
+// executing the program — without disturbing the rest of the run's fields.
+func stampHostNode(runs []json.RawMessage, hostID string) []json.RawMessage {
+	if hostID == "" {
+		return runs
+	}
+	encodedHost, err := json.Marshal(hostID)
+	if err != nil {
+		return runs
+	}
+	out := make([]json.RawMessage, 0, len(runs))
+	for _, rm := range runs {
+		var obj map[string]json.RawMessage
+		if err := json.Unmarshal(rm, &obj); err != nil {
+			out = append(out, rm)
+			continue
+		}
+		obj["host_node_id"] = encodedHost
+		if merged, err := json.Marshal(obj); err == nil {
+			out = append(out, merged)
+		} else {
+			out = append(out, rm)
+		}
+	}
+	return out
 }
 
 // proxyMarker names a request this node already forwarded. A peer that also

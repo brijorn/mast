@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,6 +9,23 @@ import (
 	"strings"
 	"time"
 )
+
+// readBodyPreserving reads the whole request body and resets r.Body so a later
+// peer proxy can replay it. A handler that decodes the body before its proxy
+// fallback must use this: decoding from r.Body consumes it, and the proxied
+// request would then reach the owning peer with an empty body — a 400 "EOF" on
+// the far side even though the run started fine.
+func readBodyPreserving(r *http.Request) []byte {
+	if r.Body == nil {
+		return nil
+	}
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		return nil
+	}
+	r.Body = io.NopCloser(bytes.NewReader(data))
+	return data
+}
 
 // A program run executes on the node that started it and is tracked in that
 // node's store. When a run was started on a peer — an iOS program running on the

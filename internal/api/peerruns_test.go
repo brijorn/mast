@@ -328,6 +328,21 @@ func TestStartRunsBuildsOnPeerThenForwards(t *testing.T) {
 	}
 }
 
+func TestReadBodyPreservingAllowsProxyReplay(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPut, "/api/runs/x/autostart",
+		strings.NewReader(`{"autostart_reconnect":true}`))
+	body := readBodyPreserving(req)
+	if string(body) != `{"autostart_reconnect":true}` {
+		t.Fatalf("decoded body = %q", body)
+	}
+	// The proxy replays r.Body; after a decode it must still hold the bytes,
+	// else the owning peer receives an empty body and 400s on EOF.
+	replayed, _ := io.ReadAll(req.Body)
+	if string(replayed) != `{"autostart_reconnect":true}` {
+		t.Fatalf("r.Body after read = %q, want the original body preserved for the proxy", replayed)
+	}
+}
+
 func TestProxyToPeerWithRunForwardsAndStopsRecursion(t *testing.T) {
 	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/runs/mac-run-1/stop" {

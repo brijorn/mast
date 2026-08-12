@@ -239,8 +239,8 @@ func (s *Server) StopRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	req := program.StopOptions{ID: r.PathValue("id")}
-	if r.Body != nil {
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+	if body := readBodyPreserving(r); len(body) > 0 {
+		if err := json.Unmarshal(body, &req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -328,8 +328,8 @@ func (s *Server) ResumeRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	req := program.ResumeOptions{ID: r.PathValue("id")}
-	if r.Body != nil {
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+	if body := readBodyPreserving(r); len(body) > 0 {
+		if err := json.Unmarshal(body, &req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -366,7 +366,7 @@ func (s *Server) SetRunAutostart(w http.ResponseWriter, r *http.Request) {
 		Reconnect    *bool `json:"autostart_reconnect"`
 		CrashRestart *bool `json:"autostart_crash_restart"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.Unmarshal(readBodyPreserving(r), &req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}

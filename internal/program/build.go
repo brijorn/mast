@@ -154,9 +154,11 @@ func (s *Store) writeSource(sources []UploadFile) (root string, cleanup func(), 
 	return work, cleanup, nil
 }
 
-// runBuildCommand runs a recipe's build command in workdir through a login shell
-// so the host's toolchain (Go, OpenCV via pkg-config) is on PATH the way an
-// interactive build sees it. It returns combined output for diagnosis.
+// runBuildCommand runs a recipe's build command in workdir. It inherits Mast's
+// own environment — the process was launched from the operator's shell, so its
+// PATH and PKG_CONFIG_PATH are the ones that make an interactive build work —
+// rather than a login shell, which on macOS re-derives PATH through path_helper
+// and drops Homebrew, hiding the pkg-config that finds OpenCV for gocv.
 func runBuildCommand(command, workdir string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), buildTimeout)
 	defer cancel()
@@ -165,12 +167,88 @@ func runBuildCommand(command, workdir string) ([]byte, error) {
 	if runtime.GOOS == "windows" {
 		cmd = exec.CommandContext(ctx, "cmd", "/c", command)
 	} else {
-		// A login shell loads the profile that puts go and pkg-config on PATH;
-		// a service's own environment often does not.
-		cmd = exec.CommandContext(ctx, "bash", "-lc", command)
+		cmd = exec.CommandContext(ctx, "bash", "-c", command)
 	}
 	cmd.Dir = workdir
+	cmd.Env = buildEnviron()
 	return cmd.CombinedOutput()
+}
+
+// buildEnviron is Mast's environment prepared for a mac gocv build: Homebrew's
+// bin on PATH (for brew's pkg-config and go), and PKG_CONFIG_PATH pointed at the
+// OpenCV keg. Homebrew installs OpenCV as the keg-only opencv@4, whose opencv4.pc
+// lives under the keg rather than the linked prefix pkg-config searches, so a
+// build cannot find it without this.
+func buildEnviron() []string {
+	env := os.Environ()
+	if runtime.GOOS != "darwin" {
+		return env
+	}
+	env = prependEnvPath(env, "PATH", "/opt/homebrew/bin", "/usr/local/bin")
+	env = prependEnvPath(env, "PKG_CONFIG_PATH", openCVPkgConfigDirs()...)
+	return env
+}
+
+// prependEnvPath prepends dirs (that aren't already present) to a colon path
+// variable in env, creating the variable if it is absent.
+func prependEnvPath(env []string, key string, dirs ...string) []string {
+	if len(dirs) == 0 {
+		return env
+	}
+	prefix := key + "="
+	for i, kv := range env {
+		if !strings.HasPrefix(kv, prefix) {
+			continue
+		}
+		current := strings.TrimPrefix(kv, prefix)
+		var add []string
+		for _, dir := range dirs {
+			if !strings.Contains(":"+current+":", ":"+dir+":") {
+				add = append(add, dir)
+			}
+		}
+		if len(add) > 0 {
+			env[i] = prefix + strings.Join(add, ":") + ":" + current
+		}
+		return env
+	}
+	return append(env, prefix+strings.Join(dirs, ":"))
+}
+
+// openCVPkgConfigDirs returns the pkgconfig directories that actually hold an
+// opencv4.pc, checking the stable keg symlinks first and the versioned Cellar
+// directories as a fallback, for both Apple Silicon and Intel Homebrew prefixes.
+func openCVPkgConfigDirs() []string {
+	var dirs []string
+	seen := map[string]bool{}
+	add := func(dir string) {
+		if !seen[dir] {
+			if _, err := os.Stat(filepath.Join(dir, "opencv4.pc")); err == nil {
+				seen[dir] = true
+				dirs = append(dirs, dir)
+			}
+		}
+	}
+	for _, dir := range []string{
+		"/opt/homebrew/opt/opencv@4/lib/pkgconfig",
+		"/opt/homebrew/opt/opencv/lib/pkgconfig",
+		"/usr/local/opt/opencv@4/lib/pkgconfig",
+		"/usr/local/opt/opencv/lib/pkgconfig",
+	} {
+		add(dir)
+	}
+	for _, pattern := range []string{
+		"/opt/homebrew/Cellar/opencv@4/*/lib/pkgconfig",
+		"/opt/homebrew/Cellar/opencv/*/lib/pkgconfig",
+		"/usr/local/Cellar/opencv@4/*/lib/pkgconfig",
+		"/usr/local/Cellar/opencv/*/lib/pkgconfig",
+	} {
+		matches, _ := filepath.Glob(pattern)
+		for _, match := range matches {
+			add(match)
+		}
+	}
+	return dirs
 }
 
 // collectArtifacts resolves the recipe's artifact globs against workdir and

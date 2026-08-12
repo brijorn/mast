@@ -395,6 +395,13 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				break
 			}
 			go n.handleScreenshotRequest(peer, req)
+		case transport.TypeWDARequest:
+			var req transport.WDARequest
+			if err := json.Unmarshal(message, &req); err != nil {
+				log.Println("decode wda request:", err)
+				break
+			}
+			go n.handleWDARequest(peer, req)
 		case transport.TypeElementsRequest:
 			var req transport.ElementsRequest
 			if err := json.Unmarshal(message, &req); err != nil {

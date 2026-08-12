@@ -626,3 +626,47 @@ type ConfigUpdateResponse struct {
 	RawMessage
 	Payload ConfigUpdateResponsePayload `json:"payload"`
 }
+
+// WDA element operations, forwarded to the node that owns an iOS device. One
+// generic request/response pair carries every operation, keyed by Op, rather
+// than a typed message per call.
+const (
+	TypeWDARequest  = "wda_request"
+	TypeWDAResponse = "wda_response"
+)
+
+type WDARequest struct {
+	RawMessage
+	Payload WDARequestPayload `json:"payload"`
+}
+
+type WDARequestPayload struct {
+	Op     string `json:"op"`
+	Serial string `json:"serial"`
+	Using  string `json:"using,omitempty"`
+	Value  string `json:"value,omitempty"`
+	ID     string `json:"id,omitempty"`
+	Name   string `json:"name,omitempty"`
+	Text   string `json:"text,omitempty"`
+}
+
+type WDAResponse struct {
+	RawMessage
+	Payload WDAResponsePayload `json:"payload"`
+}
+
+type WDAResponsePayload struct {
+	Source string        `json:"source,omitempty"`
+	IDs    []string      `json:"ids,omitempty"`
+	ID     string        `json:"id,omitempty"`
+	Rect   *WDARectValue `json:"rect,omitempty"`
+	Value  string        `json:"value,omitempty"`
+	Error  string        `json:"error,omitempty"`
+}
+
+type WDARectValue struct {
+	X      float64 `json:"x"`
+	Y      float64 `json:"y"`
+	Width  float64 `json:"width"`
+	Height float64 `json:"height"`
+}

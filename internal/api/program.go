@@ -480,7 +480,11 @@ func parseLogOffsets(r *http.Request) (program.LogOffsets, error) {
 	if err != nil {
 		return program.LogOffsets{}, err
 	}
-	return program.LogOffsets{Stdout: stdout, Stderr: stderr}, nil
+	tail, err := parseOptionalOffset(query.Get("tail_bytes"))
+	if err != nil {
+		return program.LogOffsets{}, err
+	}
+	return program.LogOffsets{Stdout: stdout, Stderr: stderr, TailBytes: tail}, nil
 }
 
 func parseOptionalOffset(value string) (int64, error) {

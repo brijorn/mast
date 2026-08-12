@@ -1,8 +1,10 @@
 package program
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -84,7 +86,7 @@ func TestBoundedLogWriterCapsSingleFileAndReadsWindow(t *testing.T) {
 		t.Fatalf("file = %q start = %d, want newest chunk at start 15", data, start)
 	}
 
-	all, end, _, reset, err := readLogFileSince(path, 0, start)
+	all, end, _, reset, err := readLogFileSince(path, 0, start, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +94,7 @@ func TestBoundedLogWriterCapsSingleFileAndReadsWindow(t *testing.T) {
 		t.Fatalf("all = %q end = %d reset = %v, want retained window ending at 20 with reset", all, end, reset)
 	}
 
-	tail, end, _, reset, err := readLogFileSince(path, 15, start)
+	tail, end, _, reset, err := readLogFileSince(path, 15, start, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,5 +147,55 @@ func TestRotateRunLogsKeepsThreeGenerations(t *testing.T) {
 		if _, err := os.Stat(logGenerationPath(current, 4)); !os.IsNotExist(err) {
 			t.Fatalf("%s unexpectedly retained a fourth generation: %v", stream, err)
 		}
+	}
+}
+
+// A reader that shows the newest few hundred lines used to download the whole
+// run to find them, and a long run's log is capped at ten megabytes.
+func TestLogsSinceCanReadOnlyTheTail(t *testing.T) {
+	workspace := t.TempDir()
+	var builder strings.Builder
+	for i := 0; i < 5000; i++ {
+		fmt.Fprintf(&builder, "line-%04d filler filler filler filler\n", i)
+	}
+	whole := builder.String()
+	if err := os.WriteFile(filepath.Join(workspace, "stdout.log"), []byte(whole), 0600); err != nil {
+		t.Fatal(err)
+	}
+	store := &Store{runs: map[string]*runState{
+		"run-1": {run: &Run{ID: "run-1", Workspace: workspace}},
+	}}
+
+	tail, err := store.LogsSince("run-1", LogOffsets{TailBytes: 2000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tail.Stdout) >= len(whole) {
+		t.Fatalf("tail returned %d bytes of %d", len(tail.Stdout), len(whole))
+	}
+	if !strings.HasSuffix(tail.Stdout, "line-4999 filler filler filler filler\n") {
+		t.Fatalf("tail did not end at the newest line: %q", tail.Stdout[max(0, len(tail.Stdout)-60):])
+	}
+	// The cut lands mid-line; the fragment is dropped rather than rendered as
+	// though it were a whole one.
+	if strings.HasPrefix(tail.Stdout, "line-") == false {
+		t.Fatalf("tail should start at a line boundary: %q", tail.Stdout[:40])
+	}
+	if !tail.StdoutReset {
+		t.Fatal("a tail read is a fresh read and must report a reset")
+	}
+	// The cursor is the real end, so polling continues incrementally.
+	if tail.StdoutOffset != int64(len(whole)) {
+		t.Fatalf("offset = %d, want %d", tail.StdoutOffset, len(whole))
+	}
+
+	// Once the caller holds a cursor it is asking for what is new, and the tail
+	// hint must not rewind it.
+	rest, err := store.LogsSince("run-1", LogOffsets{Stdout: tail.StdoutOffset, TailBytes: 2000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rest.Stdout != "" {
+		t.Fatalf("expected nothing new, got %d bytes", len(rest.Stdout))
 	}
 }

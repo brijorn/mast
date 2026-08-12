@@ -228,6 +228,12 @@ type StopRequest struct {
 type LogOffsets struct {
 	Stdout int64
 	Stderr int64
+	// TailBytes limits a fresh read to roughly the last N bytes of each stream.
+	// A reader that renders the newest few hundred lines otherwise downloads
+	// the whole run to display the end of it, and a long run's log is capped at
+	// ten megabytes. Ignored once the caller holds a real offset, because from
+	// then on it is asking for what is new rather than for the end.
+	TailBytes int64
 }
 
 type LogsResult struct {

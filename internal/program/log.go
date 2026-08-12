@@ -1,6 +1,7 @@
 package program
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -28,11 +29,11 @@ func (s *Store) LogsSince(id string, offsets LogOffsets) (*LogsResult, error) {
 		return nil, errors.New("run not found")
 	}
 
-	stdout, stdoutOffset, stdoutSize, stdoutReset, err := readLogFileSince(filepath.Join(state.run.Workspace, "stdout.log"), offsets.Stdout, state.run.StdoutLogStart)
+	stdout, stdoutOffset, stdoutSize, stdoutReset, err := readLogFileSince(filepath.Join(state.run.Workspace, "stdout.log"), offsets.Stdout, state.run.StdoutLogStart, offsets.TailBytes)
 	if err != nil {
 		return nil, err
 	}
-	stderr, stderrOffset, stderrSize, stderrReset, err := readLogFileSince(filepath.Join(state.run.Workspace, "stderr.log"), offsets.Stderr, state.run.StderrLogStart)
+	stderr, stderrOffset, stderrSize, stderrReset, err := readLogFileSince(filepath.Join(state.run.Workspace, "stderr.log"), offsets.Stderr, state.run.StderrLogStart, offsets.TailBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -204,7 +205,7 @@ func (w *boundedLogWriter) trimLocked() error {
 	return nil
 }
 
-func readLogFileSince(path string, offset, start int64) (string, int64, int64, bool, error) {
+func readLogFileSince(path string, offset, start, tail int64) (string, int64, int64, bool, error) {
 	if offset < 0 {
 		offset = 0
 	}
@@ -230,12 +231,30 @@ func readLogFileSince(path string, offset, start int64) (string, int64, int64, b
 		offset = start
 		reset = true
 	}
+	// A caller with no cursor yet may ask for only the end of the stream. It is
+	// a fresh read either way, so it reports a reset; the cursor it gets back is
+	// the real end of the file, and everything after this is incremental.
+	trimmedHead := false
+	if tail > 0 && offset <= start && end-start > tail {
+		offset = end - tail
+		reset = true
+		trimmedHead = true
+	}
 	if _, err := file.Seek(offset-start, io.SeekStart); err != nil {
 		return "", 0, 0, false, err
 	}
 	data, err := io.ReadAll(file)
 	if err != nil {
 		return "", 0, 0, false, err
+	}
+	if trimmedHead {
+		// The cut landed mid-line. Dropping the fragment costs one line and
+		// spares every reader from rendering half an event as if it were one.
+		if newline := bytes.IndexByte(data, '\n'); newline >= 0 {
+			data = data[newline+1:]
+		} else {
+			data = nil
+		}
 	}
 	return string(data), end, size, reset, nil
 }

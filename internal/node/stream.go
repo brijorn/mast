@@ -96,7 +96,7 @@ const (
 	// A compositor that froze under a dark panel needs the wake to land and
 	// the encoder to re-init before its first frame; 5s lost that race on a
 	// wedged SM_S156V while repeated wakes within a longer window recovered it.
-	videoStartupWakeWait = 12 * time.Second
+	videoStartupWakeWait     = 12 * time.Second
 	videoWriteTimeout        = 2 * time.Second
 	VideoCloseStreamNotFound = 4004
 )

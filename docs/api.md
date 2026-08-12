@@ -45,7 +45,7 @@ network.
 | `POST` | `/api/control/devtools/remove` | Release a DevTools forward. |
 | `POST` | `/api/control/clipboard/get` | Read clipboard text. |
 | `POST` | `/api/control/clipboard/set` | Set clipboard text. |
-| `GET` | `/api/programs` | List uploaded programs. |
+| `GET` | `/api/programs` | List programs across the local node and its peers. |
 | `POST` | `/api/programs/upload` | Upload a program bundle. |
 | `POST` | `/api/programs/build` | Build a native bundle from shipped source. |
 | `PUT` | `/api/programs/{id}` | Update program metadata and config mappings. |
@@ -1192,7 +1192,7 @@ template variables are covered in [Programs](programs.md). The HTTP surface is:
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/programs` | List current uploaded programs. |
+| `GET` | `/api/programs` | List this node's current programs and every peer's, de-duplicated. |
 | `POST` | `/api/programs/upload` | Upload a multipart program bundle. |
 | `POST` | `/api/programs/build` | Build a native bundle from shipped source and register it. |
 | `PUT` | `/api/programs/{id}` | Update `name`, `slug`, and `config_mappings`. |
@@ -1277,6 +1277,15 @@ provisioned build host (Go with CGO, OpenCV matching gocv, and per-program deps
 such as Xcode/WDA for iOS); a missing toolchain surfaces as the build's own
 error and the run does not start. The source root packed on the gateway is
 `MAST_SOURCE_ROOT` (default `~/Documents`).
+
+The bundle built that way is registered on the owning peer and nowhere else, so
+`GET /api/programs` lists this node's programs plus every peer's, de-duplicated
+by content id and each stamped with `host_node_id`, the node whose store holds
+it. Without that a reader can only report such a run by its content hash: the
+run names a program id no other node has heard of. Aggregation asks each peer
+with `?local=1`, the same recursion guard the run list uses, and a caller
+deciding whether a bundle still needs uploading *here* asks with `?local=1` too
+— upload and delete act on this node's own store, not a peer's.
 
 Resume run request:
 

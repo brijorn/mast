@@ -85,6 +85,80 @@ func TestListRunsAggregatesPeerRuns(t *testing.T) {
 	}
 }
 
+func TestListProgramsAggregatesPeerPrograms(t *testing.T) {
+	// A native bundle built on the node that owns the phone is registered only
+	// there. Without the peer's entry, a run of it can only be reported by its
+	// content hash, because no other node knows the bundle has a name.
+	var gotLocalOnly string
+	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/programs" {
+			http.NotFound(w, r)
+			return
+		}
+		gotLocalOnly = r.URL.Query().Get("local")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"id":"sha256-peer-built","slug":"pocket-champs","name":"Pocket Champs"}]`))
+	}))
+	defer peer.Close()
+
+	backend := &fakeBackend{nodes: []node.NodeInfo{{ID: "local", Local: true}, peerNode(t, peer.URL)}}
+	server := NewServer(backend, &fakeProgramBackend{})
+
+	res := httptest.NewRecorder()
+	server.Handler().ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/api/programs", nil))
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", res.Code, res.Body.String())
+	}
+	if gotLocalOnly != "1" {
+		t.Fatalf("peer was asked with local=%q, want the local=1 recursion guard", gotLocalOnly)
+	}
+	var programs []map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&programs); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	host := map[string]string{}
+	for _, p := range programs {
+		id, _ := p["id"].(string)
+		h, _ := p["host_node_id"].(string)
+		host[id] = h
+	}
+	if _, ok := host["sha256-test"]; !ok {
+		t.Fatalf("aggregated programs = %v, want the local program listed", host)
+	}
+	if host["sha256-peer-built"] != "mac" {
+		t.Fatalf("peer program host_node_id = %q, want %q", host["sha256-peer-built"], "mac")
+	}
+}
+
+func TestListProgramsLocalOnlySkipsPeers(t *testing.T) {
+	// Upload and delete act on this node's own store, so the caller deciding
+	// whether a bundle needs uploading here must not see a peer's copy.
+	called := false
+	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"id":"sha256-peer-built"}]`))
+	}))
+	defer peer.Close()
+
+	backend := &fakeBackend{nodes: []node.NodeInfo{peerNode(t, peer.URL)}}
+	server := NewServer(backend, &fakeProgramBackend{})
+
+	res := httptest.NewRecorder()
+	server.Handler().ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/api/programs?local=1", nil))
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", res.Code)
+	}
+	if called {
+		t.Fatal("local=1 request still fanned out to a peer; the guard must answer from the local store only")
+	}
+	if strings.Contains(res.Body.String(), "sha256-peer-built") {
+		t.Fatalf("local=1 response leaked a peer program: %s", res.Body.String())
+	}
+}
+
 func TestListRunsLocalOnlySkipsPeers(t *testing.T) {
 	called := false
 	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

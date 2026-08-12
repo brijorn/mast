@@ -161,11 +161,12 @@ func (s *Server) forwardStartToNode(w http.ResponseWriter, r *http.Request, base
 	return true
 }
 
-// peerRuns fetches one peer's run list as raw JSON objects. The local=1 marker
-// asks the peer for only the runs it owns, so a peer that also aggregates does
-// not turn around and ask us back — that would recurse across the network.
-func peerRuns(base string) []json.RawMessage {
-	resp, err := peerRunClient.Get(base + "/api/runs?local=1")
+// peerList fetches one peer's list of runs or programs as raw JSON objects. The
+// local=1 marker asks the peer for only what it owns, so a peer that also
+// aggregates does not turn around and ask us back — that would recurse across
+// the network.
+func peerList(base, path string) []json.RawMessage {
+	resp, err := peerRunClient.Get(base + path + "?local=1")
 	if err != nil {
 		return nil
 	}
@@ -173,11 +174,11 @@ func peerRuns(base string) []json.RawMessage {
 	if resp.StatusCode != http.StatusOK {
 		return nil
 	}
-	var runs []json.RawMessage
-	if err := json.NewDecoder(resp.Body).Decode(&runs); err != nil {
+	var items []json.RawMessage
+	if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
 		return nil
 	}
-	return runs
+	return items
 }
 
 // mergedRuns returns this node's runs plus every peer's, de-duplicated by id,
@@ -185,10 +186,25 @@ func peerRuns(base string) []json.RawMessage {
 // That is distinct from a run's node_id, which names the node that owns the
 // device — the two differ when a run drives a peer's phone from the gateway.
 func (s *Server) mergedRuns(local []json.RawMessage) []json.RawMessage {
+	return s.mergeAcrossPeers(local, "/api/runs")
+}
+
+// mergedPrograms returns this node's programs plus every peer's, de-duplicated
+// by content id. A native bundle is built on the node that will run it and
+// registered only there, so the peer's entry is the only place a run of that
+// bundle can be read back as a name rather than a content hash.
+func (s *Server) mergedPrograms(local []json.RawMessage) []json.RawMessage {
+	return s.mergeAcrossPeers(local, "/api/programs")
+}
+
+// mergeAcrossPeers combines this node's list with each peer's, keeping the first
+// entry seen for an id and stamping every entry with the node whose store holds
+// it.
+func (s *Server) mergeAcrossPeers(local []json.RawMessage, path string) []json.RawMessage {
 	seen := make(map[string]bool, len(local))
 	combined := make([]json.RawMessage, 0, len(local))
-	add := func(runs []json.RawMessage) {
-		for _, rm := range runs {
+	add := func(items []json.RawMessage) {
+		for _, rm := range items {
 			var idOnly struct {
 				ID string `json:"id"`
 			}
@@ -210,7 +226,7 @@ func (s *Server) mergedRuns(local []json.RawMessage) []json.RawMessage {
 				port = "6271"
 			}
 			base := fmt.Sprintf("http://%s:%s", n.Addr, port)
-			add(stampHostNode(peerRuns(base), n.ID))
+			add(stampHostNode(peerList(base, path), n.ID))
 		}
 	}
 	return combined
@@ -229,18 +245,19 @@ func (s *Server) localNodeID() string {
 	return ""
 }
 
-// stampHostNode records, on each run, the node whose store holds it — the node
-// executing the program — without disturbing the rest of the run's fields.
-func stampHostNode(runs []json.RawMessage, hostID string) []json.RawMessage {
+// stampHostNode records, on each run or program, the node whose store holds it —
+// for a run, the node executing the program — without disturbing the rest of the
+// entry's fields.
+func stampHostNode(items []json.RawMessage, hostID string) []json.RawMessage {
 	if hostID == "" {
-		return runs
+		return items
 	}
 	encodedHost, err := json.Marshal(hostID)
 	if err != nil {
-		return runs
+		return items
 	}
-	out := make([]json.RawMessage, 0, len(runs))
-	for _, rm := range runs {
+	out := make([]json.RawMessage, 0, len(items))
+	for _, rm := range items {
 		var obj map[string]json.RawMessage
 		if err := json.Unmarshal(rm, &obj); err != nil {
 			out = append(out, rm)

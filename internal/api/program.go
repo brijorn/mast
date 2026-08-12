@@ -136,14 +136,34 @@ func (s *Server) DeleteProgram(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) ListPrograms(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) ListPrograms(w http.ResponseWriter, r *http.Request) {
 	if s.programs == nil {
 		http.Error(w, "program runner not configured", http.StatusServiceUnavailable)
 		return
 	}
 
+	// Uploading and deleting are about this node's own store, so a caller that
+	// asks what it may operate on asks with local=1 — the same marker that stops
+	// two aggregating nodes from querying each other forever.
+	if isTruthy(r.URL.Query().Get("local")) {
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(s.programs.ListPrograms()); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+
+	// A program built on the node that owns its phone is registered there and
+	// nowhere else, so a run of it names a program this node has never heard of.
+	// Listing peers' programs too is what lets a reader put a name to such a run.
+	local := make([]json.RawMessage, 0)
+	for _, program := range s.programs.ListPrograms() {
+		if encoded, err := json.Marshal(program); err == nil {
+			local = append(local, encoded)
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(s.programs.ListPrograms()); err != nil {
+	if err := json.NewEncoder(w).Encode(s.mergedPrograms(local)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }

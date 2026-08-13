@@ -1,4 +1,5 @@
 .idea/
+.DS_Store
 /mast
 qodana.yaml
 fixtures/

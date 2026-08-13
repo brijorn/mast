@@ -63,3 +63,19 @@ logs, autostart, cleanup, and template variables.
 
 See [docs/cli.md](docs/cli.md) for setup, service, peer, update, and version
 commands.
+
+## Production deployment
+
+This Mac is the development workspace and GitHub is the source of truth. BMO is
+only a production checkout and build host. After tests pass, commit and push the
+current branch, then deploy its exact commit with:
+
+```sh
+./scripts/deploy-bmo.sh
+```
+
+The BMO-side script refuses dirty or divergent source, runs the full Go test
+suite, builds with commit metadata, atomically replaces the installed binary,
+restarts `mast.service`, and waits until `/api/nodes` reports that commit. A
+failed restart or health check restores the previous binary. Override the SSH
+target with `MAST_DEPLOY_HOST` when needed.

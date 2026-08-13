@@ -607,11 +607,14 @@ func (s *Store) Resume(opts ResumeOptions) (*Run, error) {
 		s.mu.Unlock()
 	}()
 
-	alive, matches := runProcessStatus(&savedRun)
-	if alive {
-		if !matches {
-			return nil, fmt.Errorf("run pid %d is still alive but does not belong to the saved run workspace", savedRun.PID)
-		}
+	// Stop the run's own process before restarting it — but only when the saved
+	// PID is still alive AND still that process. A PID that is alive but no longer
+	// matches was reused by an unrelated process since this run exited: the run's
+	// process is gone, so resume proceeds without touching the stranger. Erroring
+	// there wedged a resumed run whose PID a macOS process had recycled, and the
+	// reconnect supervisor retried it forever — "keeps getting a process id error"
+	// while trying to re-own the device.
+	if alive, matches := runProcessStatus(&savedRun); alive && matches {
 		if err := killRunProcess(&savedRun); err != nil {
 			return nil, err
 		}

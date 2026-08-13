@@ -116,6 +116,113 @@ func TestDevicePowerPolicyOptOutStillKeepsDeviceAwake(t *testing.T) {
 	}
 }
 
+// The rotation sensor is re-enabled by system_server behind the operator's
+// back, so locking a phone upright once does not keep it upright. The policy
+// loop that already re-asserts stay-awake every 30s re-asserts this too.
+func TestDevicePowerPolicyReassertsPortraitLock(t *testing.T) {
+	fake := &fakeADB{}
+	n := &Node{
+		ID:                  "local-node",
+		ctx:                 context.Background(),
+		adb:                 fake,
+		devicePowerReady:    map[string]bool{"local-123": true},
+		devicePowerSessions: make(map[string]*devicePowerSession),
+		devicePowerStarting: make(map[string]*devicePowerAttempt),
+		devicePowerRetries:  make(map[string]*devicePowerRetry),
+		devicePowerFailures: make(map[string]uint),
+		configReady:         true,
+		configState: mastconfig.Config{
+			AndroidEnabled: true,
+			KeepDisplayOff: false,
+			LockPortrait:   true,
+		},
+	}
+
+	n.reconcileDevicePower("local-123")
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	want := []shellCall{
+		{Host: "", Serial: "local-123", Args: []string{"settings", "put", "global", "stay_on_while_plugged_in", "7"}},
+		{Host: "", Serial: "local-123", Args: []string{"wm", "fixed-to-user-rotation", "-d", "0", "enabled"}},
+		{Host: "", Serial: "local-123", Args: []string{"settings", "put", "system", "accelerometer_rotation", "0"}},
+		{Host: "", Serial: "local-123", Args: []string{"settings", "put", "system", "user_rotation", "0"}},
+		{Host: "", Serial: "local-123", Args: []string{"settings", "put", "global", "force_resizable_activities", "1"}},
+	}
+	if diff := cmp.Diff(want, fake.shellOutputCalls); diff != "" {
+		t.Fatalf("policy calls mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// Pinning the display refuses a landscape ad its rotation, and an unresizable
+// one refused is letterboxed into a band whose close button the solver cannot
+// reach. The two must ship together or the phone stops earning.
+func TestDevicePortraitLockForcesResizableActivities(t *testing.T) {
+	fake := &fakeADB{}
+	n := &Node{
+		ID:          "local-node",
+		ctx:         context.Background(),
+		adb:         fake,
+		configReady: true,
+		configState: mastconfig.Config{AndroidEnabled: true, LockPortrait: true},
+	}
+
+	if err := n.assertDevicePortraitLock("local-123"); err != nil {
+		t.Fatalf("assert portrait lock: %v", err)
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	var pinned, resizable bool
+	for _, call := range fake.shellOutputCalls {
+		joined := strings.Join(call.Args, " ")
+		if joined == "wm fixed-to-user-rotation -d 0 enabled" {
+			pinned = true
+		}
+		if joined == "settings put global force_resizable_activities 1" {
+			resizable = true
+		}
+	}
+	if !pinned {
+		t.Fatal("portrait lock did not pin the display to user rotation")
+	}
+	if !resizable {
+		t.Fatal("portrait lock pinned the display without forcing activities resizable")
+	}
+}
+
+// A node that has not opted into portrait locking is left alone entirely.
+func TestDevicePowerPolicySkipsPortraitLockWhenNotConfigured(t *testing.T) {
+	fake := &fakeADB{}
+	n := &Node{
+		ID:                  "local-node",
+		ctx:                 context.Background(),
+		adb:                 fake,
+		devicePowerReady:    map[string]bool{"local-123": true},
+		devicePowerSessions: make(map[string]*devicePowerSession),
+		devicePowerStarting: make(map[string]*devicePowerAttempt),
+		devicePowerRetries:  make(map[string]*devicePowerRetry),
+		devicePowerFailures: make(map[string]uint),
+		configReady:         true,
+		configState: mastconfig.Config{
+			AndroidEnabled: true,
+			KeepDisplayOff: false,
+			LockPortrait:   false,
+		},
+	}
+
+	n.reconcileDevicePower("local-123")
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	want := []shellCall{
+		{Host: "", Serial: "local-123", Args: []string{"settings", "put", "global", "stay_on_while_plugged_in", "7"}},
+	}
+	if diff := cmp.Diff(want, fake.shellOutputCalls); diff != "" {
+		t.Fatalf("portrait lock ran without lock_portrait (-want +got):\n%s", diff)
+	}
+}
+
 func TestDevicePowerPolicySCIDHasOneHexSourceOfTruth(t *testing.T) {
 	endpoint := devicePowerPolicyEndpoint()
 	args := devicePowerScrcpyArgs(endpoint)

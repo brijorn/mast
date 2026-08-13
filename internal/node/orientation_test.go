@@ -26,12 +26,45 @@ func TestSetDeviceOrientationLandscape(t *testing.T) {
 		t.Fatalf("orientation status mismatch (-want +got):\n%s", diff)
 	}
 	wantCalls := []shellCall{
-		{Serial: "local-123", Args: []string{"wm", "set-ignore-orientation-request", "-d", "0", "true"}},
+		{Serial: "local-123", Args: []string{"wm", "fixed-to-user-rotation", "-d", "0", "enabled"}},
 		{Serial: "local-123", Args: []string{"settings", "put", "system", "accelerometer_rotation", "0"}},
 		{Serial: "local-123", Args: []string{"settings", "put", "system", "user_rotation", "1"}},
 	}
 	if diff := cmp.Diff(wantCalls, fake.shellOutputCalls); diff != "" {
 		t.Fatalf("shell calls mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// The policy loop re-asserts portrait every thirty seconds. An operator who
+// turned this handset must not have it turned back under them.
+func TestSetDeviceOrientationSurvivesThePolicyLoop(t *testing.T) {
+	fake := &fakeADB{outputs: map[string][]byte{
+		"": []byte("List of devices attached\nlocal-123\tdevice\n"),
+	}}
+	n := dnsTestNode(fake)
+	n.configMu.Lock()
+	n.configReady = true
+	n.configState.AndroidEnabled = true
+	n.configState.LockPortrait = true
+	n.configMu.Unlock()
+
+	if _, err := n.SetDeviceOrientation("local-123", DeviceOrientationLandscape); err != nil {
+		t.Fatalf("SetDeviceOrientation: %v", err)
+	}
+	fake.mu.Lock()
+	fake.shellOutputCalls = nil
+	fake.mu.Unlock()
+
+	if err := n.assertDevicePortraitLock("local-123"); err != nil {
+		t.Fatalf("assert portrait lock: %v", err)
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	for _, call := range fake.shellOutputCalls {
+		if strings.Join(call.Args, " ") == "settings put system user_rotation 0" {
+			t.Fatal("policy loop overwrote the operator's landscape with portrait")
+		}
 	}
 }
 

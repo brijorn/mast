@@ -573,19 +573,13 @@ func (n *Node) startLocalAndroidStreamWithDeviceCheck(serial string, opts stream
 		}
 	}
 
-	n.configMu.RLock()
-	lockPortrait := n.configReady && n.configState.LockPortrait && !opts.PreserveOrientation
-	n.configMu.RUnlock()
-
-	if lockPortrait {
-		if _, err := n.adbShell(n.ctx, "", serial, "wm", "set-ignore-orientation-request", "-d", "0", "true"); err != nil {
-			log.Printf("failed to set ignore orientation request on %s: %v", serial, err)
-		}
-		if _, err := n.adbShell(n.ctx, "", serial, "settings", "put", "system", "accelerometer_rotation", "0"); err != nil {
-			log.Printf("failed to disable accelerometer rotation on %s: %v", serial, err)
-		}
-		if _, err := n.adbShell(n.ctx, "", serial, "settings", "put", "system", "user_rotation", "0"); err != nil {
-			log.Printf("failed to set user rotation on %s: %v", serial, err)
+	// A stream wants the same upright phone the policy loop maintains, so it
+	// asks for it the same way rather than keeping a second, divergent idea of
+	// what "locked portrait" means. `PreserveOrientation` is the operator
+	// deliberately looking at a device the way it actually sits.
+	if !opts.PreserveOrientation {
+		if err := n.assertDevicePortraitLock(serial); err != nil {
+			log.Printf("lock %s portrait for stream: %v", serial, err)
 		}
 	}
 

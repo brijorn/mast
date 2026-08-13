@@ -59,7 +59,10 @@ func (n *Node) setLocalDeviceOrientation(serial string, orientation DeviceOrient
 		rotation = "1"
 	}
 	commands := [][]string{
-		{"wm", "set-ignore-orientation-request", "-d", "0", "true"},
+		// Pin the display rather than only refusing the app, because the sensor
+		// does not stay off: system_server turns accelerometer_rotation back on
+		// by itself. See assertDevicePortraitLock.
+		{"wm", "fixed-to-user-rotation", "-d", "0", "enabled"},
 		{"settings", "put", "system", "accelerometer_rotation", "0"},
 		{"settings", "put", "system", "user_rotation", rotation},
 	}
@@ -68,6 +71,14 @@ func (n *Node) setLocalDeviceOrientation(serial string, orientation DeviceOrient
 			return nil, fmt.Errorf("set %s orientation on %s: %w", orientation, serial, err)
 		}
 	}
+	// Record what the operator asked for, so the policy loop re-asserts their
+	// rotation instead of overwriting it on its next pass.
+	n.devicePowerMu.Lock()
+	if n.deviceRotateOverride == nil {
+		n.deviceRotateOverride = make(map[string]DeviceOrientation)
+	}
+	n.deviceRotateOverride[serial] = orientation
+	n.devicePowerMu.Unlock()
 
 	return &DeviceOrientationStatus{
 		Serial:      serial,

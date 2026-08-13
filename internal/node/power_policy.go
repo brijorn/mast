@@ -165,6 +165,7 @@ func (n *Node) ObserveDeviceReady(device DeviceInfo, ready bool) {
 		// that handset any more, so it returns to the node's policy rather than
 		// staying lit by a decision nobody remembers making.
 		delete(n.devicePowerOverride, device.Serial)
+		delete(n.deviceRotateOverride, device.Serial)
 		delete(n.devicePowerAsserted, device.Serial)
 	}
 	session := n.devicePowerSessions[device.Serial]
@@ -299,6 +300,9 @@ func (n *Node) reconcileDevicePower(serial string) {
 	if err := n.assertDeviceStayAwake(serial); err != nil {
 		log.Printf("apply stay-awake policy to %s: %v", serial, err)
 	}
+	if err := n.assertDevicePortraitLock(serial); err != nil {
+		log.Printf("apply portrait lock to %s: %v", serial, err)
+	}
 	hold, wantOn := n.devicePowerIntent(serial)
 	if !hold {
 		return
@@ -372,6 +376,65 @@ func (n *Node) reconcileDevicePower(serial string) {
 func (n *Node) assertDeviceStayAwake(serial string) error {
 	_, err := n.adbShell(n.ctx, "", serial, "settings", "put", "global", "stay_on_while_plugged_in", "7")
 	return err
+}
+
+// assertDevicePortraitLock keeps a racked phone upright. A phone in a rack is
+// not held, so its accelerometer reports whatever angle the shelf put it at, and
+// a detector expecting 1080x2340 handed 2340x1080 blames the phone rather than
+// the holder.
+//
+// `fixed-to-user-rotation` is what actually holds the display. Turning the
+// sensor off does not: system_server rewrites accelerometer_rotation back to 1
+// itself — attributed to package `android`, immediately after an `am start` of a
+// game's launcher activity — so a phone locked upright at stream start is
+// sensor-live again by the time the program relaunches the app. Measured on
+// 1A091FDF600KW6: with the sensor deliberately re-enabled and the handset on its
+// side, `fixed-to-user-rotation enabled` held display 0 at 1080x2400, where
+// `set-ignore-orientation-request` alone let it turn (that one refuses the app,
+// not the sensor). The two settings keys stay anyway — user_rotation is the
+// rotation the display is now pinned *to*, and a quiet sensor saves the window
+// manager the churn — but they are the belt, not the braces.
+//
+// Pinning the display refuses the app its own landscape, which is why
+// force_resizable_activities rides along. A fleet phone earns from ads, those
+// ads are very often landscape, and an unresizable landscape activity refused
+// its rotation is letterboxed into a band — a 1080x481 strip of content in a
+// 1080x2340 frame, close button off the bottom, and the solver sits on an ad it
+// cannot close. Forced resizable, the ad gets the whole portrait window and lays
+// itself out inside it, so its close affordance lands on screen where a detector
+// can reach it.
+//
+// None of the three survive a reboot, which is the other reason this is a
+// standing policy rather than a step in device preparation.
+func (n *Node) assertDevicePortraitLock(serial string) error {
+	n.configMu.RLock()
+	lockPortrait := n.configReady && n.configState.LockPortrait
+	n.configMu.RUnlock()
+	if !lockPortrait {
+		return nil
+	}
+	// An operator who turned this handset deliberately is asserting something
+	// about the phone in front of them, and a policy loop that undid it thirty
+	// seconds later would read as the control being broken. Hold their rotation
+	// instead of the node's, and keep pinning it so it survives the sensor.
+	rotation := "0"
+	n.devicePowerMu.Lock()
+	if override, overridden := n.deviceRotateOverride[serial]; overridden && override == DeviceOrientationLandscape {
+		rotation = "1"
+	}
+	n.devicePowerMu.Unlock()
+	commands := [][]string{
+		{"wm", "fixed-to-user-rotation", "-d", "0", "enabled"},
+		{"settings", "put", "system", "accelerometer_rotation", "0"},
+		{"settings", "put", "system", "user_rotation", rotation},
+		{"settings", "put", "global", "force_resizable_activities", "1"},
+	}
+	for _, command := range commands {
+		if _, err := n.adbShell(n.ctx, "", serial, command...); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (n *Node) startDevicePowerSession(attempt *devicePowerAttempt, serial string) (*devicePowerSession, error) {
@@ -536,6 +599,9 @@ func (n *Node) reassertDevicePowerPolicy(serial string) {
 	}
 	if err := n.assertDeviceStayAwake(serial); err != nil {
 		log.Printf("re-assert stay-awake policy for %s: %v", serial, err)
+	}
+	if err := n.assertDevicePortraitLock(serial); err != nil {
+		log.Printf("re-assert portrait lock for %s: %v", serial, err)
 	}
 	hold, wantOn := n.devicePowerIntent(serial)
 	if !hold {

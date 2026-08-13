@@ -95,6 +95,25 @@ Set it to `false` to stop Mast from re-asserting the Android
 physical-panel-off policy. The separate stay-awake policy remains enabled for
 continuous automation.
 
+`lock_portrait` keeps a racked Android phone upright. Turning the rotation sensor
+off does not hold on its own — `system_server` writes `accelerometer_rotation`
+back to `1` by itself, right after a program relaunches a game's launcher
+activity — so the node pins the display with `wm fixed-to-user-rotation` and
+re-asserts the whole set on the same 30-second loop that re-asserts stay-awake,
+for every device it has ready. Nothing here survives a reboot, which is why it is
+a standing policy rather than a one-time preparation step.
+
+Pinning the display refuses an app its own landscape, so the policy also sets
+`force_resizable_activities`. Without it an unresizable landscape ad is
+letterboxed into a band — roughly 1080x481 of content in a 1080x2340 frame, close
+button off the bottom — and a solver sits on an ad it cannot close. Forced
+resizable, the ad gets the whole portrait window and lays out inside it.
+
+`PUT /api/devices/{serial}/orientation` still turns one handset deliberately, and
+the policy loop re-asserts the operator's rotation rather than overwriting it.
+That override is per device and is dropped when the device disconnects, so a
+phone that left and came back returns to the node's policy.
+
 ## config show
 
 Prints the current configuration as JSON.

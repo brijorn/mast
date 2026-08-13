@@ -48,7 +48,15 @@ func runProcessStatus(run *Run) (alive bool, matches bool) {
 func processIdentityMatchesRun(run *Run) bool {
 	if run.PIDStartTime > 0 {
 		started, ok := processStartTime(run.PID)
-		return ok && started == run.PIDStartTime
+		// A start time that cannot be read is not evidence the PID was reused —
+		// only a start time read and found to differ is. The read (sysctl on
+		// darwin, /proc on linux) can fail transiently while the host is busy, and
+		// a run mid-setdate is driving the Settings app hard; treating that read
+		// failure as a mismatch marked a live run lost and left Runway showing it
+		// as not running. An alive PID whose start time cannot be read this instant
+		// is assumed still ours; a genuine reuse is caught by the next check that
+		// does read it and finds a different time.
+		return !ok || started == run.PIDStartTime
 	}
 	return processCwdMatchesRun(run)
 }

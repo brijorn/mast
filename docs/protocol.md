@@ -837,6 +837,77 @@ The response uses the same message ID:
 
 If the update fails, `payload.error` contains the error string.
 
+## devtools_forward_request
+
+Asks the device owner to expose a phone's Chrome DevTools socket and publish it
+where the requesting node can reach it.
+
+```json
+{
+  "type": "devtools_forward_request",
+  "id": "message-id",
+  "from": "node-a",
+  "to": "node-b",
+  "timestamp": "2026-06-22T17:00:00Z",
+  "payload": {
+    "serial": "remote-123"
+  }
+}
+```
+
+The response uses the same message ID:
+
+```json
+{
+  "type": "devtools_forward_response",
+  "id": "message-id",
+  "from": "node-b",
+  "to": "node-a",
+  "timestamp": "2026-06-22T17:00:01Z",
+  "payload": {
+    "result": {
+      "serial": "remote-123",
+      "host": "100.64.0.2",
+      "port": 41234
+    }
+  }
+}
+```
+
+`adb forward` binds loopback, so the owner puts a byte relay in front of it on
+its advertise address and answers with that. The caller connects directly, the
+same way a peer video viewer connects to the owning node rather than tunnelling
+frames through this socket.
+
+The relay is a byte pipe rather than an HTTP proxy because a DevTools client
+fetches `/json/version` and then upgrades a websocket at whatever path that
+document names — rewriting paths would mean rewriting the protocol. The owner
+refuses to publish at all when its advertise host is a DNS name, because Chrome
+rejects a DevTools request whose `Host` header is not an IP or `localhost`.
+
+If the forward fails, `payload.error` contains the error string.
+
+## devtools_remove_request
+
+Releases a published forward and the `adb forward` beneath it.
+
+```json
+{
+  "type": "devtools_remove_request",
+  "id": "message-id",
+  "from": "node-a",
+  "to": "node-b",
+  "timestamp": "2026-06-22T17:00:00Z",
+  "payload": {
+    "serial": "remote-123",
+    "port": 41234
+  }
+}
+```
+
+The response uses the same message ID and carries `payload.error` only when the
+release failed. Releasing a forward the owner no longer has is not an error.
+
 ## Adding Peers
 
 Adding a peer can be done from the CLI:

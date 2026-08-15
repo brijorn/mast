@@ -54,6 +54,10 @@ const (
 	TypeConfigGetResponse            = "config_get_response"
 	TypeConfigUpdateRequest          = "config_update_request"
 	TypeConfigUpdateResponse         = "config_update_response"
+	TypeDevToolsForwardRequest       = "devtools_forward_request"
+	TypeDevToolsForwardResponse      = "devtools_forward_response"
+	TypeDevToolsRemoveRequest        = "devtools_remove_request"
+	TypeDevToolsRemoveResponse       = "devtools_remove_response"
 )
 
 type Message interface {
@@ -669,4 +673,52 @@ type WDARectValue struct {
 	Y      float64 `json:"y"`
 	Width  float64 `json:"width"`
 	Height float64 `json:"height"`
+}
+
+// A DevTools forward is reached over the network rather than returned as a bare
+// port, because the adb forward it wraps binds loopback on the node that owns
+// the phone. The owner answers with the address a peer can actually dial, which
+// is the same shape a stream start answers with.
+type DevToolsForwardRequestPayload struct {
+	Serial string `json:"serial"`
+}
+
+type DevToolsForwardRequest struct {
+	RawMessage
+	Payload DevToolsForwardRequestPayload `json:"payload"`
+}
+
+type DevToolsForwardResultPayload struct {
+	Serial string `json:"serial"`
+	Host   string `json:"host"`
+	Port   int    `json:"port"`
+}
+
+type DevToolsForwardResponsePayload struct {
+	Result *DevToolsForwardResultPayload `json:"result,omitempty"`
+	Error  string                        `json:"error,omitempty"`
+}
+
+type DevToolsForwardResponse struct {
+	RawMessage
+	Payload DevToolsForwardResponsePayload `json:"payload"`
+}
+
+type DevToolsRemoveRequestPayload struct {
+	Serial string `json:"serial"`
+	Port   int    `json:"port"`
+}
+
+type DevToolsRemoveRequest struct {
+	RawMessage
+	Payload DevToolsRemoveRequestPayload `json:"payload"`
+}
+
+type DevToolsRemoveResponsePayload struct {
+	Error string `json:"error,omitempty"`
+}
+
+type DevToolsRemoveResponse struct {
+	RawMessage
+	Payload DevToolsRemoveResponsePayload `json:"payload"`
 }

@@ -395,6 +395,20 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				break
 			}
 			go n.handleScreenshotRequest(peer, req)
+		case transport.TypeDevToolsForwardRequest:
+			var req transport.DevToolsForwardRequest
+			if err := json.Unmarshal(message, &req); err != nil {
+				log.Println("decode devtools forward request:", err)
+				break
+			}
+			go n.handleDevToolsForwardRequest(peer, req)
+		case transport.TypeDevToolsRemoveRequest:
+			var req transport.DevToolsRemoveRequest
+			if err := json.Unmarshal(message, &req); err != nil {
+				log.Println("decode devtools remove request:", err)
+				break
+			}
+			go n.handleDevToolsRemoveRequest(peer, req)
 		case transport.TypeWDARequest:
 			var req transport.WDARequest
 			if err := json.Unmarshal(message, &req); err != nil {

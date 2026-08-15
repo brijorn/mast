@@ -317,6 +317,11 @@ func TestDevToolsForwardReportsPort(t *testing.T) {
 	if decoded.Port != 41234 || decoded.Serial != "local-123" {
 		t.Fatalf("response = %+v", decoded)
 	}
+	// A caller dials the host it is given rather than assuming loopback, so the
+	// response has to carry one even for a device this node owns.
+	if decoded.Host != "127.0.0.1" {
+		t.Fatalf("host = %q, want the loopback a local forward binds", decoded.Host)
+	}
 }
 
 func TestDevToolsForwardRemoveRequiresPort(t *testing.T) {
@@ -631,15 +636,15 @@ func (b *controlBackend) OpenURL(serial string, url string) error {
 	return b.err
 }
 
-func (b *controlBackend) DevToolsForward(serial string) (int, error) {
+func (b *controlBackend) DevToolsEndpoint(serial string) (string, int, error) {
 	b.devToolsSerial = serial
 	if b.err != nil {
-		return 0, b.err
+		return "", 0, b.err
 	}
-	return b.devToolsPort, nil
+	return "127.0.0.1", b.devToolsPort, nil
 }
 
-func (b *controlBackend) DevToolsForwardRemove(serial string, port int) error {
+func (b *controlBackend) RemoveDevToolsEndpoint(serial string, port int) error {
 	b.devToolsSerial = serial
 	b.devToolsRemovedPort = port
 	return b.err

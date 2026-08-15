@@ -69,7 +69,11 @@ type devToolsRequest struct {
 
 type devToolsResponse struct {
 	Serial string `json:"serial"`
-	Port   int    `json:"port"`
+	// Where to reach the socket. Loopback for a phone this node owns, and the
+	// owner's advertised address for one a peer owns — a caller dials Host:Port
+	// either way rather than assuming localhost.
+	Host string `json:"host"`
+	Port int    `json:"port"`
 }
 
 // The URL is single-quoted into a device shell command, so a single quote
@@ -534,7 +538,7 @@ func (s *Server) DevToolsForward(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	port, err := s.node.DevToolsForward(req.Serial)
+	host, port, err := s.node.DevToolsEndpoint(req.Serial)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -542,7 +546,7 @@ func (s *Server) DevToolsForward(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	if err := json.NewEncoder(w).Encode(devToolsResponse{Serial: req.Serial, Port: port}); err != nil {
+	if err := json.NewEncoder(w).Encode(devToolsResponse{Serial: req.Serial, Host: host, Port: port}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -564,7 +568,7 @@ func (s *Server) DevToolsForwardRemove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.node.DevToolsForwardRemove(req.Serial, req.Port); err != nil {
+	if err := s.node.RemoveDevToolsEndpoint(req.Serial, req.Port); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

@@ -1049,16 +1049,37 @@ POST /api/control/devtools
 POST /api/control/devtools/remove
 ```
 
-Exposes a device's Chrome DevTools socket on a TCP port of the owning node and
-reports which port ADB allocated, so a caller can read the live DOM of a page
-the device is showing. `localabstract:chrome_devtools_remote` exists only while
-Chrome is running; its absence is an error rather than a forward to a port that
-would refuse every connection.
+Exposes a device's Chrome DevTools socket and reports the address to dial, so a
+caller can read the live DOM of a page the device is showing.
+`localabstract:chrome_devtools_remote` exists only while Chrome is running; its
+absence is an error rather than a forward to a port that would refuse every
+connection. This forwards a socket on a device Mast already owns — it does not
+manage a browser.
 
-Local-node only. The forward binds loopback on the node that owns the phone, so
-a port number means nothing to a caller elsewhere; a peer-owned device is an
-explicit error rather than an endpoint that cannot be reached. This forwards a
-socket on a device Mast already owns — it does not manage a browser.
+A phone owned by a peer works too. The underlying `adb forward` binds loopback
+on the node that owns the phone, so that node publishes it on its advertise
+address and answers with both host and port; the caller dials `host:port`
+without needing to know which node it reached. A locally owned phone keeps the
+loopback forward it has always used and adds no hop.
+
+Two properties of Chrome decide the shape of this, and both were measured
+rather than assumed:
+
+- Chrome echoes the request's `Host` header into the `webSocketDebuggerUrl` it
+  reports, so a client that fetched `/json/version` through the published
+  address is handed a socket URL naming that same address, and the session
+  continues over the same path.
+- Chrome refuses a DevTools request whose `Host` is a name rather than an IP or
+  `localhost` — *"Host header is specified and is not an IP address or
+  localhost"* — naming neither Mast nor the node. A node whose advertise host is
+  a DNS name therefore refuses to publish a forward at all, with an error that
+  says so, rather than handing back an address the browser will reject.
+
+The published port carries an unauthenticated DevTools socket for as long as it
+is open, reachable by anything that can route to the node's advertise address.
+That is the same trust boundary as the rest of this API, which already taps and
+types on the phones; it is closed by `/remove`, and it binds the advertise
+address specifically rather than every interface.
 
 Request body:
 
@@ -1073,12 +1094,24 @@ Successful response:
 ```json
 {
   "serial": "local-123",
+  "host": "127.0.0.1",
+  "port": 41234
+}
+```
+
+For a peer-owned phone `host` is that node's advertise address instead:
+
+```json
+{
+  "serial": "remote-123",
+  "host": "100.108.95.85",
   "port": 41234
 }
 ```
 
 `/remove` takes the same body plus the `port` to release and answers
-`204 No Content`.
+`204 No Content`. Releasing a forward that is already gone is not an error, so
+a caller tidying up after a failure need not know how far it got.
 
 ## Get Clipboard
 

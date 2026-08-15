@@ -345,11 +345,11 @@ func (f *fakeBackend) OpenURL(_ string, _ string) error {
 	return f.err
 }
 
-func (f *fakeBackend) DevToolsForward(_ string) (int, error) {
-	return 0, f.err
+func (f *fakeBackend) DevToolsEndpoint(_ string) (string, int, error) {
+	return "", 0, f.err
 }
 
-func (f *fakeBackend) DevToolsForwardRemove(_ string, _ int) error {
+func (f *fakeBackend) RemoveDevToolsEndpoint(_ string, _ int) error {
 	return f.err
 }
 

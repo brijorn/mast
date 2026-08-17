@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# Launch a Windows program in the Wine prefix belonging to one phone.
+set -euo pipefail
+
+template_prefix="${WINERUN_TEMPLATE:-$HOME/.wine-android}"
+prefix_root="${WINERUN_PREFIX_ROOT:-$HOME/.wine-android-phones}"
+
+if [[ $# -eq 0 ]]; then
+  echo "Usage: winerun <path-to.exe> [args...]"
+  echo "Template prefix: $template_prefix"
+  echo "Phone prefixes:  $prefix_root"
+  exit 1
+fi
+
+seed_prefix() {
+  local prefix=$1 phone=$2
+  [[ -f "$prefix/system.reg" ]] && return 0
+  if [[ ! -f "$template_prefix/system.reg" ]]; then
+    echo "winerun: no template prefix at $template_prefix" >&2
+    return 1
+  fi
+
+  local staging="$prefix.seeding.$$"
+  rm -rf -- "$staging"
+  echo "winerun: seeding $prefix from $template_prefix (first run for $phone)" >&2
+  if ! rsync -a --exclude 'drive_c/users/*/AppData/Local/Temp/***' \
+    "$template_prefix/" "$staging/"; then
+    rm -rf -- "$staging"
+    echo "winerun: could not seed $prefix" >&2
+    return 1
+  fi
+  mkdir -p "$staging/drive_c/users/$USER/AppData/Local/Temp"
+  mv "$staging" "$prefix" || {
+    rm -rf -- "$staging"
+    return 1
+  }
+}
+
+clean_onefile_temp() {
+  local prefix=$1
+  local temp="$prefix/drive_c/users/$USER/AppData/Local/Temp"
+  [[ -d "$temp" ]] || return 0
+
+  # Nuitka onefile executables unpack a complete runtime for every process.
+  # A normal exit removes it, but Mast deliberately kills the complete Wine
+  # cgroup on Stop, so interrupted runs leave hundreds of megabytes behind.
+  # The per-phone lock proves no earlier runner in this prefix is still using
+  # these directories; clear them before the next executable starts.
+  local path
+  for path in "$temp"/onefile_*; do
+    [[ -e "$path" || -L "$path" ]] || continue
+    rm -rf -- "$path"
+  done
+}
+
+phone=$(printf '%s' "${MAST_DEVICE_ID:-}" | tr -c 'A-Za-z0-9._-' '_')
+if [[ -n "$phone" ]]; then
+  mkdir -p "$prefix_root"
+  exec 9>"$prefix_root/.$phone.run.lock"
+  flock 9
+
+  prefix="$prefix_root/$phone"
+  if seed_prefix "$prefix" "$phone"; then
+    clean_onefile_temp "$prefix"
+    export WINEPREFIX="$prefix"
+  else
+    echo "winerun: refusing shared-prefix fallback for $phone" >&2
+    exit 1
+  fi
+else
+  # A manual launch without a device keeps the legacy shared prefix. Do not
+  # clean it: unlike a phone prefix, it has no single-owner lock proving that
+  # another manually launched Wine program is not using its extracted files.
+  export WINEPREFIX="$template_prefix"
+fi
+export WINEDEBUG="${WINEDEBUG:--all}"
+
+exe=$1
+shift
+exe_dir=$(cd "$(dirname "$exe")" && pwd)
+exe_name=$(basename "$exe")
+cd "$exe_dir"
+exec wine "$exe_name" "$@"

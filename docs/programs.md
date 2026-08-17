@@ -298,10 +298,11 @@ was truncated, such as after resume, Mast returns the current file from the
 beginning and sets the corresponding `*_reset` flag.
 
 Mast caps each current stdout/stderr stream to 10 MiB. When the file exceeds the
-cap, Mast keeps the newest bytes and records the logical start offset in
-`run.json` so offset polling can continue. If a client asks for an offset older
-than the retained window, Mast returns the retained window and sets the
-corresponding reset flag.
+cap, Mast keeps the newest 7.5 MiB and records the logical start offset in
+`run.json` so offset polling can continue. The spare 2.5 MiB prevents a small,
+chatty stream from forcing a rewrite of the complete retained log on every
+append. If a client asks for an offset older than the retained window, Mast
+returns the retained window and sets the corresponding reset flag.
 
 A failed attempt is retained for up to three resumed generations:
 `stdout.1.log` through `stdout.3.log` and `stderr.1.log` through
@@ -521,6 +522,19 @@ A runner should also keep whatever per-machine state it owns separate per
 phone, keyed on `MAST_DEVICE_ID`. A single shared sandbox reintroduces the same
 problem one level up: one daemon serving every run, which no single run can be
 allowed to kill.
+
+Mast's Linux deployment installs `scripts/winerun` for `.exe` runners. It seeds
+one Wine prefix per `MAST_DEVICE_ID` without copying the template prefix's temp
+directory. Every phone prefix also has a runner lock held for the executable's
+whole lifetime. Before the next executable starts under that lock, the runner
+removes abandoned `onefile_*` directories from the prefix's Windows temp
+directory. Nuitka normally removes those extracted runtimes on exit, but a
+Mast Stop kills the whole Wine cgroup and cannot give the extractor that
+cleanup opportunity. Other temp data is left alone, and manual launches using
+the shared template prefix are never cleaned because they have no single-phone
+ownership proof. A phone-prefix seed failure ends the run instead of falling
+back to that shared prefix: sharing would merge wineserver ownership across
+phones and make one run unable to stop its own process tree safely.
 
 ## Run environment
 

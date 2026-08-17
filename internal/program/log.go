@@ -163,7 +163,21 @@ func (w *boundedLogWriter) trimLocked() error {
 	if w.size <= w.maxBytes {
 		return nil
 	}
-	trimBytes := w.size - w.maxBytes
+	// Leave headroom below the hard cap. Trimming back to exactly maxBytes
+	// makes the next child-process write copy the complete retained log again;
+	// a chatty process emitting a few hundred bytes at a time can otherwise turn
+	// those bytes into a ten-megabyte rewrite on every Write call.
+	retainBytes := w.maxBytes * 3 / 4
+	if retainBytes < 1 {
+		retainBytes = 1
+	}
+	if retainBytes > w.maxBytes {
+		retainBytes = w.maxBytes
+	}
+	if retainBytes > w.size {
+		retainBytes = w.size
+	}
+	trimBytes := w.size - retainBytes
 	if w.file != nil {
 		if err := w.file.Close(); err != nil {
 			return err

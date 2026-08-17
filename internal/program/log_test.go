@@ -82,24 +82,59 @@ func TestBoundedLogWriterCapsSingleFileAndReadsWindow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(data) != "33333" || start != 15 {
-		t.Fatalf("file = %q start = %d, want newest chunk at start 15", data, start)
+	if string(data) != "333" || start != 17 {
+		t.Fatalf("file = %q start = %d, want retained headroom at start 17", data, start)
 	}
 
 	all, end, _, reset, err := readLogFileSince(path, 0, start, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if all != "33333" || end != 20 || !reset {
+	if all != "333" || end != 20 || !reset {
 		t.Fatalf("all = %q end = %d reset = %v, want retained window ending at 20 with reset", all, end, reset)
 	}
 
-	tail, end, _, reset, err := readLogFileSince(path, 15, start, 0)
+	tail, end, _, reset, err := readLogFileSince(path, 17, start, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tail != "33333" || end != 20 || reset {
+	if tail != "333" || end != 20 || reset {
 		t.Fatalf("tail = %q end = %d reset = %v, want last segment without reset", tail, end, reset)
+	}
+}
+
+func TestBoundedLogWriterLeavesHeadroomForSmallAppends(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "stdout.log")
+	var starts []int64
+	writer, err := newBoundedLogWriter(path, 8, func(next int64) {
+		starts = append(starts, next)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = writer.Close() }()
+
+	if _, err := writer.Write([]byte("abcdefgh")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Write([]byte("i")); err != nil {
+		t.Fatal(err)
+	}
+	for _, chunk := range []string{"j", "k"} {
+		if _, err := writer.Write([]byte(chunk)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if len(starts) != 1 || starts[0] != 3 {
+		t.Fatalf("trim starts = %v, want one trim to offset 3", starts)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "defghijk" {
+		t.Fatalf("file = %q, want retained bytes plus headroom appends", data)
 	}
 }
 

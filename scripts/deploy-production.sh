@@ -15,6 +15,7 @@ esac
 
 repo=${MAST_DEPLOY_REPO:-"$HOME/Documents/mast"}
 install_dir=${MAST_INSTALL_DIR:-"$HOME/.mast/bin"}
+helper_dir=${MAST_HELPER_DIR:-"$HOME/.local/bin"}
 health_url=${MAST_HEALTH_URL:-"http://127.0.0.1:6271/api/nodes"}
 lock_file=${MAST_DEPLOY_LOCK:-"$HOME/.mast/deploy.lock"}
 
@@ -58,6 +59,10 @@ if [[ -x "$install_dir/mast" ]]; then
 fi
 install -m 0755 "$build_dir/mast" "$install_dir/mast.next"
 mv -f "$install_dir/mast.next" "$install_dir/mast"
+
+mkdir -p "$helper_dir"
+install -m 0755 scripts/winerun "$helper_dir/winerun.next"
+mv -f "$helper_dir/winerun.next" "$helper_dir/winerun"
 
 if ! systemctl --user restart mast.service; then
   echo "Mast did not restart; restoring the previous binary." >&2

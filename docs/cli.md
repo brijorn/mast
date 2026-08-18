@@ -40,7 +40,8 @@ Default configuration:
   "ios_enabled": false,
   "proxy_enabled": false,
   "lock_portrait": false,
-  "keep_display_off": true
+  "keep_display_off": true,
+  "stream_idle_timeout": 300
 }
 ```
 
@@ -60,6 +61,7 @@ mast config set ios_enabled true
 mast config set proxy_enabled true
 mast config set lock_portrait true
 mast config set keep_display_off false
+mast config set stream_idle_timeout 300
 mast config set runners..py "python3 -u"
 ```
 
@@ -79,6 +81,7 @@ ios_enabled
 proxy_enabled
 lock_portrait
 keep_display_off
+stream_idle_timeout
 runners.<file_extension>
 ```
 
@@ -87,6 +90,14 @@ and iOS UDIDs. It is consulted on every device listing, so a change through
 `PUT /api/nodes/{id}/config` or the blacklist endpoints takes effect on the
 running node with no restart. `mast config set` writes the same value for a node
 that is not running.
+
+`stream_idle_timeout` is how many seconds an Android viewer stream may run with
+nobody watching before Mast tears it down; `0` keeps a stream until something
+stops it explicitly. Idleness is counted from the last viewer disconnecting, not
+from the client remembering to send a stop — a closed laptop or a dropped tunnel
+never sends one, and a stream left running holds a virtual display open and the
+phone's encoder busy. It is read per sweep, so a change applies without a
+restart. iOS MJPEG streams are unaffected.
 
 `keep_display_off` defaults to `true` (including when the key is absent from an
 older config). `mast config set` persists the value for the next start; updating

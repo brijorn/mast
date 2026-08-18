@@ -135,6 +135,7 @@ func NewNode(id string, addr string, advertiseHost string, androidEnabled bool, 
 		devicePowerWake:      make(chan struct{}, 1),
 	}
 	go n.monitorDevicePowerPolicy()
+	go n.monitorIdleStreams()
 	return n, nil
 }
 

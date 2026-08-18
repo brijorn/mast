@@ -275,13 +275,33 @@ type videoBroadcaster struct {
 	currentGOP      []VideoPacket
 	currentGOPBytes int
 	lastPacketAt    time.Time
-	closed          bool
+	// When the last subscriber left, or when the broadcaster was created and
+	// none has ever attached. Zero while someone is watching.
+	idleSince time.Time
+	closed    bool
 }
 
 func newVideoBroadcaster() *videoBroadcaster {
+	return newVideoBroadcasterAt(time.Now())
+}
+
+func newVideoBroadcasterAt(now time.Time) *videoBroadcaster {
 	return &videoBroadcaster{
 		subscribers: make(map[*videoSubscription]struct{}),
+		idleSince:   now,
 	}
+}
+
+// IdleSince reports how long the stream has had no viewer. ok is false while
+// one is attached. A stream nobody is watching still drives the device's
+// encoder and its virtual display, which is what this exists to notice.
+func (b *videoBroadcaster) IdleSince() (at time.Time, ok bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.subscribers) > 0 || b.idleSince.IsZero() {
+		return time.Time{}, false
+	}
+	return b.idleSince, true
 }
 
 func (b *videoBroadcaster) Subscribe() (*videoSubscription, func()) {
@@ -299,6 +319,7 @@ func (b *videoBroadcaster) Subscribe() (*videoSubscription, func()) {
 		subscription.close()
 	} else {
 		b.subscribers[subscription] = struct{}{}
+		b.idleSince = time.Time{}
 	}
 	b.mu.Unlock()
 
@@ -306,6 +327,9 @@ func (b *videoBroadcaster) Subscribe() (*videoSubscription, func()) {
 		b.mu.Lock()
 		delete(b.subscribers, subscription)
 		subscription.close()
+		if len(b.subscribers) == 0 && b.idleSince.IsZero() {
+			b.idleSince = time.Now()
+		}
 		b.mu.Unlock()
 	}
 

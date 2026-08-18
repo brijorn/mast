@@ -42,7 +42,10 @@ type Config struct {
 	// Encoder settings for viewer streams. They take effect on the next stream
 	// a device starts, so a new value can be tried by updating config and
 	// reopening the stream rather than rebuilding the caller.
-	StreamMaxSize           int    `json:"stream_max_size"`
+	StreamMaxSize int `json:"stream_max_size"`
+	// Seconds a viewer stream may run with nobody watching before it is torn
+	// down. 0 keeps a stream until something stops it explicitly.
+	StreamIdleTimeout       int    `json:"stream_idle_timeout"`
 	StreamVideoBitrate      int    `json:"stream_video_bitrate"`
 	StreamVideoCodecOptions string `json:"stream_video_codec_options"`
 
@@ -53,7 +56,10 @@ type Config struct {
 // specify its own. They match what the dashboard asked for before the settings
 // became configurable, so an existing node keeps its current picture.
 const (
-	DefaultStreamMaxSize           = 1080
+	DefaultStreamMaxSize = 1080
+	// Long enough that a viewer reloading a page keeps its stream, short
+	// enough that a closed laptop stops encoding video within the hour.
+	DefaultStreamIdleTimeout       = 300
 	DefaultStreamVideoBitrate      = 1_500_000
 	DefaultStreamVideoCodecOptions = "i-frame-interval=1"
 )
@@ -75,6 +81,7 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 		KeepDisplayOff:          true,
 		ProxyAddressFamily:      DefaultProxyAddressFamily,
 		StreamMaxSize:           DefaultStreamMaxSize,
+		StreamIdleTimeout:       DefaultStreamIdleTimeout,
 		StreamVideoBitrate:      DefaultStreamVideoBitrate,
 		StreamVideoCodecOptions: DefaultStreamVideoCodecOptions,
 	}
@@ -164,6 +171,15 @@ func (c *Config) Set(key string, value string) error {
 			return fmt.Errorf("proxy_address_family must be ipv4, ipv6, or auto")
 		}
 		c.ProxyAddressFamily = family
+	case "stream_idle_timeout":
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return err
+		}
+		if parsed < 0 {
+			return fmt.Errorf("stream_idle_timeout must not be negative")
+		}
+		c.StreamIdleTimeout = parsed
 	case "stream_max_size":
 		parsed, err := strconv.Atoi(value)
 		if err != nil {

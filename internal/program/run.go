@@ -463,6 +463,37 @@ func (s *Store) resolveRunCommand(workspace, command string, args []string) (str
 	return s.runnerCommand(command, args)
 }
 
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
+}
+
+// terminalInputCommand gives console-oriented Windows executables a real
+// terminal. Wine maps an ordinary Unix pipe to EOF for Python's input(), even
+// though the bytes are present on the launcher process. util-linux script
+// creates the PTY that Wine exposes as a Windows console input handle.
+func terminalInputCommand(command string, args []string) (string, []string, error) {
+	if runtime.GOOS != "linux" {
+		return command, args, nil
+	}
+	script, err := exec.LookPath("script")
+	if err != nil {
+		return "", nil, errors.New("program startup input requires the util-linux script command")
+	}
+	parts := make([]string, 0, len(args)+1)
+	parts = append(parts, shellQuote(command))
+	for _, arg := range args {
+		parts = append(parts, shellQuote(arg))
+	}
+	return script, []string{
+		"--quiet",
+		"--return",
+		"--flush",
+		"--echo", "never",
+		"--command", strings.Join(parts, " "),
+		"/dev/null",
+	}, nil
+}
+
 func (s *Store) startRunProcesses(state *runState, stdout, stderr io.Writer, env map[string]string) error {
 	run := state.run
 	s.mu.Lock()
@@ -472,6 +503,23 @@ func (s *Store) startRunProcesses(state *runState, stdout, stderr io.Writer, env
 	runID := run.ID
 	s.mu.Unlock()
 
+	stdinValue := ""
+	if variable := strings.TrimSpace(run.StdinVariable); variable != "" {
+		var ok bool
+		stdinValue, ok = env[variable]
+		if !ok {
+			stdinValue, ok = env[strings.ToLower(variable)]
+		}
+		if !ok {
+			return fmt.Errorf("stdin variable %q is not configured", variable)
+		}
+		var err error
+		command, args, err = terminalInputCommand(command, args)
+		if err != nil {
+			return err
+		}
+	}
+
 	command, args = scopedCommand(runID, command, args)
 	cmd := s.startCmd(command, args...)
 	configureRunCommand(cmd)
@@ -479,6 +527,9 @@ func (s *Store) startRunProcesses(state *runState, stdout, stderr io.Writer, env
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	cmd.Env = mergeEnv(os.Environ(), env)
+	if run.StdinVariable != "" {
+		cmd.Stdin = strings.NewReader(stdinValue + "\n")
+	}
 	if err := cmd.Start(); err != nil {
 		return err
 	}
@@ -839,6 +890,7 @@ func (s *Store) startOne(p Program, device node.DeviceInfo, nodes []node.NodeInf
 		Env:           env,
 		Cmd:           command,
 		CmdArgs:       args,
+		StdinVariable: p.Entry.StdinVariable,
 		StartedAt:     time.Now().UTC(),
 	}
 	for _, companion := range p.Entry.Companions {

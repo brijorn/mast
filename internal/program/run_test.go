@@ -164,6 +164,101 @@ printf 'ARGS=%s\n' "$*"
 	}
 }
 
+func TestStartFeedsConfiguredVariableToProgramStdinAndResumeUsesOverride(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("/bin/sh is not available on Windows")
+	}
+
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "read-level.sh"), []byte("#!/bin/sh\nIFS= read -r level\nprintf 'LEVEL=%s\\n' \"$level\"\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := NewStore(filepath.Join(root, "programs"), fakeDevices{devices: []node.DeviceInfo{
+		{Serial: "phone-1", Platform: node.PlatformAndroid, State: "device", NodeID: "local"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registered, err := registerTestProgram(t, store, source, RegisterUploadOptions{
+		Name:  "stdin runner",
+		Entry: Entry{Command: "/bin/sh", Args: []string{"read-level.sh"}, StdinVariable: "CURRENT_LEVEL"},
+		ConfigMappings: []ConfigMapping{
+			{Key: "CURRENT_LEVEL", Value: "1"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runs, err := store.Start(StartOptions{
+		ProgramID: registered.ID,
+		Serials:   []string{"phone-1"},
+		Variables: map[string]string{"CURRENT_LEVEL": "47"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, store, runs[0].ID)
+	stdout, stderr, err := store.Logs(runs[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stderr != "" || !strings.Contains(stdout, "LEVEL=47") {
+		t.Fatalf("logs = stdout %q stderr %q, want configured stdin", stdout, stderr)
+	}
+
+	resumed, err := store.Resume(ResumeOptions{
+		ID:        runs[0].ID,
+		Variables: map[string]string{"CURRENT_LEVEL": "48"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, store, resumed.ID)
+	stdout, stderr, err = store.Logs(resumed.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stderr != "" || !strings.Contains(stdout, "LEVEL=48") {
+		t.Fatalf("resumed logs = stdout %q stderr %q, want updated stdin", stdout, stderr)
+	}
+}
+
+func TestTerminalInputCommandQuotesCommandAndArguments(t *testing.T) {
+	command, args, err := terminalInputCommand("/tmp/program's runner", []string{"plain", "two words", "can't"})
+	if err != nil {
+		if runtime.GOOS == "linux" {
+			t.Fatal(err)
+		}
+		return
+	}
+	if runtime.GOOS != "linux" {
+		if command != "/tmp/program's runner" || !cmp.Equal(args, []string{"plain", "two words", "can't"}) {
+			t.Fatalf("terminalInputCommand = %q %q", command, args)
+		}
+		return
+	}
+	commandIndex := -1
+	for index, arg := range args {
+		if arg == "--command" {
+			commandIndex = index + 1
+			break
+		}
+	}
+	if commandIndex <= 0 || commandIndex >= len(args) {
+		t.Fatalf("script args missing --command: %q", args)
+	}
+	want := `'/tmp/program'"'"'s runner' 'plain' 'two words' 'can'"'"'t'`
+	if args[commandIndex] != want {
+		t.Fatalf("quoted command = %q, want %q", args[commandIndex], want)
+	}
+}
+
 func TestSoftStopRequestPersistsAndAcknowledges(t *testing.T) {
 	root := t.TempDir()
 	workspace := filepath.Join(root, "programs", "instances", "run-soft-stop")

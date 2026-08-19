@@ -52,6 +52,9 @@ go test ./...
 go build -trimpath \
   -ldflags "-s -w -X github.com/brijorn/mast/internal/version.Version=dev-$short_commit -X github.com/brijorn/mast/internal/version.Commit=$expected_commit -X github.com/brijorn/mast/internal/version.Date=$build_date" \
   -o "$build_dir/mast" ./cmd/mast
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath \
+  -ldflags "-s -w" \
+  -o "$build_dir/winprompt.exe" ./cmd/winprompt
 
 mkdir -p "$install_dir"
 if [[ -x "$install_dir/mast" ]]; then
@@ -63,6 +66,8 @@ mv -f "$install_dir/mast.next" "$install_dir/mast"
 mkdir -p "$helper_dir"
 install -m 0755 scripts/winerun "$helper_dir/winerun.next"
 mv -f "$helper_dir/winerun.next" "$helper_dir/winerun"
+install -m 0644 "$build_dir/winprompt.exe" "$helper_dir/winprompt.exe.next"
+mv -f "$helper_dir/winprompt.exe.next" "$helper_dir/winprompt.exe"
 
 if ! systemctl --user restart mast.service; then
   echo "Mast did not restart; restoring the previous binary." >&2

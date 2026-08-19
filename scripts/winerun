@@ -80,4 +80,14 @@ shift
 exe_dir=$(cd "$(dirname "$exe")" && pwd)
 exe_name=$(basename "$exe")
 cd "$exe_dir"
+
+if [[ -n "${MAST_STDIN_PROMPT:-}" ]]; then
+  prompt_helper="${WINERUN_PROMPT_HELPER:-$HOME/.local/bin/winprompt.exe}"
+  if [[ ! -f "$prompt_helper" ]]; then
+    echo "winerun: prompt helper not found at $prompt_helper" >&2
+    exit 1
+  fi
+  exec wine "$prompt_helper" "${MAST_STDIN_VALUE:-}" "$MAST_STDIN_PROMPT" "$exe_name" "$@"
+fi
+
 exec wine "$exe_name" "$@"

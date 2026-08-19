@@ -610,7 +610,8 @@ name a mapped value on its entry:
   "entry": {
     "command": "word_collect.exe",
     "stdin_variable": "CURRENT_LEVEL",
-    "stdin_prompt": "Enter current level:"
+    "stdin_prompt": "Enter current level:",
+    "stdin_when": { "variable": "ADS_ONLY", "equals": "false" }
   }
 }
 ```
@@ -623,9 +624,11 @@ Mast runs that process through a pseudo-terminal so Wine exposes the input as a
 Windows console handle rather than silently turning an ordinary Unix pipe into
 EOF. The Wine runner uses Mast's `winprompt.exe` helper to create the Windows
 stdin pipe before launch, keep it open while a one-file executable starts its
-child, and write only the configured line after the prompt. A program that
-omits `stdin_prompt` receives the value immediately for
-non-interactive readers that do not need the console to finish starting.
+child, and write only the configured line after the prompt. Optional
+`stdin_when` enables the complete startup-input path only when the named run
+variable equals the configured value, compared case-insensitively. A program
+that omits `stdin_prompt` receives the value immediately for non-interactive
+readers that do not need the console to finish starting.
 
 For `.ini` config files, Mast also supports structured replacement by
 `section` and `key`; for other config files, Mast performs placeholder

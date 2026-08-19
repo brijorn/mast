@@ -189,9 +189,11 @@ func TestStartFeedsConfiguredVariableToProgramStdinAndResumeUsesOverride(t *test
 		Entry: Entry{
 			Command: "/bin/sh", Args: []string{"read-level.sh"},
 			StdinVariable: "CURRENT_LEVEL", StdinPrompt: "Enter current level:",
+			StdinWhen: &CompanionCondition{Variable: "ADS_ONLY", Equals: "false"},
 		},
 		ConfigMappings: []ConfigMapping{
 			{Key: "CURRENT_LEVEL", Value: "1"},
+			{Key: "ADS_ONLY", Value: "true"},
 		},
 	})
 	if err != nil {
@@ -201,7 +203,7 @@ func TestStartFeedsConfiguredVariableToProgramStdinAndResumeUsesOverride(t *test
 	runs, err := store.Start(StartOptions{
 		ProgramID: registered.ID,
 		Serials:   []string{"phone-1"},
-		Variables: map[string]string{"CURRENT_LEVEL": "47"},
+		Variables: map[string]string{"CURRENT_LEVEL": "47", "ADS_ONLY": "false"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -213,6 +215,9 @@ func TestStartFeedsConfiguredVariableToProgramStdinAndResumeUsesOverride(t *test
 	}
 	if stderr != "" || !strings.Contains(stdout, "LEVEL=47") {
 		t.Fatalf("logs = stdout %q stderr %q, want configured stdin", stdout, stderr)
+	}
+	if runs[0].StdinWhen == nil || runs[0].StdinWhen.Variable != "ADS_ONLY" || runs[0].StdinWhen.Equals != "false" {
+		t.Fatalf("run stdin condition = %+v", runs[0].StdinWhen)
 	}
 
 	resumed, err := store.Resume(ResumeOptions{
@@ -229,6 +234,29 @@ func TestStartFeedsConfiguredVariableToProgramStdinAndResumeUsesOverride(t *test
 	}
 	if stderr != "" || !strings.Contains(stdout, "LEVEL=48") {
 		t.Fatalf("resumed logs = stdout %q stderr %q, want updated stdin", stdout, stderr)
+	}
+}
+
+func TestStdinConditionMatchesRunVariables(t *testing.T) {
+	condition := &CompanionCondition{Variable: "ADS_ONLY", Equals: "false"}
+	for _, test := range []struct {
+		name      string
+		condition *CompanionCondition
+		variables map[string]string
+		want      bool
+	}{
+		{name: "no condition", condition: nil, want: true},
+		{name: "matching value", condition: condition, variables: map[string]string{"ADS_ONLY": "false"}, want: true},
+		{name: "case insensitive value", condition: condition, variables: map[string]string{"ADS_ONLY": "FALSE"}, want: true},
+		{name: "lowercase variable lookup", condition: condition, variables: map[string]string{"ads_only": "false"}, want: true},
+		{name: "ads only skips input", condition: condition, variables: map[string]string{"ADS_ONLY": "true"}, want: false},
+		{name: "missing value skips input", condition: condition, variables: map[string]string{}, want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := conditionMatches(test.condition, test.variables); got != test.want {
+				t.Fatalf("conditionMatches() = %t, want %t", got, test.want)
+			}
+		})
 	}
 }
 

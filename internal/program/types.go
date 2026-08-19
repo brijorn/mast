@@ -19,11 +19,12 @@ const (
 )
 
 type Entry struct {
-	Command       string           `json:"command"`
-	Args          []string         `json:"args,omitempty"`
-	StdinVariable string           `json:"stdin_variable,omitempty"`
-	StdinPrompt   string           `json:"stdin_prompt,omitempty"`
-	Companions    []CompanionEntry `json:"companions,omitempty"`
+	Command       string              `json:"command"`
+	Args          []string            `json:"args,omitempty"`
+	StdinVariable string              `json:"stdin_variable,omitempty"`
+	StdinPrompt   string              `json:"stdin_prompt,omitempty"`
+	StdinWhen     *CompanionCondition `json:"stdin_when,omitempty"`
+	Companions    []CompanionEntry    `json:"companions,omitempty"`
 }
 
 type CompanionCondition struct {
@@ -104,10 +105,11 @@ type Run struct {
 	// StdinVariable names the run variable whose value is written as one line
 	// to the main process. It is persisted with the run so Resume preserves the
 	// published entry contract even after a newer program version is uploaded.
-	StdinVariable string       `json:"stdin_variable,omitempty"`
-	StdinPrompt   string       `json:"stdin_prompt,omitempty"`
-	Companions    []RunProcess `json:"companions,omitempty"`
-	PID           int          `json:"pid,omitempty"`
+	StdinVariable string              `json:"stdin_variable,omitempty"`
+	StdinPrompt   string              `json:"stdin_prompt,omitempty"`
+	StdinWhen     *CompanionCondition `json:"stdin_when,omitempty"`
+	Companions    []RunProcess        `json:"companions,omitempty"`
+	PID           int                 `json:"pid,omitempty"`
 	// PIDStartTime is when the kernel started PID, in the clock ticks since
 	// boot that /proc reports. It is the run's claim on that number: a PID is
 	// only reused by a process that started later, so a start time that still

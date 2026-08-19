@@ -442,11 +442,18 @@ func mergeVariables(base map[string]string, overrides map[string]string) map[str
 }
 
 func companionEnabled(companion CompanionEntry, variables map[string]string) bool {
-	variable := strings.TrimSpace(companion.EnabledWhen.Variable)
+	return conditionMatches(&companion.EnabledWhen, variables)
+}
+
+func conditionMatches(condition *CompanionCondition, variables map[string]string) bool {
+	if condition == nil {
+		return true
+	}
+	variable := strings.TrimSpace(condition.Variable)
 	if variable == "" {
 		return true
 	}
-	want := strings.TrimSpace(companion.EnabledWhen.Equals)
+	want := strings.TrimSpace(condition.Equals)
 	got, ok := variables[variable]
 	if !ok {
 		got = variables[strings.ToLower(variable)]
@@ -563,7 +570,8 @@ func (s *Store) startRunProcesses(state *runState, stdout, stderr io.Writer, env
 
 	stdinValue := ""
 	winePrompt := false
-	if variable := strings.TrimSpace(run.StdinVariable); variable != "" {
+	stdinEnabled := strings.TrimSpace(run.StdinVariable) != "" && conditionMatches(run.StdinWhen, env)
+	if variable := strings.TrimSpace(run.StdinVariable); stdinEnabled {
 		var ok bool
 		stdinValue, ok = env[variable]
 		if !ok {
@@ -595,7 +603,7 @@ func (s *Store) startRunProcesses(state *runState, stdout, stderr io.Writer, env
 	cmd.Env = mergeEnv(os.Environ(), processEnv)
 	var stdinRead *os.File
 	var promptInput *promptInputWriter
-	if run.StdinVariable != "" && strings.TrimSpace(run.StdinPrompt) != "" && !winePrompt {
+	if stdinEnabled && strings.TrimSpace(run.StdinPrompt) != "" && !winePrompt {
 		var stdinWrite *os.File
 		var err error
 		stdinRead, stdinWrite, err = os.Pipe()
@@ -613,7 +621,7 @@ func (s *Store) startRunProcesses(state *runState, stdout, stderr io.Writer, env
 	} else {
 		cmd.Stdout = stdout
 	}
-	if run.StdinVariable != "" && promptInput == nil && !winePrompt {
+	if stdinEnabled && promptInput == nil && !winePrompt {
 		cmd.Stdin = strings.NewReader(stdinValue + "\n")
 	}
 	if err := cmd.Start(); err != nil {
@@ -990,6 +998,7 @@ func (s *Store) startOne(p Program, device node.DeviceInfo, nodes []node.NodeInf
 		CmdArgs:       args,
 		StdinVariable: p.Entry.StdinVariable,
 		StdinPrompt:   p.Entry.StdinPrompt,
+		StdinWhen:     p.Entry.StdinWhen,
 		StartedAt:     time.Now().UTC(),
 	}
 	for _, companion := range p.Entry.Companions {

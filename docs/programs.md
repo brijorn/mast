@@ -602,6 +602,23 @@ Mast also exposes mapped values as process environment variables. A mapping with
 `"key": "DEVICE_ID"` becomes `DEVICE_ID=<resolved value>` in the program
 environment.
 
+An unattended executable that reads one startup answer from standard input can
+name a mapped value on its entry:
+
+```json
+{
+  "entry": {
+    "command": "word_collect.exe",
+    "stdin_variable": "CURRENT_LEVEL"
+  }
+}
+```
+
+Mast writes that value followed by a newline to the main process on every start
+and resume. The variable must be present in the run configuration; otherwise
+the run fails before the process starts instead of reaching the prompt with a
+closed input stream.
+
 For `.ini` config files, Mast also supports structured replacement by
 `section` and `key`; for other config files, Mast performs placeholder
 replacement on matching `{{key}}` tokens.

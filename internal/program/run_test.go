@@ -164,6 +164,71 @@ printf 'ARGS=%s\n' "$*"
 	}
 }
 
+func TestStartFeedsConfiguredVariableToProgramStdinAndResumeUsesOverride(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("/bin/sh is not available on Windows")
+	}
+
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "read-level.sh"), []byte("#!/bin/sh\nIFS= read -r level\nprintf 'LEVEL=%s\\n' \"$level\"\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := NewStore(filepath.Join(root, "programs"), fakeDevices{devices: []node.DeviceInfo{
+		{Serial: "phone-1", Platform: node.PlatformAndroid, State: "device", NodeID: "local"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registered, err := registerTestProgram(t, store, source, RegisterUploadOptions{
+		Name:  "stdin runner",
+		Entry: Entry{Command: "/bin/sh", Args: []string{"read-level.sh"}, StdinVariable: "CURRENT_LEVEL"},
+		ConfigMappings: []ConfigMapping{
+			{Key: "CURRENT_LEVEL", Value: "1"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runs, err := store.Start(StartOptions{
+		ProgramID: registered.ID,
+		Serials:   []string{"phone-1"},
+		Variables: map[string]string{"CURRENT_LEVEL": "47"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, store, runs[0].ID)
+	stdout, stderr, err := store.Logs(runs[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stderr != "" || !strings.Contains(stdout, "LEVEL=47") {
+		t.Fatalf("logs = stdout %q stderr %q, want configured stdin", stdout, stderr)
+	}
+
+	resumed, err := store.Resume(ResumeOptions{
+		ID:        runs[0].ID,
+		Variables: map[string]string{"CURRENT_LEVEL": "48"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, store, resumed.ID)
+	stdout, stderr, err = store.Logs(resumed.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stderr != "" || !strings.Contains(stdout, "LEVEL=48") {
+		t.Fatalf("resumed logs = stdout %q stderr %q, want updated stdin", stdout, stderr)
+	}
+}
+
 func TestSoftStopRequestPersistsAndAcknowledges(t *testing.T) {
 	root := t.TempDir()
 	workspace := filepath.Join(root, "programs", "instances", "run-soft-stop")

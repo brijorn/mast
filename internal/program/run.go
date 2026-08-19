@@ -479,6 +479,16 @@ func (s *Store) startRunProcesses(state *runState, stdout, stderr io.Writer, env
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	cmd.Env = mergeEnv(os.Environ(), env)
+	if variable := strings.TrimSpace(run.StdinVariable); variable != "" {
+		value, ok := env[variable]
+		if !ok {
+			value, ok = env[strings.ToLower(variable)]
+		}
+		if !ok {
+			return fmt.Errorf("stdin variable %q is not configured", variable)
+		}
+		cmd.Stdin = strings.NewReader(value + "\n")
+	}
 	if err := cmd.Start(); err != nil {
 		return err
 	}
@@ -839,6 +849,7 @@ func (s *Store) startOne(p Program, device node.DeviceInfo, nodes []node.NodeInf
 		Env:           env,
 		Cmd:           command,
 		CmdArgs:       args,
+		StdinVariable: p.Entry.StdinVariable,
 		StartedAt:     time.Now().UTC(),
 	}
 	for _, companion := range p.Entry.Companions {

@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/brijorn/mast/internal/node"
@@ -463,6 +464,94 @@ func (s *Store) resolveRunCommand(workspace, command string, args []string) (str
 	return s.runnerCommand(command, args)
 }
 
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
+}
+
+// terminalInputCommand gives console-oriented Windows executables a real
+// terminal. Wine maps an ordinary Unix pipe to EOF for Python's input(), even
+// though the bytes are present on the launcher process. util-linux script
+// creates the PTY that Wine exposes as a Windows console input handle.
+func terminalInputCommand(command string, args []string) (string, []string, error) {
+	if runtime.GOOS != "linux" {
+		return command, args, nil
+	}
+	script, err := exec.LookPath("script")
+	if err != nil {
+		return "", nil, errors.New("program startup input requires the util-linux script command")
+	}
+	parts := make([]string, 0, len(args)+1)
+	parts = append(parts, shellQuote(command))
+	for _, arg := range args {
+		parts = append(parts, shellQuote(arg))
+	}
+	return script, []string{
+		"--quiet",
+		"--return",
+		"--flush",
+		"--echo", "never",
+		"--command", strings.Join(parts, " "),
+		"/dev/null",
+	}, nil
+}
+
+type promptInputWriter struct {
+	destination io.Writer
+	input       io.WriteCloser
+	prompt      string
+	value       string
+
+	mu   sync.Mutex
+	tail string
+	sent bool
+}
+
+func (w *promptInputWriter) Write(data []byte) (int, error) {
+	n, err := w.destination.Write(data)
+	if n == 0 {
+		return n, err
+	}
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.sent {
+		return n, err
+	}
+	observed := w.tail + string(data[:n])
+	if strings.Contains(observed, w.prompt) {
+		// This pipe feeds a terminal, not an ordinary file. Wine's console input
+		// treats carriage return as the Enter key; a bare line feed is displayed
+		// as ^J and leaves Python's input() waiting forever.
+		_, writeErr := io.WriteString(w.input, w.value+"\r")
+		closeErr := w.input.Close()
+		w.sent = true
+		if err == nil {
+			err = writeErr
+		}
+		if err == nil {
+			err = closeErr
+		}
+		return n, err
+	}
+	keep := len(w.prompt) - 1
+	if keep > 0 && len(observed) > keep {
+		w.tail = observed[len(observed)-keep:]
+	} else {
+		w.tail = observed
+	}
+	return n, err
+}
+
+func (w *promptInputWriter) Close() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.sent {
+		return nil
+	}
+	w.sent = true
+	return w.input.Close()
+}
+
 func (s *Store) startRunProcesses(state *runState, stdout, stderr io.Writer, env map[string]string) error {
 	run := state.run
 	s.mu.Lock()
@@ -472,18 +561,69 @@ func (s *Store) startRunProcesses(state *runState, stdout, stderr io.Writer, env
 	runID := run.ID
 	s.mu.Unlock()
 
+	stdinValue := ""
+	if variable := strings.TrimSpace(run.StdinVariable); variable != "" {
+		var ok bool
+		stdinValue, ok = env[variable]
+		if !ok {
+			stdinValue, ok = env[strings.ToLower(variable)]
+		}
+		if !ok {
+			return fmt.Errorf("stdin variable %q is not configured", variable)
+		}
+		var err error
+		command, args, err = terminalInputCommand(command, args)
+		if err != nil {
+			return err
+		}
+	}
+
 	command, args = scopedCommand(runID, command, args)
 	cmd := s.startCmd(command, args...)
 	configureRunCommand(cmd)
 	cmd.Dir = workspace
-	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	cmd.Env = mergeEnv(os.Environ(), env)
+	var stdinRead *os.File
+	var promptInput *promptInputWriter
+	if run.StdinVariable != "" && strings.TrimSpace(run.StdinPrompt) != "" {
+		var stdinWrite *os.File
+		var err error
+		stdinRead, stdinWrite, err = os.Pipe()
+		if err != nil {
+			return fmt.Errorf("create prompt input pipe: %w", err)
+		}
+		promptInput = &promptInputWriter{
+			destination: stdout,
+			input:       stdinWrite,
+			prompt:      run.StdinPrompt,
+			value:       stdinValue,
+		}
+		cmd.Stdin = stdinRead
+		cmd.Stdout = promptInput
+	} else {
+		cmd.Stdout = stdout
+	}
+	if run.StdinVariable != "" && promptInput == nil {
+		cmd.Stdin = strings.NewReader(stdinValue + "\n")
+	}
 	if err := cmd.Start(); err != nil {
+		if stdinRead != nil {
+			_ = stdinRead.Close()
+		}
+		if promptInput != nil {
+			_ = promptInput.Close()
+		}
 		return err
+	}
+	if stdinRead != nil {
+		_ = stdinRead.Close()
 	}
 	s.mu.Lock()
 	state.cmd = cmd
+	if promptInput != nil {
+		state.stdin = promptInput
+	}
 	setRunPID(run, cmd.Process.Pid)
 	s.mu.Unlock()
 
@@ -839,6 +979,8 @@ func (s *Store) startOne(p Program, device node.DeviceInfo, nodes []node.NodeInf
 		Env:           env,
 		Cmd:           command,
 		CmdArgs:       args,
+		StdinVariable: p.Entry.StdinVariable,
+		StdinPrompt:   p.Entry.StdinPrompt,
 		StartedAt:     time.Now().UTC(),
 	}
 	for _, companion := range p.Entry.Companions {
@@ -892,6 +1034,9 @@ func (s *Store) startOne(p Program, device node.DeviceInfo, nodes []node.NodeInf
 
 func (s *Store) waitRun(state *runState, stdout, stderr io.Closer) {
 	err := state.cmd.Wait()
+	if state.stdin != nil {
+		_ = state.stdin.Close()
+	}
 	s.mu.Lock()
 	state.mainExited = true
 	runForStop := cloneRun(state.run)

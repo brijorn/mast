@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -77,6 +78,7 @@ type deviceLister interface {
 type runState struct {
 	run              *Run
 	cmd              *exec.Cmd
+	stdin            io.Closer
 	companionCmds    []*exec.Cmd
 	companionWG      sync.WaitGroup
 	companionFailure string

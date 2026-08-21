@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -791,7 +792,12 @@ func (s *Store) Resume(opts ResumeOptions) (*Run, error) {
 	}
 
 	p := s.programForRun(&savedRun)
-	variables := mergeVariables(savedRun.Env, opts.Variables)
+	deviceEnv := s.standardDeviceEnv(device)
+	for key, value := range adbEnv(device, s.devices.ListNodes()) {
+		deviceEnv[key] = value
+	}
+	variables := mergeVariables(refreshDeviceVariables(p.ConfigMappings, savedRun.Env, deviceEnv, device), opts.Variables)
+	refreshedCmd, refreshedArgs, refreshedCompanions := s.refreshDeviceCommand(&savedRun, p, variables, device)
 	secretVariables, err := readSecretVariables(savedRun.Workspace)
 	if err != nil {
 		return nil, err
@@ -850,6 +856,16 @@ func (s *Store) Resume(opts ResumeOptions) (*Run, error) {
 	// first crash — and a run silently back on the configuration its operator
 	// replaced is worse than one that never took the change.
 	run.Env = variables
+	if refreshedCmd != "" {
+		run.Cmd = refreshedCmd
+		run.CmdArgs = refreshedArgs
+	}
+	for index := range run.Companions {
+		if refreshed, ok := refreshedCompanions[run.Companions[index].ID]; ok {
+			run.Companions[index].Cmd = refreshed.Cmd
+			run.Companions[index].CmdArgs = refreshed.CmdArgs
+		}
+	}
 	run.StdoutLogStart = 0
 	run.StderrLogStart = 0
 	if !opts.Supervisor {
@@ -1158,6 +1174,53 @@ func (s *Store) loadRuns() {
 		}
 		s.runs[run.ID] = &runState{run: &run}
 	}
+}
+
+// refreshDeviceCommand re-resolves the entry and companion arguments that name
+// the phone, for the same reason the variables are re-resolved: a wireless
+// address resolved at first start no longer routes to the device by the next
+// launch. It returns an empty command when nothing on the command line is
+// device-derived, leaving the run's persisted command untouched.
+func (s *Store) refreshDeviceCommand(run *Run, p Program, variables map[string]string, device node.DeviceInfo) (string, []string, map[string]RunProcess) {
+	companions := map[string]RunProcess{}
+	for _, companion := range p.Entry.Companions {
+		if !argsReferenceDevice(companion.Args) {
+			continue
+		}
+		resolved := resolveArgs(companion.Args, variables, device)
+		command, args, err := s.resolveRunCommand(run.Workspace, companion.Command, resolved)
+		if err != nil {
+			log.Printf("resume could not re-resolve companion %s of run %s: %v", companion.ID, run.ID, err)
+			continue
+		}
+		companions[companion.ID] = RunProcess{Cmd: command, CmdArgs: args}
+	}
+	if p.Entry.Command == "" || !argsReferenceDevice(p.Entry.Args) {
+		return "", nil, companions
+	}
+	command, args, err := s.resolveRunCommand(run.Workspace, p.Entry.Command, resolveArgs(p.Entry.Args, variables, device))
+	if err != nil {
+		log.Printf("resume could not re-resolve command of run %s: %v", run.ID, err)
+		return "", nil, companions
+	}
+	return command, args, companions
+}
+
+func resolveArgs(args []string, variables map[string]string, device node.DeviceInfo) []string {
+	resolved := make([]string, len(args))
+	for index, arg := range args {
+		resolved[index] = resolveValue(arg, variables, device)
+	}
+	return resolved
+}
+
+func argsReferenceDevice(args []string) bool {
+	for _, arg := range args {
+		if referencesDevice(arg) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Store) resumeAutostartRuns() {

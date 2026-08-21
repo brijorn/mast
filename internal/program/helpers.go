@@ -204,6 +204,34 @@ func deviceADBTarget(device node.DeviceInfo) string {
 	return device.Serial
 }
 
+// referencesDevice reports whether a value is derived from the device a run
+// executes against rather than from something an operator set.
+func referencesDevice(value string) bool {
+	return strings.Contains(value, "{{phone.")
+}
+
+// refreshDeviceVariables re-resolves everything a run derives from its device.
+// A wireless phone's adb address is a lease, not an identity: the port changes
+// every time the phone re-advertises itself, so an address resolved at the
+// run's first start is stale by its next launch. Freezing it left the
+// crash-restart supervisor re-running a program against a port that had since
+// closed, forever, with no way back short of discarding the run and its
+// workspace. Operator variables still win — they are applied over this.
+func refreshDeviceVariables(mappings []ConfigMapping, saved map[string]string, deviceEnv map[string]string, device node.DeviceInfo) map[string]string {
+	refreshed := mergeVariables(saved, deviceEnv)
+	// A program's own configuration is layered over Mast's device environment
+	// here exactly as it is at start, so a mapping that names the phone keeps
+	// deciding the value the program reads.
+	for _, mapping := range mappings {
+		if mapping.Key == "" || !referencesDevice(mapping.Value) {
+			continue
+		}
+		refreshed[mapping.Key] = resolveValue(mapping.Value, saved, device)
+	}
+	refreshed["MAST_DEVICE_ID"] = device.Serial
+	return refreshed
+}
+
 func adbEnv(device node.DeviceInfo, nodes []node.NodeInfo) map[string]string {
 	if device.Platform != node.PlatformAndroid {
 		return map[string]string{}

@@ -2215,3 +2215,96 @@ func TestShutdownLeavesItsRunsResumable(t *testing.T) {
 		t.Fatalf("startup autostart ids = %+v, want [%s]", ids, started[0].ID)
 	}
 }
+
+func TestResumeAdoptsChangedWirelessAddress(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("/bin/sh is not available on Windows")
+	}
+
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "config.ini"), []byte("[Settings]\nDEVICE_ID = unset\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\ncat config.ini\nprintf 'ARG=%s\\n' \"$1\"\nprintf 'ANDROID_SERIAL=%s\\n' \"$ANDROID_SERIAL\"\n"
+	if err := os.WriteFile(filepath.Join(source, "run.sh"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	devices := &mutableFakeDevices{devices: []node.DeviceInfo{{
+		Serial:   "phone-1",
+		Address:  "192.168.1.159:43497",
+		Platform: node.PlatformAndroid,
+		State:    "device",
+		NodeID:   "node-1",
+	}}}
+	store, err := NewStore(filepath.Join(root, "programs"), devices)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registered, err := registerTestProgram(t, store, source, RegisterUploadOptions{
+		Name:       "wireless address",
+		ConfigFile: "config.ini",
+		Entry:      Entry{Command: "/bin/sh", Args: []string{"run.sh", "{{phone.serial}}"}},
+		ConfigMappings: []ConfigMapping{
+			{Section: "Settings", Key: "DEVICE_ID", Value: "{{phone.serial}}"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	started, err := store.Start(StartOptions{ProgramID: registered.ID, Serials: []string{"phone-1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, store, started[0].ID)
+	stdout, _, err := store.Logs(started[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"DEVICE_ID = 192.168.1.159:43497", "ARG=192.168.1.159:43497", "ANDROID_SERIAL=192.168.1.159:43497"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("initial stdout = %q, want %q", stdout, want)
+		}
+	}
+
+	// The phone re-advertised itself on a new port, as a wireless device does
+	// whenever its debugging session restarts. Its hardware serial is unchanged,
+	// so this is the same run on the same device — but the address the program
+	// dials is not.
+	devices.SetDevices([]node.DeviceInfo{{
+		Serial:   "phone-1",
+		Address:  "192.168.1.159:37937",
+		Platform: node.PlatformAndroid,
+		State:    "device",
+		NodeID:   "node-1",
+	}})
+
+	resumed, err := store.Resume(ResumeOptions{ID: started[0].ID, Supervisor: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, store, resumed.ID)
+	stdout, _, err = store.Logs(resumed.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"DEVICE_ID = 192.168.1.159:37937", "ARG=192.168.1.159:37937", "ANDROID_SERIAL=192.168.1.159:37937"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("resumed stdout = %q, want %q", stdout, want)
+		}
+	}
+
+	after := findRun(t, store, resumed.ID)
+	if after.Env["DEVICE_SERIAL"] != "192.168.1.159:37937" {
+		t.Fatalf("stored DEVICE_SERIAL = %q, want the current address", after.Env["DEVICE_SERIAL"])
+	}
+	// The durable identity is not an address and never moves.
+	if after.Env["MAST_DEVICE_ID"] != "phone-1" {
+		t.Fatalf("stored MAST_DEVICE_ID = %q, want the hardware serial", after.Env["MAST_DEVICE_ID"])
+	}
+}

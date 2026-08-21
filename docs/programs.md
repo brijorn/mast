@@ -281,6 +281,16 @@ wrappers such as Wine can replace the visible command line after launch.
 The set of enabled companions never changes on Resume, even when variable
 overrides are supplied.
 
+Everything the run derives from its device is resolved again at each resume:
+`DEVICE_SERIAL`, `DEVICE_ADDRESS`, `ANDROID_SERIAL`, the adb server variables,
+any config mapping whose value is `{{phone.serial}}`, and any entry or companion
+argument that names the phone. A wireless phone's address is a lease rather than
+an identity — the port changes every time the phone re-advertises itself — so an
+address captured at the run's first start stops routing to the device, and a
+crash-restart supervisor would otherwise re-dial that closed port forever.
+Variables sent with the resume are applied over the refreshed values, so an
+explicit override still wins.
+
 ### Logs
 
 `GET /api/runs/{id}/logs` returns stdout and stderr. Without query parameters,

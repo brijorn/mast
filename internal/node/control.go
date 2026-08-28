@@ -159,7 +159,11 @@ func (n *Node) tapLocal(serial string, x int, y int) error {
 }
 
 func (n *Node) tapLocalAndroidADB(serial string, x int, y int) error {
-	_, err := n.adbShell(n.ctx, "", serial, "input", "tap", fmt.Sprintf("%d", x), fmt.Sprintf("%d", y))
+	coordinateX, coordinateY := fmt.Sprintf("%d", x), fmt.Sprintf("%d", y)
+	// Keep DOWN visible across a Unity frame, matching the scrcpy path above.
+	// A stationary swipe is interpreted as a tap by Android UI.
+	_, err := n.adbShell(n.ctx, "", serial, "input", "swipe", coordinateX, coordinateY,
+		coordinateX, coordinateY, fmt.Sprintf("%d", scrcpy.DefaultTapDuration/time.Millisecond))
 	return err
 }
 

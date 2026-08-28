@@ -104,6 +104,7 @@ var ValidKeycodes = map[int]bool{
 const (
 	DefaultSwipeDuration = 250 * time.Millisecond
 	DefaultSwipeSteps    = 8
+	DefaultTapDuration   = 50 * time.Millisecond
 )
 
 //go:embed scrcpy-server-v4.0.jar
@@ -129,6 +130,9 @@ func WriteTap(w io.Writer, x, y, width, height int) error {
 	if err := writeTouch(w, ActionDown, ^uint64(1), x, y, width, height, DefaultPressure); err != nil {
 		return err
 	}
+	// Unity titles may miss an immediate DOWN/UP pair when both arrive inside
+	// one render frame. Keep the pointer visible for one typical frame.
+	time.Sleep(DefaultTapDuration)
 
 	return writeTouch(w, ActionUp, ^uint64(1), x, y, width, height, 0)
 }

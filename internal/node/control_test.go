@@ -143,7 +143,7 @@ func TestTapRemoteSendsPeerRequest(t *testing.T) {
 		return findADBTapCall(remoteADB.shellOutputCallsSnapshot()) != nil
 	})
 	remoteCalls := remoteADB.shellOutputCallsSnapshot()
-	if call := findADBTapCall(remoteCalls); call == nil || !cmp.Equal(call.Args, []string{"input", "tap", "12", "34"}) {
+	if call := findADBTapCall(remoteCalls); call == nil || !cmp.Equal(call.Args, []string{"input", "swipe", "12", "34", "12", "34", "50"}) {
 		t.Fatalf("ADB tap calls = %+v", remoteCalls)
 	}
 }
@@ -185,7 +185,7 @@ func TestTapRemoteAndroidPrefersOwningPeerStreamControl(t *testing.T) {
 
 func findADBTapCall(calls []shellCall) *shellCall {
 	for index := range calls {
-		if len(calls[index].Args) >= 2 && calls[index].Args[0] == "input" && calls[index].Args[1] == "tap" {
+		if len(calls[index].Args) >= 2 && calls[index].Args[0] == "input" && calls[index].Args[1] == "swipe" {
 			return &calls[index]
 		}
 	}
@@ -198,7 +198,7 @@ func TestTapAndroidUsesADBWithoutStream(t *testing.T) {
 	if err := node.Tap("local-123", 12, 34); err != nil {
 		t.Fatal(err)
 	}
-	if len(adb.shellOutputCalls) != 1 || !cmp.Equal(adb.shellOutputCalls[0].Args, []string{"input", "tap", "12", "34"}) {
+	if len(adb.shellOutputCalls) != 1 || !cmp.Equal(adb.shellOutputCalls[0].Args, []string{"input", "swipe", "12", "34", "12", "34", "50"}) {
 		t.Fatalf("ADB tap calls = %+v", adb.shellOutputCalls)
 	}
 }

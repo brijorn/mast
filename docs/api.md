@@ -776,8 +776,10 @@ POST /api/control/tap
 
 Sends a tap command to a device. Android uses the active scrcpy control socket
 when one exists, keeping interactive taps in stream coordinates and avoiding a
-separate ADB shell command. Without an active controlled stream, Android falls
-back to serial-scoped ADB input. iOS uses the active ioslink control session.
+separate ADB shell command. Android holds the pointer for 50 milliseconds so
+render-driven Unity input observes DOWN before UP; without an active controlled
+stream, the serial-scoped ADB fallback uses the equivalent stationary swipe.
+iOS uses the active ioslink control session.
 
 Request body:
 

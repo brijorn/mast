@@ -441,10 +441,10 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				break
 			}
 
-			if err := n.Tap(req.Payload.Serial, req.Payload.X, req.Payload.Y); err != nil {
-				log.Println("tap:", err)
-				break
-			}
+			tap := req.Payload
+			n.enqueueInput(tap.Serial, "tap", func() error {
+				return n.Tap(tap.Serial, tap.X, tap.Y)
+			})
 		case transport.TypeLaunchAppRequest:
 			var req transport.LaunchAppRequest
 			if err := json.Unmarshal(message, &req); err != nil {
@@ -481,10 +481,10 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				break
 			}
 
-			if err := n.Hold(req.Payload.Serial, req.Payload.X, req.Payload.Y, req.Payload.DurationMS); err != nil {
-				log.Println("hold:", err)
-				break
-			}
+			hold := req.Payload
+			n.enqueueInput(hold.Serial, "hold", func() error {
+				return n.Hold(hold.Serial, hold.X, hold.Y, hold.DurationMS)
+			})
 		case transport.TypeDragRequest:
 			var req transport.DragRequest
 			if err := json.Unmarshal(message, &req); err != nil {
@@ -496,10 +496,10 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 			for index, point := range req.Payload.Points {
 				points[index] = DragPoint{X: point.X, Y: point.Y}
 			}
-			if err := n.Drag(req.Payload.Serial, points, req.Payload.DurationMS); err != nil {
-				log.Println("drag:", err)
-				break
-			}
+			drag := req.Payload
+			n.enqueueInput(drag.Serial, "drag", func() error {
+				return n.Drag(drag.Serial, points, drag.DurationMS)
+			})
 		case transport.TypeOpenURLRequest:
 			var req transport.OpenURLRequest
 			if err := json.Unmarshal(message, &req); err != nil {
@@ -518,16 +518,18 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				break
 			}
 
-			var err error
-			if req.Payload.PointerID == nil {
-				err = n.touchLocal(req.Payload.Serial, req.Payload.Action, req.Payload.X, req.Payload.Y)
-			} else {
-				err = n.touchLocalPointer(req.Payload.Serial, req.Payload.Action, req.Payload.X, req.Payload.Y, *req.Payload.PointerID)
+			touch := req.Payload
+			var pointerID uint64
+			if touch.PointerID != nil {
+				pointerID = *touch.PointerID
 			}
-			if err != nil {
-				log.Println("touch:", err)
-				break
-			}
+			hasPointer := touch.PointerID != nil
+			n.enqueueInput(touch.Serial, "touch", func() error {
+				if !hasPointer {
+					return n.touchLocal(touch.Serial, touch.Action, touch.X, touch.Y)
+				}
+				return n.touchLocalPointer(touch.Serial, touch.Action, touch.X, touch.Y, pointerID)
+			})
 		case transport.TypeSwipeRequest:
 			var req transport.SwipeRequest
 			if err := json.Unmarshal(message, &req); err != nil {
@@ -535,10 +537,10 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				break
 			}
 
-			if err := n.swipeLocal(req.Payload.Serial, req.Payload.StartX, req.Payload.StartY, req.Payload.EndX, req.Payload.EndY); err != nil {
-				log.Println("swipe:", err)
-				break
-			}
+			swipe := req.Payload
+			n.enqueueInput(swipe.Serial, "swipe", func() error {
+				return n.swipeLocal(swipe.Serial, swipe.StartX, swipe.StartY, swipe.EndX, swipe.EndY)
+			})
 		case transport.TypePressKeyRequest:
 			var req transport.PressKeyRequest
 			if err := json.Unmarshal(message, &req); err != nil {
@@ -546,10 +548,10 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				break
 			}
 
-			if err := n.pressKeyLocal(req.Payload.Serial, req.Payload.Keycode, req.Payload.MetaState); err != nil {
-				log.Println("press key:", err)
-				break
-			}
+			pressKey := req.Payload
+			n.enqueueInput(pressKey.Serial, "press key", func() error {
+				return n.pressKeyLocal(pressKey.Serial, pressKey.Keycode, pressKey.MetaState)
+			})
 		case transport.TypePressButtonRequest:
 			var req transport.PressButtonRequest
 			if err := json.Unmarshal(message, &req); err != nil {
@@ -557,10 +559,10 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				break
 			}
 
-			if err := n.pressButtonLocal(req.Payload.Serial, req.Payload.Name); err != nil {
-				log.Println("press button:", err)
-				break
-			}
+			pressButton := req.Payload
+			n.enqueueInput(pressButton.Serial, "press button", func() error {
+				return n.pressButtonLocal(pressButton.Serial, pressButton.Name)
+			})
 		case transport.TypeTextInputRequest:
 			var req transport.TextInputRequest
 			if err := json.Unmarshal(message, &req); err != nil {
@@ -568,10 +570,10 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				break
 			}
 
-			if err := n.typeTextLocal(req.Payload.Serial, req.Payload.Text); err != nil {
-				log.Println("text input:", err)
-				break
-			}
+			textInput := req.Payload
+			n.enqueueInput(textInput.Serial, "text input", func() error {
+				return n.typeTextLocal(textInput.Serial, textInput.Text)
+			})
 		case transport.TypeClipboardGetRequest:
 			var req transport.ClipboardGetRequest
 			if err := json.Unmarshal(message, &req); err != nil {

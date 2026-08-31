@@ -24,6 +24,24 @@ payload: object
 known until the handshake completes. Directed command messages should set `to`
 to the destination node ID.
 
+## Input Ordering
+
+The input messages -- `tap_request`, `touch_request`, `swipe_request`,
+`hold_request`, `drag_request`, `press_key_request`, `press_button_request`,
+and `text_input_request` -- are handed to a queue owned by the target serial
+rather than run as the receiving node reads them.
+
+A device sees its own input in the order the sender wrote it, because a
+gesture's DOWN/MOVE/UP only means anything in sequence. No ordering holds
+*between* serials, and none is implied by a shared connection: input for one
+device never waits on another's. That isolation is the point. These operations
+occupy the device for as long as the gesture lasts -- a swipe walks the pointer
+across 250ms of steps -- and running them as they arrived made a node's every
+device wait out every gesture sent to any of them.
+
+Overflow waits rather than discards, so a burst delays a device instead of
+stranding it with a pointer that never came up.
+
 ## connection_request
 
 Sent when a node introduces itself to a peer.

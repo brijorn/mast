@@ -93,6 +93,8 @@ type Node struct {
 	iosTunnelMgr         *tunnel.TunnelManager
 	inputMu              sync.Mutex
 	inputWorkers         map[string]*deviceInput
+	deviceOwnerMu        sync.RWMutex
+	deviceOwners         map[string]deviceOwnerEntry
 }
 
 func NewNode(id string, addr string, advertiseHost string, androidEnabled bool, iosEnabled bool, proxyEnabled bool) (*Node, error) {
@@ -136,6 +138,7 @@ func NewNode(id string, addr string, advertiseHost string, androidEnabled bool, 
 		devicePowerAsserted:  make(map[string]bool),
 		devicePowerWake:      make(chan struct{}, 1),
 		inputWorkers:         make(map[string]*deviceInput),
+		deviceOwners:         make(map[string]deviceOwnerEntry),
 	}
 	go n.monitorDevicePowerPolicy()
 	go n.monitorIdleStreams()

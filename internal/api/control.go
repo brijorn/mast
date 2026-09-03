@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -218,8 +219,8 @@ func (s *Server) ControlWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	done := make(chan struct{})
 	defer close(done)
-	requests := make(chan controlWSRequest, controlWSQueueSize)
-	defer close(requests)
+	requests := newControlWSQueue()
+	defer requests.close()
 	go func() {
 		ticker := time.NewTicker(controlWSPingPeriod)
 		defer ticker.Stop()
@@ -239,7 +240,11 @@ func (s *Server) ControlWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	go func() {
-		for req := range requests {
+		for {
+			req, ok := requests.pop()
+			if !ok {
+				return
+			}
 			s.handleControlWSRequest(conn, &writeMu, serial, req)
 		}
 	}()
@@ -258,9 +263,7 @@ func (s *Server) ControlWebSocket(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		select {
-		case requests <- req:
-		default:
+		if !requests.push(req) {
 			_ = writeControlWSError(conn, &writeMu, "control queue full")
 		}
 	}
@@ -675,4 +678,88 @@ func (s *Server) TypeText(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// controlWSQueue holds what a control socket has been sent but the device has
+// not yet taken.
+//
+// A pointer move says only where the finger is now, so a newer one supersedes
+// a pending one rather than queueing behind it. Without that, an operator
+// dragging faster than the device drains filled this queue, got "control queue
+// full" for the overflow, and then watched the backlog play out as scrolling
+// they had already stopped asking for.
+//
+// Everything else keeps its place: a down, an up, a tap or a discrete gesture
+// each mean something the next one does not repeat.
+type controlWSQueue struct {
+	mu      sync.Mutex
+	cond    *sync.Cond
+	pending []controlWSRequest
+	closed  bool
+}
+
+func newControlWSQueue() *controlWSQueue {
+	q := &controlWSQueue{}
+	q.cond = sync.NewCond(&q.mu)
+	return q
+}
+
+// controlWSCoalesceKey names the requests a newer one may replace. Only a
+// pointer move earns a key; an empty key never coalesces.
+func controlWSCoalesceKey(req controlWSRequest) string {
+	if req.Type != "touch" || req.Action != "move" {
+		return ""
+	}
+	if req.PointerID == nil {
+		return "move"
+	}
+	return fmt.Sprintf("move:%d", *req.PointerID)
+}
+
+// push queues a request, reporting false when the queue is full.
+func (q *controlWSQueue) push(req controlWSRequest) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.closed {
+		return false
+	}
+
+	if key := controlWSCoalesceKey(req); key != "" && len(q.pending) > 0 {
+		if last := len(q.pending) - 1; controlWSCoalesceKey(q.pending[last]) == key {
+			q.pending[last] = req
+			q.cond.Broadcast()
+			return true
+		}
+	}
+
+	if len(q.pending) >= controlWSQueueSize {
+		return false
+	}
+
+	q.pending = append(q.pending, req)
+	q.cond.Broadcast()
+	return true
+}
+
+// pop waits for the next request, reporting false once the queue is closed.
+func (q *controlWSQueue) pop() (controlWSRequest, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for len(q.pending) == 0 && !q.closed {
+		q.cond.Wait()
+	}
+	if len(q.pending) == 0 {
+		return controlWSRequest{}, false
+	}
+
+	req := q.pending[0]
+	q.pending = q.pending[1:]
+	return req, true
+}
+
+func (q *controlWSQueue) close() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.closed = true
+	q.cond.Broadcast()
 }

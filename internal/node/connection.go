@@ -128,6 +128,7 @@ func (n *Node) dropPeer(peerID string, peer *PeerConn) {
 		delete(n.Peers, peerID)
 	}
 	n.mu.Unlock()
+	n.forgetDeviceOwnersOf(peerID)
 	_ = peer.conn.Close()
 }
 

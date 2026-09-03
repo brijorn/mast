@@ -77,23 +77,14 @@ func (n *Node) Touch(serial string, action string, x int, y int) error {
 		return n.touchLocal(serial, action, x, y)
 	}
 
-	device, err := n.DeviceBySerial(serial)
-	if err != nil {
-		return err
-	}
-
-	if device.NodeID == n.ID {
+	return n.sendDeviceInput(serial, func() error {
 		return n.touchLocal(serial, action, x, y)
-	}
-
-	payload := transport.TouchRequestPayload{
+	}, transport.TypeTouchRequest, transport.TouchRequestPayload{
 		Serial: serial,
 		Action: action,
 		X:      x,
 		Y:      y,
-	}
-
-	return n.sendPeerRequest(device.NodeID, transport.TypeTouchRequest, payload)
+	})
 }
 
 func (n *Node) touchLocalPointer(serial string, action string, x int, y int, pointerID uint64) error {
@@ -121,14 +112,9 @@ func (n *Node) TouchPointer(serial string, action string, x int, y int, pointerI
 	if session, err := n.GetStream(serial); err == nil && session.controlConn != nil {
 		return n.touchLocalPointer(serial, action, x, y, pointerID)
 	}
-	device, err := n.DeviceBySerial(serial)
-	if err != nil {
-		return err
-	}
-	if device.NodeID == n.ID {
+	return n.sendDeviceInput(serial, func() error {
 		return n.touchLocalPointer(serial, action, x, y, pointerID)
-	}
-	return n.sendPeerRequest(device.NodeID, transport.TypeTouchRequest, transport.TouchRequestPayload{
+	}, transport.TypeTouchRequest, transport.TouchRequestPayload{
 		Serial: serial, Action: action, X: x, Y: y, PointerID: &pointerID,
 	})
 }
@@ -199,22 +185,13 @@ func (n *Node) pressKeyLocal(serial string, keycode uint32, metaState uint32) er
 	return scrcpy.PressKey(session.controlConn, keycode, metaState)
 }
 func (n *Node) PressKey(serial string, keycode uint32, metaState uint32) error {
-	device, err := n.deviceBySerial(serial)
-	if err != nil {
-		return err
-	}
-
-	if device.NodeID == n.ID {
+	return n.sendDeviceInput(serial, func() error {
 		return n.pressKeyLocal(serial, keycode, metaState)
-	}
-
-	payload := transport.PressKeyRequestPayload{
+	}, transport.TypePressKeyRequest, transport.PressKeyRequestPayload{
 		Serial:    serial,
 		Keycode:   keycode,
 		MetaState: metaState,
-	}
-
-	return n.sendPeerRequest(device.NodeID, transport.TypePressKeyRequest, payload)
+	})
 }
 
 func (n *Node) pressButtonLocal(serial string, name string) error {
@@ -235,21 +212,12 @@ func (n *Node) pressButtonLocal(serial string, name string) error {
 }
 
 func (n *Node) PressButton(serial string, name string) error {
-	device, err := n.DeviceBySerial(serial)
-	if err != nil {
-		return err
-	}
-
-	if device.NodeID == n.ID {
+	return n.sendDeviceInput(serial, func() error {
 		return n.pressButtonLocal(serial, name)
-	}
-
-	payload := transport.PressButtonRequestPayload{
+	}, transport.TypePressButtonRequest, transport.PressButtonRequestPayload{
 		Serial: serial,
 		Name:   name,
-	}
-
-	return n.sendPeerRequest(device.NodeID, transport.TypePressButtonRequest, payload)
+	})
 }
 
 func (n *Node) launchAppLocal(serial string, packageName string) error {
@@ -387,23 +355,14 @@ func (n *Node) foregroundAppLocal(serial string) (string, error) {
 // press from a tap measures how long the pointer stayed down, which a swipe
 // between two points does not promise.
 func (n *Node) Hold(serial string, x int, y int, durationMS int) error {
-	device, err := n.DeviceBySerial(serial)
-	if err != nil {
-		return err
-	}
-
-	if device.NodeID == n.ID {
+	return n.sendDeviceInput(serial, func() error {
 		return n.holdLocal(serial, x, y, durationMS)
-	}
-
-	payload := transport.HoldRequestPayload{
+	}, transport.TypeHoldRequest, transport.HoldRequestPayload{
 		Serial:     serial,
 		X:          x,
 		Y:          y,
 		DurationMS: durationMS,
-	}
-
-	return n.sendPeerRequest(device.NodeID, transport.TypeHoldRequest, payload)
+	})
 }
 
 func (n *Node) holdLocal(serial string, x int, y int, durationMS int) error {
@@ -433,15 +392,6 @@ func (n *Node) holdLocal(serial string, x int, y int, durationMS int) error {
 // that has shaped a curve to look human loses it if the transport keeps only
 // the endpoints.
 func (n *Node) Drag(serial string, points []DragPoint, durationMS int) error {
-	device, err := n.DeviceBySerial(serial)
-	if err != nil {
-		return err
-	}
-
-	if device.NodeID == n.ID {
-		return n.dragLocal(serial, points, durationMS)
-	}
-
 	payload := transport.DragRequestPayload{
 		Serial:     serial,
 		DurationMS: durationMS,
@@ -451,7 +401,9 @@ func (n *Node) Drag(serial string, points []DragPoint, durationMS int) error {
 		payload.Points[index] = transport.DragPoint{X: point.X, Y: point.Y}
 	}
 
-	return n.sendPeerRequest(device.NodeID, transport.TypeDragRequest, payload)
+	return n.sendDeviceInput(serial, func() error {
+		return n.dragLocal(serial, points, durationMS)
+	}, transport.TypeDragRequest, payload)
 }
 
 func (n *Node) dragLocal(serial string, points []DragPoint, durationMS int) error {
@@ -599,21 +551,12 @@ func (n *Node) typeTextLocal(serial string, text string) error {
 }
 
 func (n *Node) TypeText(serial string, text string) error {
-	device, err := n.DeviceBySerial(serial)
-	if err != nil {
-		return err
-	}
-
-	if device.NodeID == n.ID {
+	return n.sendDeviceInput(serial, func() error {
 		return n.typeTextLocal(serial, text)
-	}
-
-	payload := transport.TextInputRequestPayload{
+	}, transport.TypeTextInputRequest, transport.TextInputRequestPayload{
 		Serial: serial,
 		Text:   text,
-	}
-
-	return n.sendPeerRequest(device.NodeID, transport.TypeTextInputRequest, payload)
+	})
 }
 
 func (n *Node) getClipboardLocal(serial string) (string, error) {
@@ -771,26 +714,22 @@ func (n *Node) SetClipboard(serial string, text string) error {
 }
 
 func (n *Node) Tap(serial string, x int, y int) error {
-	device, err := n.DeviceBySerial(serial)
+	nodeID, platform, err := n.deviceOwnerInfo(serial)
 	if err != nil {
 		return err
 	}
 
-	if device.NodeID == n.ID && device.Platform == PlatformAndroid {
+	if nodeID == n.ID && platform == PlatformAndroid {
 		return n.tapLocalAndroid(serial, x, y)
 	}
 
-	if device.NodeID == n.ID {
+	return n.sendDeviceInput(serial, func() error {
 		return n.tapLocal(serial, x, y)
-	}
-
-	payload := transport.TapRequestPayload{
+	}, transport.TypeTapRequest, transport.TapRequestPayload{
 		Serial: serial,
 		X:      x,
 		Y:      y,
-	}
-
-	return n.sendPeerRequest(device.NodeID, transport.TypeTapRequest, payload)
+	})
 }
 
 func (n *Node) swipeLocal(serial string, startX, startY, endX, endY int) error {
@@ -1011,24 +950,15 @@ func (n *Node) Swipe(serial string, startX, startY, endX, endY int) error {
 		return n.swipeLocal(serial, startX, startY, endX, endY)
 	}
 
-	device, err := n.DeviceBySerial(serial)
-	if err != nil {
-		return err
-	}
-
-	if device.NodeID == n.ID {
+	return n.sendDeviceInput(serial, func() error {
 		return n.swipeLocal(serial, startX, startY, endX, endY)
-	}
-
-	payload := transport.SwipeRequestPayload{
+	}, transport.TypeSwipeRequest, transport.SwipeRequestPayload{
 		Serial: serial,
 		StartX: startX,
 		StartY: startY,
 		EndX:   endX,
 		EndY:   endY,
-	}
-
-	return n.sendPeerRequest(device.NodeID, transport.TypeSwipeRequest, payload)
+	})
 }
 
 func touchActionByte(action string) (byte, error) {

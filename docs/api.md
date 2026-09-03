@@ -1220,6 +1220,25 @@ Error message:
 }
 ```
 
+### Backpressure and move coalescing
+
+The socket queues what it has accepted but the device has not yet taken.
+
+A `touch` with action `move` coalesces: a newer move replaces one still waiting
+for the same `pointer_id`, because a move says only where the pointer is now.
+So a client may send moves as fast as it likes -- a browser sending one per
+animation frame will not outrun a device -- and the device always receives the
+most recent position rather than a backlog of stale ones.
+
+Nothing else coalesces. A `down`, an `up`, a `tap`, a `swipe`, a `keypress`, a
+`button` and a `text` each mean something the next one does not repeat, so they
+queue in order. When that queue is full the socket answers
+`{"type":"error","message":"control queue full"}` and drops the request; the
+client should treat it as backpressure and stop sending, not retry immediately.
+
+Coalescing never reaches across other input: moves either side of an `up`
+belong to different moments of a gesture and both survive.
+
 ## Program APIs
 
 Program storage, versioning, resume behavior, logs, cleanup, autostart, and

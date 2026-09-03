@@ -99,6 +99,20 @@ func (s *Store) reconcileActiveRunProcesses() {
 		if state.stopping || !runIsActive(run) || run.PID <= 0 {
 			continue
 		}
+		// A waitRun goroutine holding this run's command is the authority on
+		// how it ended. Between the process dying and that goroutine recording
+		// the exit status there is a window -- widened by however long the
+		// companions take to be killed and reaped -- where the PID is gone but
+		// the status is still `running`. Declaring the run lost inside that
+		// window overwrites an exit Mast is about to collect, and `lost` is not
+		// a cosmetic difference: it is the state a Mast killed outright leaves
+		// behind, so the startup resume relaunches it.
+		//
+		// Reconciling exists for the runs nothing is waiting on -- those adopted
+		// from run.json at startup, which carry a PID and no waiter.
+		if state.waiting {
+			continue
+		}
 		alive, matches := runProcessStatus(run)
 		if alive && matches {
 			continue
@@ -639,6 +653,10 @@ func (s *Store) startRunProcesses(state *runState, stdout, stderr io.Writer, env
 	}
 	s.mu.Lock()
 	state.cmd = cmd
+	// Set under the same lock as the command: the caller launches waitRun
+	// immediately after, and reconciling must already be deferring to it by the
+	// time the process can exit.
+	state.waiting = true
 	if promptInput != nil {
 		state.stdin = promptInput
 	}
@@ -1127,6 +1145,7 @@ func (s *Store) waitRun(state *runState, stdout, stderr io.Closer) {
 		state.run.Status = RunStatusFailed
 		state.run.Error = err.Error()
 	}
+	state.waiting = false
 	completedSnapshot := nextRunSnapshot(state.run)
 	writeRunJSONBestEffort(filepath.Join(completedSnapshot.Workspace, "run.json"), &completedSnapshot)
 	s.mu.Unlock()

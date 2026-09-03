@@ -440,6 +440,17 @@ and an outright kill leave the same state behind. `lost` is exactly what the
 startup path resumes: it brings back the runs the daemon took down with it,
 and only those.
 
+Listing runs also reconciles the ones whose process has gone without Mast
+noticing, marking them `lost` the same way. That applies only to runs nothing is
+waiting on -- those restored from `run.json` at startup, which carry a PID and
+no live command. A run this Mast started has a goroutine holding its command,
+and that goroutine is the authority on how it ended: between the process dying
+and the exit status being recorded the PID is already gone while the status is
+still `running`, and companions widen that gap to however long they take to be
+killed and reaped. Reconciling inside it would overwrite an exit Mast is about
+to collect, and because `lost` is what the startup path resumes, a clean exit
+would come back as a relaunch.
+
 ### Cooperative stop
 
 Clients that need graceful cleanup can request, poll, and acknowledge a soft

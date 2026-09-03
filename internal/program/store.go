@@ -83,8 +83,12 @@ type runState struct {
 	companionWG      sync.WaitGroup
 	companionFailure string
 	mainExited       bool
-	stopping         bool
-	resuming         bool
+	// waiting is true while a waitRun goroutine holds this run's command and
+	// will record how it ended. Reconciling defers to it: see
+	// reconcileActiveRunProcesses.
+	waiting  bool
+	stopping bool
+	resuming bool
 	// checkpointPolledAt is when the program last asked whether a stop is
 	// pending. See Run.CheckpointPolledAt: it lives here, outside the persisted
 	// run, because it describes this process rather than this run.

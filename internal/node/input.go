@@ -1,12 +1,40 @@
 package node
 
-import "log"
+import (
+	"log"
+	"sync"
+)
 
-// inputQueueDepth bounds one device's pending input. A drag delivers roughly
-// sixty moves a second and a single swipe occupies the device for a quarter
-// second, so a backlog this deep already means the gesture behind it is long
-// past mattering. The cap exists to make that visible, not to be reached.
-const inputQueueDepth = 128
+// inputQueueDepth bounds the input one device can have waiting.
+//
+// Moves collapse (see coalesceKey), so a drag never accumulates however far
+// behind the device falls. What can still stack up is discrete gestures --
+// swipes at a quarter second of pointer steps each -- and this bounds that
+// backlog to a few seconds. Past it the sender waits, which is honest
+// backpressure: a phone throttled too hard to keep up should say so rather
+// than bank a gesture to replay long after the operator stopped asking.
+const inputQueueDepth = 32
+
+// inputJob is one queued operation for a device.
+type inputJob struct {
+	name string
+	run  func() error
+	// coalesceKey, when set, lets a newer job replace an identically keyed one
+	// still waiting at the back of the queue. Only a pointer move earns this:
+	// its whole content is "the finger is here now", so the newer one says
+	// everything the older one did. A down, an up, or a discrete gesture never
+	// coalesces -- dropping those changes what the device is told happened.
+	coalesceKey string
+}
+
+// deviceInput is one device's queue and the worker draining it.
+type deviceInput struct {
+	mu      sync.Mutex
+	cond    *sync.Cond
+	pending []inputJob
+	closed  bool
+	warned  bool
+}
 
 // enqueueInput hands work to the goroutine that owns this serial's input and
 // returns without waiting for it to run.
@@ -20,47 +48,65 @@ const inputQueueDepth = 128
 //
 // One worker per serial keeps the ordering that matters and drops the coupling
 // that does not.
-func (n *Node) enqueueInput(serial string, name string, run func() error) {
+func (n *Node) enqueueInput(serial string, name string, coalesceKey string, run func() error) {
 	queue := n.inputQueue(serial)
-	job := func() {
-		if err := run(); err != nil {
-			log.Println(name+":", err)
+	job := inputJob{name: name, run: run, coalesceKey: coalesceKey}
+
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+
+	if coalesceKey != "" && len(queue.pending) > 0 {
+		if last := len(queue.pending) - 1; queue.pending[last].coalesceKey == coalesceKey {
+			// Replace rather than append: the position this job carries
+			// supersedes the one still waiting, and a device too slow to have
+			// taken that one has no use for it now.
+			queue.pending[last] = job
+			queue.cond.Broadcast()
+			return
 		}
 	}
 
-	select {
-	case queue <- job:
+	for len(queue.pending) >= inputQueueDepth && !queue.closed {
+		if !queue.warned {
+			queue.warned = true
+			log.Println("input queue full for", serial, "- waiting to enqueue", name)
+		}
+		queue.cond.Wait()
+	}
+	if queue.closed {
 		return
-	default:
 	}
+	queue.warned = false
 
-	// Never discard the overflow: a dropped UP strands the pointer down, which
-	// reads as a wedged device long after the burst that caused it. Waiting
-	// here stalls this peer loop the way the old code always did, but only
-	// while a single device is this far behind.
-	log.Println("input queue full for", serial, "- waiting to enqueue", name)
-	select {
-	case queue <- job:
-	case <-n.ctx.Done():
-	}
+	queue.pending = append(queue.pending, job)
+	queue.cond.Broadcast()
 }
 
 // inputQueue returns the serial's queue, starting its worker on first use.
-func (n *Node) inputQueue(serial string) chan func() {
+func (n *Node) inputQueue(serial string) *deviceInput {
 	n.inputMu.Lock()
 	defer n.inputMu.Unlock()
 
 	if n.inputWorkers == nil {
-		n.inputWorkers = make(map[string]chan func())
+		n.inputWorkers = make(map[string]*deviceInput)
 	}
 
 	if queue, ok := n.inputWorkers[serial]; ok {
 		return queue
 	}
 
-	queue := make(chan func(), inputQueueDepth)
+	queue := &deviceInput{}
+	queue.cond = sync.NewCond(&queue.mu)
 	n.inputWorkers[serial] = queue
+
 	go n.runInputWorker(queue)
+	go func() {
+		<-n.ctx.Done()
+		queue.mu.Lock()
+		queue.closed = true
+		queue.cond.Broadcast()
+		queue.mu.Unlock()
+	}()
 
 	return queue
 }
@@ -68,13 +114,24 @@ func (n *Node) inputQueue(serial string) chan func() {
 // runInputWorker drains one device's input in arrival order until the node
 // shuts down. Workers are keyed by serial and live for the node's lifetime;
 // the set is bounded by the devices that have ever been driven here.
-func (n *Node) runInputWorker(queue chan func()) {
+func (n *Node) runInputWorker(queue *deviceInput) {
 	for {
-		select {
-		case job := <-queue:
-			job()
-		case <-n.ctx.Done():
+		queue.mu.Lock()
+		for len(queue.pending) == 0 && !queue.closed {
+			queue.cond.Wait()
+		}
+		if queue.closed {
+			queue.mu.Unlock()
 			return
+		}
+
+		job := queue.pending[0]
+		queue.pending = queue.pending[1:]
+		queue.cond.Broadcast()
+		queue.mu.Unlock()
+
+		if err := job.run(); err != nil {
+			log.Println(job.name+":", err)
 		}
 	}
 }

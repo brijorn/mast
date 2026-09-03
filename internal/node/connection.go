@@ -2,6 +2,7 @@ package node
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -442,7 +443,7 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 			}
 
 			tap := req.Payload
-			n.enqueueInput(tap.Serial, "tap", func() error {
+			n.enqueueInput(tap.Serial, "tap", "", func() error {
 				return n.Tap(tap.Serial, tap.X, tap.Y)
 			})
 		case transport.TypeLaunchAppRequest:
@@ -482,7 +483,7 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 			}
 
 			hold := req.Payload
-			n.enqueueInput(hold.Serial, "hold", func() error {
+			n.enqueueInput(hold.Serial, "hold", "", func() error {
 				return n.Hold(hold.Serial, hold.X, hold.Y, hold.DurationMS)
 			})
 		case transport.TypeDragRequest:
@@ -497,7 +498,7 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				points[index] = DragPoint{X: point.X, Y: point.Y}
 			}
 			drag := req.Payload
-			n.enqueueInput(drag.Serial, "drag", func() error {
+			n.enqueueInput(drag.Serial, "drag", "", func() error {
 				return n.Drag(drag.Serial, points, drag.DurationMS)
 			})
 		case transport.TypeOpenURLRequest:
@@ -524,7 +525,11 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				pointerID = *touch.PointerID
 			}
 			hasPointer := touch.PointerID != nil
-			n.enqueueInput(touch.Serial, "touch", func() error {
+			coalesceKey := ""
+			if touch.Action == "move" {
+				coalesceKey = fmt.Sprintf("move:%d:%t", pointerID, hasPointer)
+			}
+			n.enqueueInput(touch.Serial, "touch", coalesceKey, func() error {
 				if !hasPointer {
 					return n.touchLocal(touch.Serial, touch.Action, touch.X, touch.Y)
 				}
@@ -538,7 +543,7 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 			}
 
 			swipe := req.Payload
-			n.enqueueInput(swipe.Serial, "swipe", func() error {
+			n.enqueueInput(swipe.Serial, "swipe", "", func() error {
 				return n.swipeLocal(swipe.Serial, swipe.StartX, swipe.StartY, swipe.EndX, swipe.EndY)
 			})
 		case transport.TypePressKeyRequest:
@@ -549,7 +554,7 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 			}
 
 			pressKey := req.Payload
-			n.enqueueInput(pressKey.Serial, "press key", func() error {
+			n.enqueueInput(pressKey.Serial, "press key", "", func() error {
 				return n.pressKeyLocal(pressKey.Serial, pressKey.Keycode, pressKey.MetaState)
 			})
 		case transport.TypePressButtonRequest:
@@ -560,7 +565,7 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 			}
 
 			pressButton := req.Payload
-			n.enqueueInput(pressButton.Serial, "press button", func() error {
+			n.enqueueInput(pressButton.Serial, "press button", "", func() error {
 				return n.pressButtonLocal(pressButton.Serial, pressButton.Name)
 			})
 		case transport.TypeTextInputRequest:
@@ -571,7 +576,7 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 			}
 
 			textInput := req.Payload
-			n.enqueueInput(textInput.Serial, "text input", func() error {
+			n.enqueueInput(textInput.Serial, "text input", "", func() error {
 				return n.typeTextLocal(textInput.Serial, textInput.Text)
 			})
 		case transport.TypeClipboardGetRequest:

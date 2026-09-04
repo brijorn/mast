@@ -72,6 +72,11 @@ const peerDeviceRPCTimeout = 10 * time.Second
 // listing waits on, and both have a cached answer to fall back to.
 const deviceBatteryTimeout = 3 * time.Second
 
+// A device list is polled by the API, peer nodes, and the autostart monitors.
+// Battery telemetry changes slowly compared with those callers, and asking adb
+// on every listing lets overlapping requests multiply into a process storm.
+const deviceBatteryRefreshInterval = 30 * time.Second
+
 type adbRunner interface {
 	Devices(ctx context.Context, host string) ([]byte, error)
 	Push(ctx context.Context, host string, serial string, localPath string, remotePath string) error
@@ -116,7 +121,9 @@ func (a realADB) run(ctx context.Context, host string, timeout time.Duration, ar
 	defer cancel()
 
 	args := adbArgs(host, arg...)
-	output, err := execADBCommand(ctx, "adb", args...).CombinedOutput()
+	cmd := execADBCommand(ctx, "adb", args...)
+	configureADBCommandCancellation(cmd)
+	output, err := cmd.CombinedOutput()
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			err = ctxErr
@@ -479,20 +486,52 @@ func deriveBatteryState(snapshot batterySnapshot) BatteryState {
 	return BatteryStateUnknown
 }
 
-func (n *Node) cacheBattery(serial string, snapshot batterySnapshot) {
+// batteryForListing returns the last usable reading and elects at most one
+// concurrent caller to refresh it. Failed attempts are throttled by the same
+// interval as successful readings, so a wedged adb transport cannot turn API,
+// peer, and monitor polling into duplicate adb process trees.
+func (n *Node) batteryForListing(serial string, now time.Time) (batterySnapshot, bool, bool) {
 	n.batteryMu.Lock()
 	defer n.batteryMu.Unlock()
+
+	cached, hasCached := n.batteryCache[serial]
+	if refreshedAt := n.batteryRefreshedAt[serial]; !refreshedAt.IsZero() && now.Sub(refreshedAt) < deviceBatteryRefreshInterval {
+		return cached, hasCached, false
+	}
+	if n.batteryRefreshing[serial] {
+		return cached, hasCached, false
+	}
+	if attemptedAt := n.batteryAttemptedAt[serial]; !attemptedAt.IsZero() && now.Sub(attemptedAt) < deviceBatteryRefreshInterval {
+		return cached, hasCached, false
+	}
+
+	if n.batteryAttemptedAt == nil {
+		n.batteryAttemptedAt = make(map[string]time.Time)
+	}
+	if n.batteryRefreshing == nil {
+		n.batteryRefreshing = make(map[string]bool)
+	}
+	n.batteryAttemptedAt[serial] = now
+	n.batteryRefreshing[serial] = true
+	return cached, hasCached, true
+}
+
+func (n *Node) finishBatteryRefresh(serial string, snapshot batterySnapshot, err error) {
+	n.batteryMu.Lock()
+	defer n.batteryMu.Unlock()
+
+	delete(n.batteryRefreshing, serial)
+	if err != nil {
+		return
+	}
 	if n.batteryCache == nil {
 		n.batteryCache = make(map[string]batterySnapshot)
 	}
+	if n.batteryRefreshedAt == nil {
+		n.batteryRefreshedAt = make(map[string]time.Time)
+	}
 	n.batteryCache[serial] = snapshot
-}
-
-func (n *Node) cachedBattery(serial string) (batterySnapshot, bool) {
-	n.batteryMu.RLock()
-	defer n.batteryMu.RUnlock()
-	snapshot, ok := n.batteryCache[serial]
-	return snapshot, ok
+	n.batteryRefreshedAt[serial] = time.Now()
 }
 
 // deviceBattery is bounded for the same reason probeDeviceSerial is: a phone
@@ -590,15 +629,22 @@ func (n *Node) listLocalDevices() ([]DeviceInfo, error) {
 		wg.Add(1)
 		go func(device *DeviceInfo) {
 			defer wg.Done()
-			battery, err := n.deviceBattery(device.Serial)
-			if err != nil {
-				log.Printf("get battery for %s: %v", device.Serial, err)
-				if cached, ok := n.cachedBattery(device.Serial); ok {
+			cached, hasCached, refresh := n.batteryForListing(device.Serial, time.Now())
+			if !refresh {
+				if hasCached {
 					applyBatterySnapshot(device, cached)
 				}
 				return
 			}
-			n.cacheBattery(device.Serial, battery)
+			battery, err := n.deviceBattery(device.Serial)
+			n.finishBatteryRefresh(device.Serial, battery, err)
+			if err != nil {
+				log.Printf("get battery for %s: %v", device.Serial, err)
+				if hasCached {
+					applyBatterySnapshot(device, cached)
+				}
+				return
+			}
 			applyBatterySnapshot(device, battery)
 		}(&devices[i])
 	}

@@ -61,6 +61,7 @@ type fakeADB struct {
 	shellCommandOutputs      map[string][]byte
 	shellCommandOutputQueues map[string][][]byte
 	shellCommandErrors       map[string]error
+	shellWaits               map[string]<-chan struct{}
 	execOutOutputs           map[string][]byte
 	execOutErrors            map[string]error
 	deviceWaits              map[string]<-chan struct{}
@@ -168,13 +169,23 @@ func (a *fakeADB) StartShell(host string, serial string, arg ...string) (*exec.C
 
 func (a *fakeADB) Shell(ctx context.Context, host string, serial string, arg ...string) ([]byte, error) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.shellOutputCalls = append(a.shellOutputCalls, shellCall{
 		Host:   host,
 		Serial: serial,
 		Args:   append([]string(nil), arg...),
 	})
 	key := shellCommandKey(serial, arg...)
+	wait := a.shellWaits[key]
+	a.mu.Unlock()
+	if wait != nil {
+		select {
+		case <-wait:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if outputs := a.shellCommandOutputQueues[key]; len(outputs) > 0 {
 		output := outputs[0]
 		a.shellCommandOutputQueues[key] = outputs[1:]
@@ -675,6 +686,94 @@ func TestListDevicesKeepsDeviceWhenBatteryFails(t *testing.T) {
 	}
 	if diff := cmp.Diff(expected, got); diff != "" {
 		t.Fatalf("devices mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestConcurrentDeviceListingsShareBatteryRefresh(t *testing.T) {
+	release := make(chan struct{})
+	localADBOutput := []byte("List of devices attached\nlocal-123\tdevice\n")
+	fake := &fakeADB{
+		outputs: map[string][]byte{"": localADBOutput},
+		shellOutputs: map[string][]byte{
+			"local-123": []byte("Current Battery Service state:\n  USB powered: true\n  status: 2\n  level: 64\n"),
+		},
+		shellWaits: map[string]<-chan struct{}{
+			shellCommandKey("local-123", "dumpsys", "battery"): release,
+		},
+	}
+	node := &Node{
+		ID:             "local-node",
+		AndroidEnabled: true,
+		Peers:          map[string]*PeerConn{},
+		adb:            fake,
+	}
+
+	firstDone := make(chan []DeviceInfo, 1)
+	go func() {
+		devices, _ := node.ListDevices()
+		firstDone <- devices
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for len(fake.shellOutputCallsSnapshot()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+
+	second, err := node.ListDevices()
+	if err != nil {
+		t.Fatalf("second ListDevices returned error: %v", err)
+	}
+	if second[0].Battery != nil {
+		t.Fatalf("second listing battery = %+v, want it omitted while the shared refresh is running", second[0].Battery)
+	}
+	if calls := len(fake.shellOutputCallsSnapshot()); calls != 1 {
+		t.Fatalf("battery calls = %d, want one shared refresh", calls)
+	}
+
+	close(release)
+	first := <-firstDone
+	if first[0].Battery == nil || first[0].Battery.Percent == nil || *first[0].Battery.Percent != 64 {
+		t.Fatalf("first listing battery = %+v, want completed refresh", first[0].Battery)
+	}
+
+	third, err := node.ListDevices()
+	if err != nil {
+		t.Fatalf("third ListDevices returned error: %v", err)
+	}
+	if third[0].Battery == nil || third[0].Battery.Percent == nil || *third[0].Battery.Percent != 64 {
+		t.Fatalf("third listing battery = %+v, want cached refresh", third[0].Battery)
+	}
+	if calls := len(fake.shellOutputCallsSnapshot()); calls != 1 {
+		t.Fatalf("battery calls = %d, want the fresh cache to suppress another call", calls)
+	}
+}
+
+func TestFailedBatteryRefreshIsThrottled(t *testing.T) {
+	fake := &fakeADB{
+		outputs: map[string][]byte{
+			"": []byte("List of devices attached\nlocal-123\tdevice\n"),
+		},
+		shellErrors: map[string]error{"local-123": errors.New("battery failed")},
+	}
+	node := &Node{
+		ID:             "local-node",
+		AndroidEnabled: true,
+		Peers:          map[string]*PeerConn{},
+		adb:            fake,
+	}
+
+	for range 3 {
+		devices, err := node.ListDevices()
+		if err != nil {
+			t.Fatalf("ListDevices returned error: %v", err)
+		}
+		if devices[0].Battery != nil {
+			t.Fatalf("battery = %+v, want unavailable reading omitted", devices[0].Battery)
+		}
+	}
+
+	if calls := len(fake.shellOutputCallsSnapshot()); calls != 1 {
+		t.Fatalf("battery calls = %d, want failed attempt throttled", calls)
 	}
 }
 

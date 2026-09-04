@@ -76,6 +76,9 @@ type Node struct {
 	devicePowerWake      chan struct{}
 	batteryMu            sync.RWMutex
 	batteryCache         map[string]batterySnapshot
+	batteryRefreshedAt   map[string]time.Time
+	batteryAttemptedAt   map[string]time.Time
+	batteryRefreshing    map[string]bool
 	identityMu           sync.RWMutex
 	identityPath         string
 	identityLoaded       bool
@@ -114,6 +117,9 @@ func NewNode(id string, addr string, advertiseHost string, androidEnabled bool, 
 		AdvertiseHost:        advertiseHost,
 		streams:              make(map[string]*streamEntry),
 		batteryCache:         make(map[string]batterySnapshot),
+		batteryRefreshedAt:   make(map[string]time.Time),
+		batteryAttemptedAt:   make(map[string]time.Time),
+		batteryRefreshing:    make(map[string]bool),
 		identityCache:        make(map[string]deviceIdentityEntry),
 		addressBySerial:      make(map[string]string),
 		PingInterval:         30 * time.Second,

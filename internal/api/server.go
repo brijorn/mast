@@ -160,6 +160,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/programs/{id}", s.UpdateProgram)
 	mux.HandleFunc("DELETE /api/programs/{id}", s.DeleteProgram)
 	mux.HandleFunc("GET /api/runs", s.ListRuns)
+	mux.HandleFunc("GET /api/runs/{id}", s.GetRun)
 	mux.HandleFunc("POST /api/runs", s.StartRuns)
 	mux.HandleFunc("POST /api/runs/{id}/stop", s.StopRun)
 	mux.HandleFunc("POST /api/runs/{id}/stop-request", s.RequestRunStop)

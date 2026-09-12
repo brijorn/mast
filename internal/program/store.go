@@ -17,14 +17,15 @@ import (
 )
 
 type Store struct {
-	root       string
-	mu         sync.Mutex
-	programs   map[string]Program
-	runs       map[string]*runState
-	devices    deviceLister
-	startCmd   func(command string, args ...string) *exec.Cmd
-	runners    map[string]string
-	mastAPIURL string
+	root             string
+	mu               sync.Mutex
+	programs         map[string]Program
+	runs             map[string]*runState
+	launchingSerials map[string]bool
+	devices          deviceLister
+	startCmd         func(command string, args ...string) *exec.Cmd
+	runners          map[string]string
+	mastAPIURL       string
 
 	monitorCtx          context.Context
 	monitorCancel       context.CancelFunc

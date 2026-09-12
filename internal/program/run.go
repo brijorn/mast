@@ -773,6 +773,12 @@ func (s *Store) Resume(opts ResumeOptions) (*Run, error) {
 		s.mu.Unlock()
 		return nil, errors.New("run has no persisted command")
 	}
+	release, err := s.claimSerialLaunchLocked(run.Serial, run.ID)
+	if err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
+	defer release()
 	savedRun := cloneRun(run)
 	rotateFailedLogs := run.Status == RunStatusFailed
 	state.resuming = true
@@ -968,6 +974,13 @@ func (s *Store) CleanupRun(id string) (*Run, error) {
 }
 
 func (s *Store) startOne(p Program, device node.DeviceInfo, nodes []node.NodeInfo, variables map[string]string, secretVariables map[string]string) (*Run, error) {
+	s.mu.Lock()
+	release, err := s.claimSerialLaunchLocked(device.Serial, "")
+	s.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	id := uuid.NewString()
 	workspace := filepath.Join(s.instanceDir(), id)
 	if err := copyDir(s.bundlePath(p.ID), workspace); err != nil {

@@ -654,3 +654,18 @@ readers that do not need the console to finish starting.
 For `.ini` config files, Mast also supports structured replacement by
 `section` and `key`; for other config files, Mast performs placeholder
 replacement on matching `{{key}}` tokens.
+
+### Per-phone launch ownership
+
+The process host reserves a phone's serial before preparing a new start or
+resume. Start, manual resume, reconnect, and crash recovery share this boundary.
+A competing launch is refused while that serial is reserved or another run is
+starting, running, resuming, or still being reaped. Reservations release on
+success and failure; an existing active run continues holding the phone after
+launch preparation completes. This is a process-host invariant, not a distributed
+lease across separate Mast hosts.
+
+`GET /api/runs/{id}` returns that run directly from its process host, without
+aggregating unrelated peer inventories for a local run. Remote runs use the
+existing run proxy. This endpoint supports bounded stop confirmation without
+making a local phone wait for every remote node.

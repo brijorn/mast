@@ -324,10 +324,31 @@ Platform behavior:
 
 - macOS: writes `~/Library/LaunchAgents/com.brijorn.mast.plist` and reloads it with `launchctl`.
 - Linux: writes `~/.config/systemd/user/mast.service`, reloads systemd, enables `mast.service`, and restarts it.
-- Windows: writes a scheduled task XML file under the user's Startup programs directory, recreates the `mast` scheduled task, and runs it.
+- Windows: writes a scheduled task XML file under the user's Startup programs directory, recreates the `mast` scheduled task, and runs it. The file is written as UTF-16LE with a byte order mark, because `schtasks` rejects a UTF-8 definition with `unable to switch the encoding` and registers nothing.
 
 Stop any manually started `mast start` process before installing the service, or
 the service may fail to bind its configured ports.
+
+Every platform supervises the node, so an exit brings it back:
+
+- macOS and Linux: the launch agent and the systemd unit restart a failed node.
+- Windows: `RestartOnFailure` retries an action that fails, and the logon trigger repeats every minute so an exit Windows reads as *success* is also noticed. `MultipleInstancesPolicy` is `IgnoreNew`, which makes each repetition a no-op while the node is up, so the repeat costs nothing until the node is actually gone.
+
+The Windows task starts at logon, not at boot: mast drives adb, scrcpy and Wine,
+which need a real desktop session. A machine that reboots and sits at the lock
+screen runs no node until someone signs in, over RDP or at the keyboard. A node
+that must survive an unattended reboot needs a boot trigger and stored
+credentials, which `mast service install` cannot write unprompted; add it by
+hand with `schtasks /create /ru <user> /rp <password>`.
+
+On Windows the service's own output is appended to:
+
+```text
+~/.mast/service.log
+```
+
+That file is the only account of why a node exited, so read it before assuming
+the task never ran. It is never rotated; truncate it when it gets large.
 
 The installed service runs with a PATH that starts with `~/.mast/bin`,
 `~/.local/bin`, and `~/bin`. This lets the service and program runs resolve the

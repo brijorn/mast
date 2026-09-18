@@ -124,10 +124,11 @@ Battery is omitted when Android does not expose usable battery information or
 the device is not ready. `state` is one of `charging`, `holding`, `full`,
 `discharging`, `plugged_draining`, or `unknown`. Mast derives this semantic
 state from Android power, current, and trend telemetry; those raw inputs are not
-part of the public device contract. Readings are cached for 30 seconds, and
-overlapping device listings share one refresh per phone. A slow or failed
+part of the public device contract. Readings are cached for 30 seconds and
+refreshed by one serialized background worker per node. A slow or failed
 refresh therefore keeps the last reading without multiplying adb subprocesses
-or withholding the device inventory.
+or withholding the device inventory. A device newly attached has no reading to
+keep, so it is listed without `battery` until the worker's first reading lands.
 
 ## Device Blacklist
 

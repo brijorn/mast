@@ -78,7 +78,8 @@ type Node struct {
 	batteryCache         map[string]batterySnapshot
 	batteryRefreshedAt   map[string]time.Time
 	batteryAttemptedAt   map[string]time.Time
-	batteryRefreshing    map[string]bool
+	batteryPending       map[string]struct{}
+	batteryWorkerRunning bool
 	identityMu           sync.RWMutex
 	identityPath         string
 	identityLoaded       bool
@@ -119,7 +120,7 @@ func NewNode(id string, addr string, advertiseHost string, androidEnabled bool, 
 		batteryCache:         make(map[string]batterySnapshot),
 		batteryRefreshedAt:   make(map[string]time.Time),
 		batteryAttemptedAt:   make(map[string]time.Time),
-		batteryRefreshing:    make(map[string]bool),
+		batteryPending:       make(map[string]struct{}),
 		identityCache:        make(map[string]deviceIdentityEntry),
 		addressBySerial:      make(map[string]string),
 		PingInterval:         30 * time.Second,

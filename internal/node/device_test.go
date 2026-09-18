@@ -231,6 +231,23 @@ func (a *fakeADB) shellOutputCallsSnapshot() []shellCall {
 	return calls
 }
 
+func waitForBatteryWorker(t *testing.T, node *Node) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		node.batteryMu.Lock()
+		running := node.batteryWorkerRunning
+		node.batteryMu.Unlock()
+		if !running {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("battery worker did not finish")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func fakeScrcpySocketOptions(args []string) (bool, bool, bool, bool) {
 	video := true
 	audio := true
@@ -587,9 +604,17 @@ func TestListDevicesIncludesLocalBattery(t *testing.T) {
 		adb:            fake,
 	}
 
-	got, err := node.ListDevices()
+	initial, err := node.ListDevices()
 	if err != nil {
 		t.Fatalf("ListDevices returned error: %v", err)
+	}
+	if initial[0].Battery != nil {
+		t.Fatalf("initial battery = %+v, want background refresh not to withhold inventory", initial[0].Battery)
+	}
+	waitForBatteryWorker(t, node)
+	got, err := node.ListDevices()
+	if err != nil {
+		t.Fatalf("cached ListDevices returned error: %v", err)
 	}
 
 	expected := []DeviceInfo{
@@ -609,7 +634,7 @@ func TestListDevicesIncludesLocalBattery(t *testing.T) {
 	expectedShellCalls := []shellCall{
 		{Host: "", Serial: "local-123", Args: []string{"dumpsys", "battery"}},
 	}
-	if diff := cmp.Diff(expectedShellCalls, fake.shellOutputCalls); diff != "" {
+	if diff := cmp.Diff(expectedShellCalls, fake.shellOutputCallsSnapshot()); diff != "" {
 		t.Fatalf("shell calls mismatch (-want +got):\n%s", diff)
 	}
 }
@@ -635,8 +660,15 @@ func TestListDevicesUsesCachedBatteryWhenBatteryFails(t *testing.T) {
 	if _, err := node.ListDevices(); err != nil {
 		t.Fatalf("first ListDevices returned error: %v", err)
 	}
+	waitForBatteryWorker(t, node)
+	fake.mu.Lock()
 	fake.shellOutputs = nil
 	fake.shellErrors = map[string]error{"local-123": errors.New("battery failed")}
+	fake.mu.Unlock()
+	node.batteryMu.Lock()
+	node.batteryRefreshedAt["local-123"] = time.Now().Add(-2 * deviceBatteryRefreshInterval)
+	node.batteryAttemptedAt["local-123"] = time.Time{}
+	node.batteryMu.Unlock()
 
 	got, err := node.ListDevices()
 	if err != nil {
@@ -656,6 +688,7 @@ func TestListDevicesUsesCachedBatteryWhenBatteryFails(t *testing.T) {
 	if diff := cmp.Diff(expected, got); diff != "" {
 		t.Fatalf("devices mismatch (-want +got):\n%s", diff)
 	}
+	waitForBatteryWorker(t, node)
 }
 
 func TestListDevicesKeepsDeviceWhenBatteryFails(t *testing.T) {
@@ -708,11 +741,13 @@ func TestConcurrentDeviceListingsShareBatteryRefresh(t *testing.T) {
 		adb:            fake,
 	}
 
-	firstDone := make(chan []DeviceInfo, 1)
-	go func() {
-		devices, _ := node.ListDevices()
-		firstDone <- devices
-	}()
+	first, err := node.ListDevices()
+	if err != nil {
+		t.Fatalf("first ListDevices returned error: %v", err)
+	}
+	if first[0].Battery != nil {
+		t.Fatalf("first listing battery = %+v, want refresh to remain in background", first[0].Battery)
+	}
 
 	deadline := time.Now().Add(time.Second)
 	for len(fake.shellOutputCallsSnapshot()) == 0 && time.Now().Before(deadline) {
@@ -731,10 +766,7 @@ func TestConcurrentDeviceListingsShareBatteryRefresh(t *testing.T) {
 	}
 
 	close(release)
-	first := <-firstDone
-	if first[0].Battery == nil || first[0].Battery.Percent == nil || *first[0].Battery.Percent != 64 {
-		t.Fatalf("first listing battery = %+v, want completed refresh", first[0].Battery)
-	}
+	waitForBatteryWorker(t, node)
 
 	third, err := node.ListDevices()
 	if err != nil {
@@ -771,9 +803,47 @@ func TestFailedBatteryRefreshIsThrottled(t *testing.T) {
 			t.Fatalf("battery = %+v, want unavailable reading omitted", devices[0].Battery)
 		}
 	}
+	waitForBatteryWorker(t, node)
 
 	if calls := len(fake.shellOutputCallsSnapshot()); calls != 1 {
 		t.Fatalf("battery calls = %d, want failed attempt throttled", calls)
+	}
+}
+
+func TestBatteryWorkerSerializesPhones(t *testing.T) {
+	release := make(chan struct{})
+	fake := &fakeADB{
+		outputs: map[string][]byte{
+			"": []byte("List of devices attached\nphone-a\tdevice\nphone-b\tdevice\n"),
+		},
+		shellWaits: map[string]<-chan struct{}{
+			shellCommandKey("phone-a", "dumpsys", "battery"): release,
+			shellCommandKey("phone-b", "dumpsys", "battery"): release,
+		},
+	}
+	node := &Node{
+		ID:             "local-node",
+		AndroidEnabled: true,
+		Peers:          map[string]*PeerConn{},
+		adb:            fake,
+	}
+
+	if _, err := node.ListDevices(); err != nil {
+		t.Fatalf("ListDevices returned error: %v", err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for len(fake.shellOutputCallsSnapshot()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(10 * time.Millisecond)
+	if calls := len(fake.shellOutputCallsSnapshot()); calls != 1 {
+		t.Fatalf("battery calls while first phone is blocked = %d, want one", calls)
+	}
+
+	close(release)
+	waitForBatteryWorker(t, node)
+	if calls := len(fake.shellOutputCallsSnapshot()); calls != 2 {
+		t.Fatalf("completed battery calls = %d, want both phones refreshed serially", calls)
 	}
 }
 
@@ -802,6 +872,13 @@ func TestListDevicesIncludesAndroidEnabledPeerDevices(t *testing.T) {
 	nodeB.adb = nodeBADB
 	nodeA.AndroidEnabled = true
 	nodeB.AndroidEnabled = true
+	if _, err := nodeB.listLocalDevices(); err != nil {
+		t.Fatalf("prime peer battery: %v", err)
+	}
+	waitForBatteryWorker(t, nodeB)
+	nodeBADB.mu.Lock()
+	nodeBADB.calls = nil
+	nodeBADB.mu.Unlock()
 
 	connectNodePair(t, nodeA, nodeB)
 
@@ -1500,6 +1577,17 @@ func TestScreenshotRemoteRoutesToPeerOwner(t *testing.T) {
 		},
 	}
 	nodeB.AndroidEnabled = true
+	// Settle the peer's battery telemetry before connecting: the refresh runs on
+	// a background worker now, so leaving it in flight would interleave its
+	// `dumpsys battery` call with the exec-out this test asserts on.
+	if _, err := nodeB.listLocalDevices(); err != nil {
+		t.Fatalf("prime peer battery: %v", err)
+	}
+	fake := nodeB.adb.(*fakeADB)
+	waitForBatteryWorker(t, nodeB)
+	fake.mu.Lock()
+	fake.shellOutputCalls = nil
+	fake.mu.Unlock()
 	connectNodePair(t, nodeA, nodeB)
 
 	got, err := nodeA.Screenshot("remote-123")
@@ -1509,11 +1597,11 @@ func TestScreenshotRemoteRoutesToPeerOwner(t *testing.T) {
 	if string(got) != "peer-png" {
 		t.Fatalf("screenshot = %q, want peer-png", got)
 	}
-	fake := nodeB.adb.(*fakeADB)
-	if len(fake.shellOutputCalls) == 0 {
+	calls := fake.shellOutputCallsSnapshot()
+	if len(calls) == 0 {
 		t.Fatal("peer ExecOut was not called")
 	}
-	call := fake.shellOutputCalls[len(fake.shellOutputCalls)-1]
+	call := calls[len(calls)-1]
 	if call.Serial != "remote-123" || strings.Join(call.Args, " ") != "exec-out screencap -p" {
 		t.Fatalf("peer exec-out call = %+v", call)
 	}

@@ -486,41 +486,41 @@ func deriveBatteryState(snapshot batterySnapshot) BatteryState {
 	return BatteryStateUnknown
 }
 
-// batteryForListing returns the last usable reading and elects at most one
-// concurrent caller to refresh it. Failed attempts are throttled by the same
-// interval as successful readings, so a wedged adb transport cannot turn API,
-// peer, and monitor polling into duplicate adb process trees.
-func (n *Node) batteryForListing(serial string, now time.Time) (batterySnapshot, bool, bool) {
+// batteryForListing returns the last usable reading and queues stale telemetry
+// for a single background worker. Inventory never waits for battery I/O: on
+// Windows, enough concurrent adb shell commands can stall even `adb devices`,
+// which used to make healthy phones disappear from the API.
+func (n *Node) batteryForListing(serial string, now time.Time) (batterySnapshot, bool) {
 	n.batteryMu.Lock()
 	defer n.batteryMu.Unlock()
 
 	cached, hasCached := n.batteryCache[serial]
 	if refreshedAt := n.batteryRefreshedAt[serial]; !refreshedAt.IsZero() && now.Sub(refreshedAt) < deviceBatteryRefreshInterval {
-		return cached, hasCached, false
-	}
-	if n.batteryRefreshing[serial] {
-		return cached, hasCached, false
+		return cached, hasCached
 	}
 	if attemptedAt := n.batteryAttemptedAt[serial]; !attemptedAt.IsZero() && now.Sub(attemptedAt) < deviceBatteryRefreshInterval {
-		return cached, hasCached, false
+		return cached, hasCached
 	}
 
 	if n.batteryAttemptedAt == nil {
 		n.batteryAttemptedAt = make(map[string]time.Time)
 	}
-	if n.batteryRefreshing == nil {
-		n.batteryRefreshing = make(map[string]bool)
+	if n.batteryPending == nil {
+		n.batteryPending = make(map[string]struct{})
 	}
 	n.batteryAttemptedAt[serial] = now
-	n.batteryRefreshing[serial] = true
-	return cached, hasCached, true
+	n.batteryPending[serial] = struct{}{}
+	if !n.batteryWorkerRunning {
+		n.batteryWorkerRunning = true
+		go n.runBatteryRefreshes()
+	}
+	return cached, hasCached
 }
 
 func (n *Node) finishBatteryRefresh(serial string, snapshot batterySnapshot, err error) {
 	n.batteryMu.Lock()
 	defer n.batteryMu.Unlock()
 
-	delete(n.batteryRefreshing, serial)
 	if err != nil {
 		return
 	}
@@ -532,6 +532,30 @@ func (n *Node) finishBatteryRefresh(serial string, snapshot batterySnapshot, err
 	}
 	n.batteryCache[serial] = snapshot
 	n.batteryRefreshedAt[serial] = time.Now()
+}
+
+func (n *Node) runBatteryRefreshes() {
+	for {
+		n.batteryMu.Lock()
+		serial := ""
+		for pending := range n.batteryPending {
+			serial = pending
+			delete(n.batteryPending, pending)
+			break
+		}
+		if serial == "" {
+			n.batteryWorkerRunning = false
+			n.batteryMu.Unlock()
+			return
+		}
+		n.batteryMu.Unlock()
+
+		battery, err := n.deviceBattery(serial)
+		n.finishBatteryRefresh(serial, battery, err)
+		if err != nil {
+			log.Printf("get battery for %s: %v", serial, err)
+		}
+	}
 }
 
 // deviceBattery is bounded for the same reason probeDeviceSerial is: a phone
@@ -613,11 +637,6 @@ func (n *Node) listLocalDevices() ([]DeviceInfo, error) {
 		return nil, err
 	}
 
-	// Each reading is an adb round-trip, so a fleet's worth of them in series is
-	// the whole listing's latency; one unreachable phone alone spends its full
-	// timeout before the next is even asked. Peers are already gathered
-	// concurrently below, and local devices answer independently too.
-	var wg sync.WaitGroup
 	for i := range devices {
 		if devices[i].Platform != PlatformAndroid {
 			continue
@@ -626,29 +645,11 @@ func (n *Node) listLocalDevices() ([]DeviceInfo, error) {
 			continue
 		}
 
-		wg.Add(1)
-		go func(device *DeviceInfo) {
-			defer wg.Done()
-			cached, hasCached, refresh := n.batteryForListing(device.Serial, time.Now())
-			if !refresh {
-				if hasCached {
-					applyBatterySnapshot(device, cached)
-				}
-				return
-			}
-			battery, err := n.deviceBattery(device.Serial)
-			n.finishBatteryRefresh(device.Serial, battery, err)
-			if err != nil {
-				log.Printf("get battery for %s: %v", device.Serial, err)
-				if hasCached {
-					applyBatterySnapshot(device, cached)
-				}
-				return
-			}
-			applyBatterySnapshot(device, battery)
-		}(&devices[i])
+		cached, hasCached := n.batteryForListing(devices[i].Serial, time.Now())
+		if hasCached {
+			applyBatterySnapshot(&devices[i], cached)
+		}
 	}
-	wg.Wait()
 
 	return devices, nil
 }

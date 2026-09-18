@@ -684,6 +684,9 @@ func (s *Store) startRunProcesses(state *runState, stdout, stderr io.Writer, env
 			}
 			s.mu.Lock()
 			state.mainExited = true
+			// This path reaps the process itself and returns instead of
+			// launching waitRun, so nothing is left waiting for the run.
+			state.waiting = false
 			runForStop := cloneRun(run)
 			s.mu.Unlock()
 			_ = killRunProcess(&runForStop)

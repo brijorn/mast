@@ -594,6 +594,73 @@ func TestRequiredCompanionExitFailsRun(t *testing.T) {
 	}
 }
 
+// A resume whose required companion will not start returns before anything
+// waits on the run, and unlike a fresh start its state is already in the run
+// map. The phone has to come back free: the occupancy check reads the same
+// `waiting` flag the launch raised, so leaving it set locks the serial out of
+// every later launch for the lifetime of the process.
+func TestResumeCompanionStartFailureReleasesSerial(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture requires Unix")
+	}
+
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "main.sh"), []byte("#!/bin/sh\nsleep 30\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "helper.sh"), []byte("#!/bin/sh\nsleep 30\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(filepath.Join(root, "programs"), fakeDevices{
+		devices: []node.DeviceInfo{{Serial: "phone-1", State: "device", NodeID: "node-1"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registered, err := registerTestProgram(t, store, source, RegisterUploadOptions{
+		Name:  "required companion",
+		Entry: Entry{Command: "main.sh", Companions: []CompanionEntry{{ID: "helper", Command: "helper.sh", Required: true}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, err := store.Start(StartOptions{ProgramID: registered.ID, Serials: []string{"phone-1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Stop(StopOptions{ID: runs[0].ID}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Take the companion away so the resume fails at the same point a missing
+	// binary would, after the main process has already been launched.
+	if err := os.Remove(filepath.Join(runs[0].Workspace, "helper.sh")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Resume(ResumeOptions{ID: runs[0].ID}); err == nil {
+		t.Fatal("Resume returned no error, want required companion start failure")
+	}
+
+	// A healthy program proves the release: resuming the broken run again would
+	// fail on its missing companion whether or not the serial came back.
+	healthy, err := registerTestProgram(t, store, source, RegisterUploadOptions{
+		Name:  "healthy",
+		Entry: Entry{Command: "main.sh"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.Start(StartOptions{ProgramID: healthy.ID, Serials: []string{"phone-1"}})
+	if err != nil {
+		t.Fatalf("second Start returned error: %v, want the serial released", err)
+	}
+	t.Cleanup(func() { _, _ = store.Stop(StopOptions{ID: second[0].ID}) })
+}
+
 func TestOptionalCompanionStartFailureDoesNotFailRun(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell fixture requires Unix")

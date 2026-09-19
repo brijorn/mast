@@ -51,6 +51,8 @@ type nodeBackend interface {
 	Hold(serial string, x, y int, durationMS int) error
 	Drag(serial string, points []node.DragPoint, durationMS int) error
 	OpenURL(serial string, url string) error
+	Reverse(serial string, port int) error
+	RemoveReverse(serial string, port int) error
 	DevToolsEndpoint(serial string) (string, int, error)
 	RemoveDevToolsEndpoint(serial string, port int) error
 	GetClipboard(serial string) (string, error)
@@ -184,6 +186,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/control/hold", s.Hold)
 	mux.HandleFunc("POST /api/control/drag", s.Drag)
 	mux.HandleFunc("POST /api/control/open-url", s.OpenURL)
+	mux.HandleFunc("POST /api/control/reverse", s.Reverse)
+	mux.HandleFunc("POST /api/control/reverse/remove", s.ReverseRemove)
 	mux.HandleFunc("POST /api/control/devtools", s.DevToolsForward)
 	mux.HandleFunc("POST /api/control/devtools/remove", s.DevToolsForwardRemove)
 	mux.HandleFunc("POST /api/control/clipboard/get", s.GetClipboard)

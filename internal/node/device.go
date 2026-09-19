@@ -83,6 +83,7 @@ type adbRunner interface {
 	Reverse(ctx context.Context, host string, serial string, deviceSocket string, localPort int) error
 	Forward(ctx context.Context, host string, serial string, localSpec string, deviceSocket string) ([]byte, error)
 	ForwardRemove(ctx context.Context, host string, serial string, localSpec string) error
+	ReverseRemove(ctx context.Context, host string, serial string, deviceSocket string) error
 	StartShell(host string, serial string, arg ...string) (*exec.Cmd, error)
 	Shell(ctx context.Context, host string, serial string, arg ...string) ([]byte, error)
 	ExecOut(ctx context.Context, host string, serial string, arg ...string) ([]byte, error)
@@ -158,6 +159,12 @@ func (a realADB) Forward(ctx context.Context, host string, serial string, localS
 
 func (a realADB) ForwardRemove(ctx context.Context, host string, serial string, localSpec string) error {
 	args := adbSerialArgs(serial, "forward", "--remove", localSpec)
+	_, err := a.run(ctx, host, adbCommandTimeout, args...)
+	return err
+}
+
+func (a realADB) ReverseRemove(ctx context.Context, host string, serial string, deviceSocket string) error {
+	args := adbSerialArgs(serial, "reverse", "--remove", deviceSocket)
 	_, err := a.run(ctx, host, adbCommandTimeout, args...)
 	return err
 }

@@ -63,6 +63,11 @@ type openURLRequest struct {
 	URL    string `json:"url"`
 }
 
+type reverseRequest struct {
+	Serial string `json:"serial"`
+	Port   int    `json:"port"`
+}
+
 type devToolsRequest struct {
 	Serial string `json:"serial"`
 	Port   int    `json:"port,omitempty"`
@@ -94,7 +99,18 @@ func validOpenURL(raw string) bool {
 	if err != nil {
 		return false
 	}
-	return parsed.Scheme == "https" && parsed.Host != ""
+	switch parsed.Scheme {
+	case "https":
+		return parsed.Host != ""
+	case "http":
+		// A page whose sign-in only trusts a localhost origin must load over
+		// http on the loopback the phone reaches through an adb reverse; no
+		// other host may be opened over plain http.
+		host := parsed.Hostname()
+		return host == "localhost" || host == "127.0.0.1"
+	default:
+		return false
+	}
 }
 
 type touchRequest struct {
@@ -526,6 +542,48 @@ func (s *Server) OpenURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) Reverse(w http.ResponseWriter, r *http.Request) {
+	var req reverseRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Serial == "" {
+		http.Error(w, "serial required", http.StatusBadRequest)
+		return
+	}
+	if req.Port <= 0 || req.Port > 65535 {
+		http.Error(w, "valid port required", http.StatusBadRequest)
+		return
+	}
+	if err := s.node.Reverse(req.Serial, req.Port); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) ReverseRemove(w http.ResponseWriter, r *http.Request) {
+	var req reverseRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Serial == "" {
+		http.Error(w, "serial required", http.StatusBadRequest)
+		return
+	}
+	if req.Port <= 0 || req.Port > 65535 {
+		http.Error(w, "valid port required", http.StatusBadRequest)
+		return
+	}
+	if err := s.node.RemoveReverse(req.Serial, req.Port); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

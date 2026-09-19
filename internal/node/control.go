@@ -474,6 +474,35 @@ func (n *Node) OpenURL(serial string, url string) error {
 	return n.sendPeerRequest(device.NodeID, transport.TypeOpenURLRequest, payload)
 }
 
+// Reverse binds the device's tcp:port back to the same port on the node that
+// owns it, so the phone's own Chrome can reach a server running beside Mast at
+// `http://localhost:port`. This is the piece that lets a page whose sign-in
+// only trusts a localhost origin load on the phone. It is offered for a locally
+// owned device only: an `adb reverse` binds on the owning node, so on a
+// peer-owned phone it would point at the peer rather than at the caller, which
+// is not what a localhost URL there would mean.
+func (n *Node) Reverse(serial string, port int) error {
+	device, err := n.DeviceBySerial(serial)
+	if err != nil {
+		return err
+	}
+	if device.NodeID != n.ID {
+		return fmt.Errorf("adb reverse is available for locally owned devices only; %s is owned by %s", serial, device.NodeID)
+	}
+	return n.adbReverse(n.ctx, "", serial, "tcp:"+strconv.Itoa(port), port)
+}
+
+func (n *Node) RemoveReverse(serial string, port int) error {
+	device, err := n.DeviceBySerial(serial)
+	if err != nil {
+		return err
+	}
+	if device.NodeID != n.ID {
+		return fmt.Errorf("adb reverse is available for locally owned devices only; %s is owned by %s", serial, device.NodeID)
+	}
+	return n.adbReverseRemove(n.ctx, "", serial, "tcp:"+strconv.Itoa(port))
+}
+
 const chromeDevToolsSocket = "localabstract:chrome_devtools_remote"
 
 var devToolsForwardPortPattern = regexp.MustCompile(`(\d+)`)

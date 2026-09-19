@@ -345,6 +345,14 @@ func (f *fakeBackend) OpenURL(_ string, _ string) error {
 	return f.err
 }
 
+func (f *fakeBackend) Reverse(_ string, _ int) error {
+	return nil
+}
+
+func (f *fakeBackend) RemoveReverse(_ string, _ int) error {
+	return nil
+}
+
 func (f *fakeBackend) DevToolsEndpoint(_ string) (string, int, error) {
 	return "", 0, f.err
 }

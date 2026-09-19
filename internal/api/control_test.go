@@ -269,6 +269,48 @@ func TestOpenURLCallsBackend(t *testing.T) {
 	}
 }
 
+func TestOpenURLAllowsLocalhostHTTP(t *testing.T) {
+	backend := &controlBackend{}
+	server := NewServer(backend)
+	body := []byte(`{"serial":"local-123","url":"http://localhost:3000/reco-harvest.html"}`)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/control/open-url", bytes.NewReader(body))
+	server.OpenURL(res, req)
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusNoContent, res.Body.String())
+	}
+	if backend.openURL != "http://localhost:3000/reco-harvest.html" {
+		t.Fatalf("open url = %q", backend.openURL)
+	}
+}
+
+func TestReverseCallsBackend(t *testing.T) {
+	backend := &controlBackend{}
+	server := NewServer(backend)
+	body := []byte(`{"serial":"local-123","port":3000}`)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/control/reverse", bytes.NewReader(body))
+	server.Reverse(res, req)
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusNoContent, res.Body.String())
+	}
+	if backend.reverseSerial != "local-123" || backend.reversePort != 3000 {
+		t.Fatalf("reverse serial=%q port=%d", backend.reverseSerial, backend.reversePort)
+	}
+}
+
+func TestReverseRejectsBadPort(t *testing.T) {
+	backend := &controlBackend{}
+	server := NewServer(backend)
+	body := []byte(`{"serial":"local-123","port":0}`)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/control/reverse", bytes.NewReader(body))
+	server.Reverse(res, req)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", res.Code, http.StatusBadRequest)
+	}
+}
+
 func TestOpenURLRejectsUnsafeURLs(t *testing.T) {
 	// A single quote would close the quoting the device shell relies on, and a
 	// non-https scheme is refused outright.
@@ -536,6 +578,10 @@ type controlBackend struct {
 	openURLSerial string
 	openURL       string
 
+	reverseSerial      string
+	reversePort        int
+	reverseRemovedPort int
+
 	devToolsSerial      string
 	devToolsPort        int
 	devToolsRemovedPort int
@@ -634,6 +680,21 @@ func (b *controlBackend) OpenURL(serial string, url string) error {
 	b.openURLSerial = serial
 	b.openURL = url
 	return b.err
+}
+
+func (b *controlBackend) Reverse(serial string, port int) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.reverseSerial = serial
+	b.reversePort = port
+	return nil
+}
+
+func (b *controlBackend) RemoveReverse(serial string, port int) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.reverseRemovedPort = port
+	return nil
 }
 
 func (b *controlBackend) DevToolsEndpoint(serial string) (string, int, error) {

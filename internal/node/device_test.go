@@ -68,6 +68,7 @@ type fakeADB struct {
 	calls                    []string
 	pushCalls                []pushCall
 	reverseCalls             []reverseCall
+	reverseRemoveCalls       []reverseCall
 	forwardCalls             []forwardCall
 	forwardRemoveCalls       []forwardCall
 	forwardOutput            []byte
@@ -144,6 +145,17 @@ func (a *fakeADB) ForwardRemove(ctx context.Context, host string, serial string,
 		LocalSpec: localSpec,
 	})
 	return a.forwardErr
+}
+
+func (a *fakeADB) ReverseRemove(ctx context.Context, host string, serial string, deviceSocket string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.reverseRemoveCalls = append(a.reverseRemoveCalls, reverseCall{
+		Host:         host,
+		Serial:       serial,
+		DeviceSocket: deviceSocket,
+	})
+	return a.reverseErr
 }
 
 func (a *fakeADB) StartShell(host string, serial string, arg ...string) (*exec.Cmd, error) {

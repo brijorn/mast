@@ -40,7 +40,9 @@ network.
 | `POST` | `/api/control/keypress` | Send an Android keycode. |
 | `POST` | `/api/control/text` | Type text into the focused field. |
 | `POST` | `/api/control/launch` | Foreground an app by package name (Android). |
-| `POST` | `/api/control/open-url` | Open an https URL in the device browser (Android). |
+| `POST` | `/api/control/open-url` | Open an https URL — or an `http://localhost` one — in the device browser (Android). |
+| `POST` | `/api/control/reverse` | Bind the device's `tcp:port` back to the owning node's `localhost:port` (Android, locally owned device). |
+| `POST` | `/api/control/reverse/remove` | Release an `adb reverse` binding. |
 | `POST` | `/api/control/devtools` | Forward the device's Chrome DevTools socket. |
 | `POST` | `/api/control/devtools/remove` | Release a DevTools forward. |
 | `POST` | `/api/control/clipboard/get` | Read clipboard text. |
@@ -1030,8 +1032,10 @@ other control requests.
 
 The URL reaches a device shell as a single-quoted argument, so a URL containing
 a single quote, whitespace, or a control character is refused rather than
-escaped into something ambiguous. Only `https` is accepted, and the URL is
-capped at 2000 characters.
+escaped into something ambiguous. `https` is accepted for any host; plain
+`http` is accepted only for `localhost`/`127.0.0.1` — a page whose sign-in only
+trusts a loopback origin, reached through an `adb reverse` (below) — and the
+URL is capped at 2000 characters.
 
 Request body:
 
@@ -1039,6 +1043,38 @@ Request body:
 {
   "serial": "local-123",
   "url": "https://example.com/rewards/payout/abc-123"
+}
+```
+
+Successful response:
+
+```http
+204 No Content
+```
+
+## Reverse
+
+```http
+POST /api/control/reverse
+POST /api/control/reverse/remove
+```
+
+Binds `tcp:<port>` on the device back to the same port on the node that owns it,
+so the device's own browser can reach a server running beside Mast at
+`http://localhost:<port>`. It is the reverse of the DevTools forward: nothing is
+dialled from the caller, the phone reaches back to its owner. Offered for a
+**locally owned** device only — an `adb reverse` binds on the owning node, so on
+a peer-owned phone the loopback would point at the peer rather than at the
+caller, which is not what a `localhost` URL opened there would mean; such a
+request is refused. `remove` tears the binding down; a device disconnect or
+reboot drops it too.
+
+Request body:
+
+```json
+{
+  "serial": "local-123",
+  "port": 3000
 }
 ```
 

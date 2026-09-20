@@ -476,6 +476,13 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				break
 			}
 			go n.handleForegroundAppRequest(peer, req)
+		case transport.TypeReverseRequest:
+			var req transport.ReverseRequest
+			if err := json.Unmarshal(message, &req); err != nil {
+				log.Println("decode reverse request:", err)
+				break
+			}
+			go n.handleReverseRequest(peer, req)
 		case transport.TypeHoldRequest:
 			var req transport.HoldRequest
 			if err := json.Unmarshal(message, &req); err != nil {

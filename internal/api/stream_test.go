@@ -345,7 +345,7 @@ func (f *fakeBackend) OpenURL(_ string, _ string) error {
 	return f.err
 }
 
-func (f *fakeBackend) Reverse(_ string, _ int) error {
+func (f *fakeBackend) Reverse(_ string, _ int, _ string) error {
 	return nil
 }
 

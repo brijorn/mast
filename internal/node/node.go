@@ -64,6 +64,8 @@ type Node struct {
 	devToolsMu           sync.Mutex
 	devToolsRelays       map[string]*devToolsRelay
 	devToolsLoopback     map[string]int
+	reverseMu            sync.Mutex
+	reverseRelays        map[string]*reverseRelay
 	devicePowerMu        sync.Mutex
 	devicePowerReady     map[string]bool
 	devicePowerSessions  map[string]*devicePowerSession

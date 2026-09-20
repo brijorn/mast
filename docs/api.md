@@ -41,7 +41,7 @@ network.
 | `POST` | `/api/control/text` | Type text into the focused field. |
 | `POST` | `/api/control/launch` | Foreground an app by package name (Android). |
 | `POST` | `/api/control/open-url` | Open an https URL — or an `http://localhost` one — in the device browser (Android). |
-| `POST` | `/api/control/reverse` | Bind the device's `tcp:port` back to the owning node's `localhost:port` (Android, locally owned device). |
+| `POST` | `/api/control/reverse` | Bind the device's `tcp:port` back to the caller's `localhost:port` (Android; a peer-owned device needs `origin`). |
 | `POST` | `/api/control/reverse/remove` | Release an `adb reverse` binding. |
 | `POST` | `/api/control/devtools` | Forward the device's Chrome DevTools socket. |
 | `POST` | `/api/control/devtools/remove` | Release a DevTools forward. |
@@ -1059,15 +1059,29 @@ POST /api/control/reverse
 POST /api/control/reverse/remove
 ```
 
-Binds `tcp:<port>` on the device back to the same port on the node that owns it,
-so the device's own browser can reach a server running beside Mast at
-`http://localhost:<port>`. It is the reverse of the DevTools forward: nothing is
-dialled from the caller, the phone reaches back to its owner. Offered for a
-**locally owned** device only — an `adb reverse` binds on the owning node, so on
-a peer-owned phone the loopback would point at the peer rather than at the
-caller, which is not what a `localhost` URL opened there would mean; such a
-request is refused. `remove` tears the binding down; a device disconnect or
-reboot drops it too.
+Binds `tcp:<port>` on the device back to a server the caller names, so the
+device's own browser can reach it at `http://localhost:<port>`. It is the reverse
+of the DevTools forward: nothing is dialled from the caller, the phone reaches
+back out.
+
+An `adb reverse` binds on the machine running the adb server, so where that lands
+depends on who owns the phone:
+
+- **Locally owned** — the binding points at this node's own `localhost:<port>`,
+  which is the server running beside Mast. `origin` is not needed and is ignored.
+- **Peer owned** — the owning peer performs the reverse, but its loopback is not
+  the machine serving the page. The request must therefore carry
+  `origin` (`host:port`), and the peer binds the phone to a loopback relay that
+  forwards there. Without an `origin` such a request is refused rather than
+  silently pointing the phone at the peer's own port.
+
+```json
+{ "serial": "RZCYA1HFRDA", "port": 3000, "origin": "bmo.example.ts.net:3000" }
+```
+
+The relay is a byte pipe, so what the phone loads is what the origin served.
+`remove` tears the binding down and closes any relay with it; a device disconnect
+or reboot drops the binding too.
 
 Request body:
 

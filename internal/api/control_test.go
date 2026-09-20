@@ -299,6 +299,24 @@ func TestReverseCallsBackend(t *testing.T) {
 	}
 }
 
+// A phone a peer owns is reversed onto the coordinator's origin rather than the
+// peer's own loopback, so the origin has to survive the request rather than
+// being dropped at the edge — without it the peer serves the wrong machine.
+func TestReverseForwardsOriginToBackend(t *testing.T) {
+	backend := &controlBackend{}
+	server := NewServer(backend)
+	body := []byte(`{"serial":"peer-123","port":3000,"origin":"bmo:3000"}`)
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/control/reverse", bytes.NewReader(body))
+	server.Reverse(res, req)
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d; body: %s", res.Code, http.StatusNoContent, res.Body.String())
+	}
+	if backend.reverseOrigin != "bmo:3000" {
+		t.Fatalf("reverse origin = %q, want %q", backend.reverseOrigin, "bmo:3000")
+	}
+}
+
 func TestReverseRejectsBadPort(t *testing.T) {
 	backend := &controlBackend{}
 	server := NewServer(backend)
@@ -580,6 +598,7 @@ type controlBackend struct {
 
 	reverseSerial      string
 	reversePort        int
+	reverseOrigin      string
 	reverseRemovedPort int
 
 	devToolsSerial      string
@@ -682,11 +701,12 @@ func (b *controlBackend) OpenURL(serial string, url string) error {
 	return b.err
 }
 
-func (b *controlBackend) Reverse(serial string, port int) error {
+func (b *controlBackend) Reverse(serial string, port int, origin string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.reverseSerial = serial
 	b.reversePort = port
+	b.reverseOrigin = origin
 	return nil
 }
 

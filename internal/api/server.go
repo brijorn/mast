@@ -51,7 +51,7 @@ type nodeBackend interface {
 	Hold(serial string, x, y int, durationMS int) error
 	Drag(serial string, points []node.DragPoint, durationMS int) error
 	OpenURL(serial string, url string) error
-	Reverse(serial string, port int) error
+	Reverse(serial string, port int, origin string) error
 	RemoveReverse(serial string, port int) error
 	DevToolsEndpoint(serial string) (string, int, error)
 	RemoveDevToolsEndpoint(serial string, port int) error

@@ -66,6 +66,10 @@ type openURLRequest struct {
 type reverseRequest struct {
 	Serial string `json:"serial"`
 	Port   int    `json:"port"`
+	// Where the owning node should send what the phone asks for, as host:port.
+	// Only needed for a device a peer owns, whose loopback is not the machine
+	// serving the page; omitted, a local device reverses onto this node.
+	Origin string `json:"origin,omitempty"`
 }
 
 type devToolsRequest struct {
@@ -559,7 +563,7 @@ func (s *Server) Reverse(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "valid port required", http.StatusBadRequest)
 		return
 	}
-	if err := s.node.Reverse(req.Serial, req.Port); err != nil {
+	if err := s.node.Reverse(req.Serial, req.Port, req.Origin); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

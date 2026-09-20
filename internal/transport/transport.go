@@ -40,6 +40,8 @@ const (
 	TypeTerminateAppRequest          = "terminate_app_request"
 	TypeForegroundAppRequest         = "foreground_app_request"
 	TypeForegroundAppResponse        = "foreground_app_response"
+	TypeReverseRequest               = "reverse_request"
+	TypeReverseResponse              = "reverse_response"
 	TypeHoldRequest                  = "hold_request"
 	TypeDragRequest                  = "drag_request"
 	TypeOpenURLRequest               = "open_url_request"
@@ -476,6 +478,34 @@ type ForegroundAppResponse struct {
 type ForegroundAppResponsePayload struct {
 	Result string `json:"result,omitempty"`
 	Error  string `json:"error,omitempty"`
+}
+
+type ReverseRequest struct {
+	RawMessage
+	Payload ReverseRequestPayload `json:"payload"`
+}
+
+// A reverse asked of the node that owns the handset.
+//
+// `Origin` is what makes this forwardable at all: `adb reverse` binds the
+// loopback of the machine running the adb server, so a peer that simply ran the
+// command would point the phone at its own port rather than at the coordinator
+// the page is served from. The owner therefore relays to this address instead,
+// and a request without one can only be served locally.
+type ReverseRequestPayload struct {
+	Serial string `json:"serial"`
+	Port   int    `json:"port"`
+	Origin string `json:"origin,omitempty"`
+	Remove bool   `json:"remove,omitempty"`
+}
+
+type ReverseResponse struct {
+	RawMessage
+	Payload ReverseResponsePayload `json:"payload"`
+}
+
+type ReverseResponsePayload struct {
+	Error string `json:"error,omitempty"`
 }
 
 type HoldRequest struct {

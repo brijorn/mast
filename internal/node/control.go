@@ -481,15 +481,22 @@ func (n *Node) OpenURL(serial string, url string) error {
 // owned device only: an `adb reverse` binds on the owning node, so on a
 // peer-owned phone it would point at the peer rather than at the caller, which
 // is not what a localhost URL there would mean.
-func (n *Node) Reverse(serial string, port int) error {
+// Reverse points `port` on the handset at the caller's origin. A device this
+// node owns is reversed here; one a peer owns is reversed by that peer, which
+// relays to `origin` because its own loopback is not where the page lives. See
+// reverse.go for why the origin has to travel with the request.
+func (n *Node) Reverse(serial string, port int, origin string) error {
 	device, err := n.DeviceBySerial(serial)
 	if err != nil {
 		return err
 	}
-	if device.NodeID != n.ID {
-		return fmt.Errorf("adb reverse is available for locally owned devices only; %s is owned by %s", serial, device.NodeID)
+	if device.NodeID == n.ID {
+		return n.reverseLocal(serial, port, "")
 	}
-	return n.adbReverse(n.ctx, "", serial, "tcp:"+strconv.Itoa(port), port)
+	if origin == "" {
+		return fmt.Errorf("adb reverse of %s needs an origin: the device is owned by %s, whose loopback is not the one being served", serial, device.NodeID)
+	}
+	return n.peerReverse(n.ctx, device.NodeID, serial, port, origin, false)
 }
 
 func (n *Node) RemoveReverse(serial string, port int) error {
@@ -497,10 +504,10 @@ func (n *Node) RemoveReverse(serial string, port int) error {
 	if err != nil {
 		return err
 	}
-	if device.NodeID != n.ID {
-		return fmt.Errorf("adb reverse is available for locally owned devices only; %s is owned by %s", serial, device.NodeID)
+	if device.NodeID == n.ID {
+		return n.removeReverseLocal(serial, port)
 	}
-	return n.adbReverseRemove(n.ctx, "", serial, "tcp:"+strconv.Itoa(port))
+	return n.peerReverse(n.ctx, device.NodeID, serial, port, "", true)
 }
 
 const chromeDevToolsSocket = "localabstract:chrome_devtools_remote"

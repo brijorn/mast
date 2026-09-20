@@ -119,7 +119,8 @@ func (n *Node) deliverPeerRPCResponse(raw transport.RawMessage, message []byte) 
 		transport.TypeConfigGetResponse,
 		transport.TypeConfigUpdateResponse,
 		transport.TypeDevToolsForwardResponse,
-		transport.TypeDevToolsRemoveResponse:
+		transport.TypeDevToolsRemoveResponse,
+		transport.TypeReverseResponse:
 	default:
 		return false
 	}

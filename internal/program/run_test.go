@@ -1793,30 +1793,6 @@ func TestAutostartReconnectDoesNotResumeStoppedRun(t *testing.T) {
 	}
 }
 
-func TestAutostartRestartDelayBacksOffAndCaps(t *testing.T) {
-	first := autostartRestartDelay(1)
-	if first != autostartRestartBaseDelay {
-		t.Fatalf("first delay = %s, want %s", first, autostartRestartBaseDelay)
-	}
-	if second := autostartRestartDelay(2); second != 2*autostartRestartBaseDelay {
-		t.Fatalf("second delay = %s, want %s", second, 2*autostartRestartBaseDelay)
-	}
-	previous := time.Duration(0)
-	for attempts := 1; attempts <= autostartRestartMaxAttempts; attempts++ {
-		delay := autostartRestartDelay(attempts)
-		if delay < previous {
-			t.Fatalf("delay for attempt %d went backwards: %s after %s", attempts, delay, previous)
-		}
-		if delay > autostartRestartMaxDelay {
-			t.Fatalf("delay for attempt %d = %s, exceeds cap %s", attempts, delay, autostartRestartMaxDelay)
-		}
-		previous = delay
-	}
-	if autostartRestartDelay(64) != autostartRestartMaxDelay {
-		t.Fatalf("far-out attempt did not saturate at %s", autostartRestartMaxDelay)
-	}
-}
-
 // A program that exits on its own leaves the device connected, so no ready-state
 // transition occurs and the reconnect watch never fires. Without a separate
 // restart the phone stays idle.
@@ -1874,7 +1850,8 @@ func TestAutostartRestartsRunThatExitedWhileDeviceStayedOnline(t *testing.T) {
 		t.Fatal("reconnect watch resumed a run whose device never disconnected")
 	}
 
-	// The first observed crash schedules a backoff rather than restarting now.
+	// The first observed crash restarts the run on the same pass: there is no
+	// backoff to wait out, and the attempt is counted.
 	store.checkAutostartRestarts()
 	store.mu.Lock()
 	restart := store.autostartRestarts[id]
@@ -1882,25 +1859,13 @@ func TestAutostartRestartsRunThatExitedWhileDeviceStayedOnline(t *testing.T) {
 	if restart == nil {
 		t.Fatal("crashed autostart run was not tracked for restart")
 	}
-	if supervisor := findRun(t, store, id).AutostartSupervisor; supervisor == nil || supervisor.RestartAttempts != 0 {
-		t.Fatalf("supervisor = %+v before the backoff elapsed, want zero attempts", supervisor)
-	} else if supervisor.NextRestartAt == nil || !supervisor.NextRestartAt.After(time.Now()) {
-		t.Fatalf("supervisor next restart = %v, want a visible future backoff deadline", supervisor.NextRestartAt)
-	}
-
-	// Once it elapses the run is resumed, and the attempt is counted.
-	store.mu.Lock()
-	store.autostartRestarts[id].nextAttempt = time.Now().Add(-time.Second)
-	store.mu.Unlock()
-	store.checkAutostartRestarts()
-
 	supervisor := findRun(t, store, id).AutostartSupervisor
 	if supervisor == nil {
 		t.Fatal("run lost supervisor state after restart")
 	}
 	attempts := supervisor.RestartAttempts
 	if attempts != 1 {
-		t.Fatalf("attempts = %d after the backoff elapsed, want 1", attempts)
+		t.Fatalf("attempts = %d after the first crash was observed, want 1", attempts)
 	}
 	if supervisor.NextRestartAt != nil {
 		t.Fatalf("running restart retained stale pending deadline %v", supervisor.NextRestartAt)
@@ -1952,13 +1917,8 @@ func TestAutostartRestartStopsAfterMaxAttempts(t *testing.T) {
 	}
 	waitForRun(t, store, id)
 
-	// Collapse every backoff so the cap, not the clock, is what stops this.
+	// Restarts are immediate, so the cap, not the clock, is what stops this.
 	for i := 0; i < autostartRestartMaxAttempts*3; i++ {
-		store.mu.Lock()
-		if state := store.autostartRestarts[id]; state != nil {
-			state.nextAttempt = time.Now().Add(-time.Second)
-		}
-		store.mu.Unlock()
 		store.checkAutostartRestarts()
 		waitForRun(t, store, id)
 	}
@@ -2053,57 +2013,28 @@ func TestAutostartRestartSkipsSerialsAlreadyWorkingAndStaleHistory(t *testing.T)
 // after a session declares nothing and is still resumed, which is the whole
 // reason the crash watch restarts an ordinary exit at all.
 func TestCrashRestartSkipsAProgramThatFinishedOnACleanExit(t *testing.T) {
-	completed := time.Now()
 	zero, failure := 0, 1
-	store := &Store{
-		runs:              map[string]*runState{},
-		autostartRestarts: map[string]*autostartRestartState{},
-		programs: map[string]Program{
-			"framekit": {ID: "framekit", FinishesOnCleanExit: true},
-			"licensed": {ID: "licensed"},
-		},
-		devices: &mutableFakeDevices{
-			devices: []node.DeviceInfo{
-				{Serial: "phone-finished", State: "device", NodeID: "n"},
-				{Serial: "phone-failed", State: "device", NodeID: "n"},
-				{Serial: "phone-licensed", State: "device", NodeID: "n"},
-			},
-		},
+	finishes := map[string]bool{"framekit": true, "licensed": false}
+	eligible := func(programID string, exitCode *int) bool {
+		run := &Run{ProgramID: programID, Status: RunStatusExited, ExitCode: exitCode,
+			Autostart: true, AutostartCrashRestart: true, Cmd: "/bin/sh"}
+		return autostartRunEligibleForCrashRestart(run, finishes[programID])
 	}
-	for _, run := range []*Run{
-		{ID: "finished", ProgramID: "framekit", Serial: "phone-finished", Status: RunStatusExited, ExitCode: &zero},
-		{ID: "failed", ProgramID: "framekit", Serial: "phone-failed", Status: RunStatusExited, ExitCode: &failure},
-		{ID: "licensed", ProgramID: "licensed", Serial: "phone-licensed", Status: RunStatusExited, ExitCode: &zero},
-	} {
-		run.Autostart, run.AutostartCrashRestart, run.Cmd = true, true, "/bin/sh"
-		run.StartedAt, run.CompletedAt = completed.Add(-time.Minute), &completed
-		store.runs[run.ID] = &runState{run: run}
+	if eligible("framekit", &zero) {
+		t.Error("a run that reported it finished was eligible for a crash restart")
 	}
-
-	store.checkAutostartRestarts()
-
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	scheduled := func(id string) bool {
-		supervisor := store.runs[id].run.AutostartSupervisor
-		return supervisor != nil && supervisor.NextRestartAt != nil
-	}
-	if scheduled("finished") {
-		t.Error("a run that reported it finished was scheduled for a crash restart")
-	}
-	if !scheduled("failed") {
+	if !eligible("framekit", &failure) {
 		t.Error("a non-zero exit is still a crash and must be restarted")
 	}
-	if !scheduled("licensed") {
+	if !eligible("licensed", &zero) {
 		t.Error("a program that does not finish on a clean exit must still be resumed")
 	}
 }
 
 // A crash loop must escalate. The streak used to be cleared the moment a resumed
 // run reached Running, so a run that died after a few seconds started again from
-// attempt one on every pass: the backoff never grew, the cap never fired, and one
-// phone was restarted every thirty seconds for an hour while every log line read
-// "attempt 1/8".
+// attempt one on every pass: the cap never fired, and one phone was restarted
+// every thirty seconds for an hour while every log line read "attempt 1/8".
 func TestAutostartRestartStreakSurvivesShortLivedRuns(t *testing.T) {
 	now := time.Now()
 	store := &Store{
@@ -2121,17 +2052,12 @@ func TestAutostartRestartStreakSurvivesShortLivedRuns(t *testing.T) {
 	}
 	store.runs["run-1"] = &runState{run: run}
 
-	// Observe the crash. The backoff is in the future, so nothing is resumed.
-	store.checkAutostartRestarts()
-	store.mu.Lock()
-	state := store.autostartRestarts["run-1"]
-	if state == nil {
-		store.mu.Unlock()
-		t.Fatal("crashed run was not tracked")
-	}
-	// Stand in for several restarts already spent on this loop.
-	run.AutostartSupervisor.RestartAttempts = 3
-	store.mu.Unlock()
+	// Stand in for an incident that has already spent several restarts on this
+	// loop. Restarts are immediate, so the crash is recorded as observed rather
+	// than left for a tick that would resume it.
+	lastFailure := now
+	run.AutostartSupervisor = &AutostartSupervisorState{RestartAttempts: 3, LastFailureAt: &lastFailure}
+	store.autostartRestarts["run-1"] = &autostartRestartState{lastCrashAt: now, nextAttempt: now}
 
 	// The run comes up and is still Running when the next tick lands, which is
 	// what happens in production every five seconds.
@@ -2140,10 +2066,10 @@ func TestAutostartRestartStreakSurvivesShortLivedRuns(t *testing.T) {
 	store.checkAutostartRestarts()
 
 	store.mu.Lock()
-	state = store.autostartRestarts["run-1"]
+	state := store.autostartRestarts["run-1"]
 	store.mu.Unlock()
 	if state == nil {
-		t.Fatal("a run that had only just started lost its backoff streak")
+		t.Fatal("a run that had only just started lost its restart streak")
 	}
 	if run.AutostartSupervisor == nil || run.AutostartSupervisor.RestartAttempts != 3 {
 		t.Fatalf("supervisor reset while the run was briefly up: %+v", run.AutostartSupervisor)

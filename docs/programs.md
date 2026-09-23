@@ -368,7 +368,7 @@ same run ID and workspace:
   status.
 - **Ended on its own (`autostart_crash_restart`).** A run that reached `failed`
   or `exited` while its device stayed connected produces no such transition, so
-  it is resumed on a backoff instead. Without this the phone stays idle until a
+  it is resumed on the watch's next poll instead. Without this the phone stays idle until a
   human notices, because the reconnect watch never fires for a program that
   simply exited.
 
@@ -383,8 +383,11 @@ same run ID and workspace:
   executable closing after a session, does not declare it and keeps being
   resumed whenever it ends on its own.
 
-The backoff starts at 30 seconds and doubles per consecutive attempt to a
-15-minute ceiling. Restart attempts remain in the same incident until the run
+There is no backoff: a crashed run is resumed on the next five-second poll.
+Waiting never made a crashed program likelier to work — a phone stuck on one
+screen is still on it fifteen minutes later — and a doubling delay kept phones
+idle for most of an incident. The attempt budget, not the clock, is what ends a
+loop. Restart attempts remain in the same incident until the run
 has gone six hours without another failure. This failure-rate window means a
 run that repeatedly dies after 11 or 12 minutes still escalates, while a stable
 run that crashes again weeks later starts with a clean streak. After 8 restart
@@ -411,7 +414,8 @@ surface pending recovery or give-up without reading the Mast journal:
 `next_restart_at` is present only while a failed or exited run has a scheduled
 crash-restart attempt. It is cleared before the attempt starts and when the
 supervisor gives up, so API clients can distinguish pending recovery from a
-terminal failure without guessing Mast's backoff.
+terminal failure. With restarts immediate it holds the crash time and lasts
+only until the next poll.
 
 This state is checkpointed in `run.json` and survives a Mast restart. An
 explicit Resume, disabling `autostart_crash_restart`, or disabling both through

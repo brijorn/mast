@@ -13,11 +13,13 @@ const autostartReconnectPollInterval = 5 * time.Second
 
 // A program that exits while its device stays connected produces no device
 // ready-state transition, so the reconnect watch above never sees it and the
-// phone sits idle until a human notices. These bounds govern bringing such a run
-// back without turning a program that dies immediately into a restart loop.
+// phone sits idle until a human notices. Such a run is brought back on the next
+// poll after it ends. There is no backoff between attempts: waiting did not
+// make a crashed program any likelier to work — a phone stuck on one screen
+// is still on it fifteen minutes later — and it did keep a phone idle for most
+// of an incident, with Wordscapes restarting sixteen minutes apart. What stops
+// a program that dies immediately from looping forever is the attempt budget.
 const (
-	autostartRestartBaseDelay = 30 * time.Second
-	autostartRestartMaxDelay  = 15 * time.Minute
 	// A restart incident ends only after this much time without another
 	// failure. Runtime alone is not evidence of recovery: a run that repeatedly
 	// dies just beyond a fixed healthy threshold must still escalate.
@@ -63,8 +65,11 @@ type autostartRestartState struct {
 	lastCrashAt time.Time
 }
 
+// scheduleAutostartRestart marks a restart as due now. The deadline is still
+// published as next_restart_at so Runway can show the run as restart-pending
+// for the moment between the crash and the attempt.
 func scheduleAutostartRestart(supervisor *AutostartSupervisorState, restart *autostartRestartState, from time.Time) {
-	next := from.UTC().Add(autostartRestartDelay(supervisor.RestartAttempts + 1))
+	next := from.UTC()
 	restart.nextAttempt = next
 	supervisor.NextRestartAt = &next
 }
@@ -73,17 +78,6 @@ func clearScheduledAutostartRestart(supervisor *AutostartSupervisorState) {
 	if supervisor != nil {
 		supervisor.NextRestartAt = nil
 	}
-}
-
-func autostartRestartDelay(attempts int) time.Duration {
-	delay := autostartRestartBaseDelay
-	for i := 1; i < attempts; i++ {
-		delay *= 2
-		if delay >= autostartRestartMaxDelay {
-			return autostartRestartMaxDelay
-		}
-	}
-	return delay
 }
 
 func autostartFailureDescription(run *Run) string {

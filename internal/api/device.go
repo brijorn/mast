@@ -132,6 +132,28 @@ func (s *Server) DeviceAccounts(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// DescribeDevice answers with the phone's own account of its hardware, read
+// fresh from the phone, for a caller registering it in an inventory.
+func (s *Server) DescribeDevice(w http.ResponseWriter, r *http.Request) {
+	serial := r.PathValue("serial")
+	if serial == "" {
+		http.Error(w, "serial required", http.StatusBadRequest)
+		return
+	}
+
+	description, err := s.node.DescribeDevice(serial)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	if err := json.NewEncoder(w).Encode(description); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
 func (s *Server) DeviceDNS(w http.ResponseWriter, r *http.Request) {
 	serial := r.PathValue("serial")
 	if serial == "" {

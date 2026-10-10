@@ -17,6 +17,8 @@ const (
 	TypeDeviceDNSSetResponse         = "device_dns_set_response"
 	TypeDeviceAccountsGetRequest     = "device_accounts_get_request"
 	TypeDeviceAccountsGetResponse    = "device_accounts_get_response"
+	TypeDeviceDescribeRequest        = "device_describe_request"
+	TypeDeviceDescribeResponse       = "device_describe_response"
 	TypeDeviceOrientationSetRequest  = "device_orientation_set_request"
 	TypeDeviceOrientationSetResponse = "device_orientation_set_response"
 	TypeDisplayPowerGetRequest       = "display_power_get_request"
@@ -182,6 +184,45 @@ type DeviceAccountsGetResponsePayload struct {
 type DeviceAccountsGetResponse struct {
 	RawMessage
 	Payload DeviceAccountsGetResponsePayload `json:"payload"`
+}
+
+// DeviceDescriptionPayload is a phone's own account of its hardware. Every
+// field but Serial and Platform may be empty when the phone does not record it.
+type DeviceDescriptionPayload struct {
+	Serial         string   `json:"serial"`
+	Platform       string   `json:"platform"`
+	HardwareSerial string   `json:"hardware_serial,omitempty"`
+	Manufacturer   string   `json:"manufacturer,omitempty"`
+	Brand          string   `json:"brand,omitempty"`
+	Model          string   `json:"model,omitempty"`
+	MarketingName  string   `json:"marketing_name,omitempty"`
+	Codename       string   `json:"codename,omitempty"`
+	OSVersion      string   `json:"os_version,omitempty"`
+	IMEIs          []string `json:"imeis,omitempty"`
+	Color          string   `json:"color,omitempty"`
+	SKU            string   `json:"sku,omitempty"`
+	ProductCode    string   `json:"product_code,omitempty"`
+	DeviceName     string   `json:"device_name,omitempty"`
+	Warnings       []string `json:"warnings,omitempty"`
+}
+
+type DeviceDescribeRequestPayload struct {
+	Serial string `json:"serial"`
+}
+
+type DeviceDescribeRequest struct {
+	RawMessage
+	Payload DeviceDescribeRequestPayload `json:"payload"`
+}
+
+type DeviceDescribeResponsePayload struct {
+	Result *DeviceDescriptionPayload `json:"result,omitempty"`
+	Error  string                    `json:"error,omitempty"`
+}
+
+type DeviceDescribeResponse struct {
+	RawMessage
+	Payload DeviceDescribeResponsePayload `json:"payload"`
 }
 
 type DeviceDNSSetRequestPayload struct {

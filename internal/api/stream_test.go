@@ -53,6 +53,13 @@ func (f *fakeBackend) Screenshot(_ string) ([]byte, error) {
 	return nil, nil
 }
 
+func (f *fakeBackend) DescribeDevice(serial string) (*node.DeviceDescription, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.serials = append(f.serials, serial)
+	return &node.DeviceDescription{Serial: serial, Platform: "android"}, f.err
+}
+
 func (f *fakeBackend) DeviceAccounts(serial string) (*node.DeviceAccounts, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

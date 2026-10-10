@@ -105,6 +105,7 @@ func (n *Node) deliverPeerRPCResponse(raw transport.RawMessage, message []byte) 
 	switch raw.MessageType() {
 	case transport.TypeListDevicesResponse,
 		transport.TypeDeviceAccountsGetResponse,
+		transport.TypeDeviceDescribeResponse,
 		transport.TypeDeviceDNSGetResponse,
 		transport.TypeDeviceDNSSetResponse,
 		transport.TypeDeviceOrientationSetResponse,

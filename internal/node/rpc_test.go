@@ -20,6 +20,7 @@ func TestDeliverPeerRPCResponseAcceptsRequestResponseTypes(t *testing.T) {
 		transport.TypeReverseResponse,
 		transport.TypeClipboardGetResponse,
 		transport.TypeDevToolsForwardResponse,
+		transport.TypeDeviceDescribeResponse,
 	} {
 		t.Run(messageType, func(t *testing.T) {
 			node := &Node{}

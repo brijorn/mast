@@ -426,3 +426,69 @@ func TestDevicePowerPolicyIgnoresPeerAndIOSReadiness(t *testing.T) {
 		t.Fatalf("devicePowerReady = %+v, want no peer or iOS devices", n.devicePowerReady)
 	}
 }
+
+func newStayAwakeOnlyNode(fake *fakeADB) *Node {
+	return &Node{
+		ID:                  "local-node",
+		ctx:                 context.Background(),
+		adb:                 fake,
+		devicePowerReady:    map[string]bool{"local-123": true},
+		devicePowerSessions: make(map[string]*devicePowerSession),
+		devicePowerStarting: make(map[string]*devicePowerAttempt),
+		devicePowerRetries:  make(map[string]*devicePowerRetry),
+		devicePowerFailures: make(map[string]uint),
+		configReady:         true,
+		configState:         mastconfig.Config{AndroidEnabled: true},
+	}
+}
+
+func (a *fakeADB) shellOutputCallCount() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.shellOutputCalls)
+}
+
+// On 2026-10-13 finn logged the same stay-awake write timing out four or five
+// times per phone in one second: every tick and every wake started another pass
+// beside the ones still waiting on a slow adb.
+func TestDevicePowerPolicyRunsOnePassPerPhoneAtATime(t *testing.T) {
+	release := make(chan struct{})
+	fake := &fakeADB{shellWaits: map[string]<-chan struct{}{
+		shellCommandKey("local-123", "settings", "put", "global", "stay_on_while_plugged_in", "7"): release,
+	}}
+	n := newStayAwakeOnlyNode(fake)
+
+	n.reconcileDevicePowerPolicy()
+	waitFor(t, 2*time.Second, func() bool { return fake.shellOutputCallCount() == 1 })
+	for range 5 {
+		n.reconcileDevicePowerPolicy()
+	}
+	if got := fake.shellOutputCallCount(); got != 1 {
+		t.Fatalf("stay-awake writes = %d while the first is still waiting, want 1", got)
+	}
+
+	close(release)
+	waitFor(t, 2*time.Second, func() bool {
+		n.devicePowerMu.Lock()
+		defer n.devicePowerMu.Unlock()
+		return len(n.devicePowerApplying) == 0
+	})
+	n.reconcileDevicePowerPolicy()
+	waitFor(t, 2*time.Second, func() bool { return fake.shellOutputCallCount() == 2 })
+}
+
+func TestDevicePowerPolicyHoldsOffWhileADBIsStalled(t *testing.T) {
+	fake := &fakeADB{}
+	n := newStayAwakeOnlyNode(fake)
+	n.adbStalled.Store(true)
+
+	n.reconcileDevicePowerPolicy()
+	time.Sleep(50 * time.Millisecond)
+	if got := fake.shellOutputCallCount(); got != 0 {
+		t.Fatalf("stay-awake writes = %d while adb is stalled, want none", got)
+	}
+
+	n.adbStalled.Store(false)
+	n.reconcileDevicePowerPolicy()
+	waitFor(t, 2*time.Second, func() bool { return fake.shellOutputCallCount() == 1 })
+}

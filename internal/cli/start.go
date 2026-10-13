@@ -77,9 +77,14 @@ func (s *StartCmd) Run() error {
 	programStore.SetMastAPIURL(apiBase)
 	programStore.SetRunners(cfg.Runners)
 	mastNode.SetConfig(s.ConfigPath, *cfg, &runtimeConfigApplier{node: mastNode, programs: programStore, proxy: proxyRuntime})
+	// A hung adb server fails this check too, and exiting over it would take the
+	// node down for its iOS devices, its peers, and its proxy as well — on a
+	// Windows node, past the scheduled task's last restart. The watchdog replaces
+	// a server that keeps failing to answer.
 	if err := mastNode.EnsureADBServer(context.Background()); err != nil {
-		return err
+		log.Printf("adb server: %v", err)
 	}
+	mastNode.StartADBWatchdog()
 	apiServer := api.NewServer(mastNode, programStore)
 	var shuttingDown atomic.Bool
 	stopSignals := make(chan os.Signal, 1)

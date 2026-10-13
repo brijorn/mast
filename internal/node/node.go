@@ -76,6 +76,13 @@ type Node struct {
 	deviceRotateOverride map[string]DeviceOrientation
 	devicePowerAsserted  map[string]bool
 	devicePowerWake      chan struct{}
+	// devicePowerApplying holds the serials with a policy pass still running, so
+	// a slow adb cannot stack a new pass per phone on every tick.
+	devicePowerApplying map[string]struct{}
+	// adbStalled is set by the adb watchdog while the server is not answering;
+	// background policy holds off rather than add clients to a server that has
+	// stopped serving them.
+	adbStalled           atomic.Bool
 	batteryMu            sync.RWMutex
 	batteryCache         map[string]batterySnapshot
 	batteryRefreshedAt   map[string]time.Time
@@ -146,6 +153,7 @@ func NewNode(id string, addr string, advertiseHost string, androidEnabled bool, 
 		deviceRotateOverride: make(map[string]DeviceOrientation),
 		devicePowerAsserted:  make(map[string]bool),
 		devicePowerWake:      make(chan struct{}, 1),
+		devicePowerApplying:  make(map[string]struct{}),
 		inputWorkers:         make(map[string]*deviceInput),
 		deviceOwners:         make(map[string]deviceOwnerEntry),
 	}

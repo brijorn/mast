@@ -127,13 +127,12 @@ func (s *devicePowerSession) stop() error {
 		s.controlMu.Unlock()
 
 		if s.cmd != nil && s.cmd.Process != nil {
-			killErr := s.cmd.Process.Kill()
-			if killErr != nil && s.stopErr == nil {
-				s.stopErr = killErr
-			}
-			if waitErr := s.cmd.Wait(); waitErr != nil && s.stopErr == nil && killErr != nil {
-				s.stopErr = waitErr
-			}
+			// The shell has usually exited already — that is what ended the
+			// session — and killing an exited process fails ("Access is denied"
+			// on Windows). Wait returning is what shows it is gone, and its exit
+			// status is the kill itself, so neither is a failure to stop.
+			_ = s.cmd.Process.Kill()
+			_ = s.cmd.Wait()
 		}
 	})
 	return s.stopErr
@@ -284,15 +283,36 @@ func (n *Node) reconcileDevicePowerPolicy() {
 	// a session, before applying the independent stay-awake policy below.
 	n.stopUnwantedDevicePowerSessions()
 
+	// Every pass is several adb commands per phone. While the server is not
+	// answering, each one only waits out its deadline, and on Windows the pile of
+	// waiting clients is itself enough to keep a recovering server stalled.
+	if n.adbStalled.Load() {
+		return
+	}
+
 	n.devicePowerMu.Lock()
 	serials := make([]string, 0, len(n.devicePowerReady))
 	for serial := range n.devicePowerReady {
+		if _, applying := n.devicePowerApplying[serial]; applying {
+			continue
+		}
+		if n.devicePowerApplying == nil {
+			n.devicePowerApplying = make(map[string]struct{})
+		}
+		n.devicePowerApplying[serial] = struct{}{}
 		serials = append(serials, serial)
 	}
 	n.devicePowerMu.Unlock()
 
 	for _, serial := range serials {
-		go n.reconcileDevicePower(serial)
+		go func() {
+			defer func() {
+				n.devicePowerMu.Lock()
+				delete(n.devicePowerApplying, serial)
+				n.devicePowerMu.Unlock()
+			}()
+			n.reconcileDevicePower(serial)
+		}()
 	}
 }
 

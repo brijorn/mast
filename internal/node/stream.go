@@ -133,13 +133,11 @@ func (s *StreamSession) Stop() error {
 	}
 
 	if s.cmd != nil && s.cmd.Process != nil {
-		killErr := s.cmd.Process.Kill()
-		if killErr != nil && err == nil {
-			err = killErr
-		}
-		if waitErr := s.cmd.Wait(); waitErr != nil && err == nil && killErr != nil {
-			err = waitErr
-		}
+		// As for the power session: killing a shell that already exited fails
+		// ("Access is denied" on Windows), and Wait returning is the proof it is
+		// gone, so neither belongs in the error a stop reports.
+		_ = s.cmd.Process.Kill()
+		_ = s.cmd.Wait()
 	}
 
 	if s.iosCleanup != nil {

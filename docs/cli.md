@@ -165,6 +165,20 @@ mast start --config ./mast.dev.json
 When started, the node ID uses `node_id` when configured. If `node_id` is
 blank, Mast falls back to the host name returned by the operating system.
 
+With Android enabled, Mast checks the adb server at startup and starts one on
+`adb_port` if none answers. A failed check is logged rather than fatal: a hung
+adb server must not take the node down for its peers, iOS devices, and proxy.
+From then on a watchdog probes the server every 10 seconds. After three probes
+in a row go unanswered — a server that holds its port but stopped replying,
+which Windows nodes have hit repeatedly — Mast kills the process listening on
+that port and starts a replacement the same way startup does. If fewer than half
+of the phones that were ready come back within 20 seconds, it replaces the
+server again, at most twice, then leaves the rest to an operator. While the
+server is not answering, the background power policy (stay-awake, portrait
+lock, display power) holds off rather than queue more adb clients. Finding the
+server's process is supported on Linux and Windows; elsewhere the watchdog
+logs the hang and stops there.
+
 ## peer add
 
 Saves a peer in the peer store and asks the running local Mast node to connect

@@ -56,3 +56,29 @@ func parseTasklistImageName(output string) string {
 	}
 	return records[0][0]
 }
+
+// parsePnputilUSBInstanceID finds a connected USB device by the serial its
+// instance ID ends in, in the output of `pnputil /enum-devices /connected`.
+// Android phones report their adb serial as the USB serial number, so the
+// parent device of the transport adb names R5GL5029RMF is
+// USB\VID_04E8&PID_6860\R5GL5029RMF.
+func parsePnputilUSBInstanceID(output string, serial string) (string, bool) {
+	for _, line := range strings.Split(output, "\n") {
+		index := strings.Index(strings.ToUpper(line), `USB\VID_`)
+		if index == -1 {
+			continue
+		}
+		id := strings.TrimSpace(line[index:])
+		if fields := strings.Fields(id); len(fields) > 0 {
+			id = fields[0]
+		}
+		lastSlash := strings.LastIndex(id, `\`)
+		if lastSlash == -1 || strings.Count(id, `\`) != 2 {
+			continue
+		}
+		if strings.EqualFold(id[lastSlash+1:], serial) {
+			return id, true
+		}
+	}
+	return "", false
+}

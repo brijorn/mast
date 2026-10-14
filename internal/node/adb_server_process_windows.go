@@ -3,6 +3,7 @@
 package node
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -39,4 +40,31 @@ func processImageName(pid int) (string, error) {
 		return "", fmt.Errorf("tasklist for pid %d: %w", pid, err)
 	}
 	return parseTasklistImageName(string(output)), nil
+}
+
+var restartUSBDevice = restartUSBDeviceWithPnputil
+
+// restartUSBDeviceWithPnputil restarts the USB device whose serial is the
+// phone's. Mast's scheduled task runs with highest privileges, which a device
+// restart needs.
+func restartUSBDeviceWithPnputil(ctx context.Context, serial string) error {
+	listing, err := exec.CommandContext(ctx, "pnputil", "/enum-devices", "/connected").Output()
+	if err != nil {
+		return fmt.Errorf("pnputil /enum-devices: %w", err)
+	}
+	id, ok := parsePnputilUSBInstanceID(string(listing), serial)
+	if !ok {
+		return errDeviceNotConnected
+	}
+	output, err := exec.CommandContext(ctx, "pnputil", "/restart-device", id).CombinedOutput()
+	text := strings.TrimSpace(string(output))
+	if err != nil {
+		return fmt.Errorf("pnputil /restart-device %s: %w: %s", id, err, text)
+	}
+	// pnputil exits zero when it only scheduled the restart for the next boot,
+	// which happens while a process still has the device open.
+	if strings.Contains(strings.ToLower(text), "reboot") {
+		return fmt.Errorf("pnputil /restart-device %s: %s", id, text)
+	}
+	return nil
 }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -11,12 +13,14 @@ import (
 )
 
 type watchdogHarness struct {
-	watchdog *adbWatchdog
-	now      time.Time
-	output   string
-	err      error
-	replaced int
-	stalled  bool
+	watchdog  *adbWatchdog
+	now       time.Time
+	output    string
+	err       error
+	replaced  int
+	restarted []string
+	restartFn func(serial string, state string) error
+	stalled   bool
 }
 
 func newWatchdogHarness() *watchdogHarness {
@@ -30,6 +34,13 @@ func newWatchdogHarness() *watchdogHarness {
 		},
 		replace: func(context.Context) error {
 			h.replaced++
+			return nil
+		},
+		restartDevice: func(_ context.Context, serial string, state string) error {
+			h.restarted = append(h.restarted, serial)
+			if h.restartFn != nil {
+				return h.restartFn(serial, state)
+			}
 			return nil
 		},
 		now:     func() time.Time { return h.now },
@@ -46,6 +57,11 @@ func (h *watchdogHarness) step(advance time.Duration) {
 const sixPhonesReady = "List of devices attached\n" +
 	"1A091FDF600KW6\tdevice\n1A121FDF6009EU\tdevice\n1B081FDF600524\tdevice\n" +
 	"R5CTC23TKZZ\tdevice\nR5GL5026YKY\tdevice\nR5GL5029RMF\tdevice\n"
+
+// After 20:29 on 2026-10-13: the server answered, and three of finn's six
+// phones were missing while Windows still had all six connected.
+const threePhonesReady = "List of devices attached\n" +
+	"1A091FDF600KW6\tdevice\n1B081FDF600524\tdevice\nR5GL5026YKY\tdevice\n"
 
 var hungServerError = fmt.Errorf("adb devices: %w", context.DeadlineExceeded)
 
@@ -75,9 +91,6 @@ func TestADBWatchdogReplacesServerAfterConsecutiveUnansweredProbes(t *testing.T)
 	h.step(adbWatchdogInterval)
 	if h.stalled {
 		t.Fatal("an answered probe should clear the stall")
-	}
-	if !h.watchdog.restartedAt.IsZero() {
-		t.Fatal("every phone came back, so the incident should be over")
 	}
 }
 
@@ -121,51 +134,166 @@ func TestADBServerUnresponsiveRecognisesAHeldPort(t *testing.T) {
 	}
 }
 
-// Replacing the server has left phones offline until a second replacement on
-// 2026-10-13, and a replacement that cannot bring them back must not loop.
-func TestADBWatchdogRetriesAReplacementThatLostThePhonesAndThenStops(t *testing.T) {
+// A pnputil restart of each missing phone brought all three back at 20:33 on
+// 2026-10-13 while the three that were working kept their transports.
+func TestADBWatchdogRestartsOnlyTheMissingPhones(t *testing.T) {
 	h := newWatchdogHarness()
 	h.output = sixPhonesReady
 	h.step(0)
-	h.err = hungServerError
-	for range adbWatchdogFailureThreshold {
-		h.step(adbWatchdogInterval)
+
+	h.output = threePhonesReady
+	h.step(adbWatchdogInterval)
+	if len(h.restarted) != 0 {
+		t.Fatalf("restarted %v after one listing; it can be a phone caught mid-reconnect", h.restarted)
 	}
-	if h.replaced != 1 {
-		t.Fatalf("replaced = %d, want 1", h.replaced)
+	h.step(adbWatchdogInterval)
+	want := []string{"1A121FDF6009EU", "R5CTC23TKZZ", "R5GL5029RMF"}
+	got := append([]string(nil), h.restarted...)
+	slices.Sort(got)
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("restarted devices mismatch (-want +got):\n%s", diff)
+	}
+	if h.replaced != 0 {
+		t.Fatal("phones missing from an answering server must not cost the working phones their transports")
 	}
 
-	h.err = nil
-	h.output = "List of devices attached\n1A091FDF600KW6\toffline\nR5GL5029RMF\tdevice\n"
+	h.output = sixPhonesReady
 	h.step(adbWatchdogInterval)
-	if h.replaced != 1 {
-		t.Fatal("a replacement must be given time to enumerate before it is judged")
-	}
-	for range 10 {
-		h.step(adbWatchdogSettleDelay)
-	}
-	if want := 1 + adbWatchdogMaxFollowUps; h.replaced != want {
-		t.Fatalf("replaced = %d, want %d: one replacement plus %d follow-ups, then stop", h.replaced, want, adbWatchdogMaxFollowUps)
-	}
-	if !h.watchdog.restartedAt.IsZero() {
-		t.Fatal("the incident should end once the follow-ups are spent")
+	h.output = threePhonesReady
+	h.step(adbWatchdogInterval)
+	h.step(adbWatchdogInterval)
+	if len(h.restarted) != 6 {
+		t.Fatalf("restarts = %d; phones that came back start a fresh count when they go again", len(h.restarted))
 	}
 }
 
-func TestADBWatchdogAcceptsAReplacementThatFoundMostPhones(t *testing.T) {
+func TestADBWatchdogGivesUpOnAPhoneAfterItsRestarts(t *testing.T) {
 	h := newWatchdogHarness()
 	h.output = sixPhonesReady
 	h.step(0)
-	h.err = hungServerError
-	for range adbWatchdogFailureThreshold {
+	h.output = "List of devices attached\n1A091FDF600KW6\tdevice\n1A121FDF6009EU\tdevice\n1B081FDF600524\tdevice\nR5CTC23TKZZ\tdevice\nR5GL5026YKY\tdevice\n"
+	for range 40 {
 		h.step(adbWatchdogInterval)
 	}
+	if len(h.restarted) != adbWatchdogMaxDeviceRestarts {
+		t.Fatalf("restarts = %d, want %d and then leave it to an operator", len(h.restarted), adbWatchdogMaxDeviceRestarts)
+	}
+	if _, expected := h.watchdog.expected["R5GL5029RMF"]; expected {
+		t.Fatal("a phone given up on should no longer be expected")
+	}
+}
 
-	h.err = nil
-	h.output = "List of devices attached\n1A091FDF600KW6\tdevice\n1A121FDF6009EU\tdevice\n1B081FDF600524\tdevice\n"
-	h.step(adbWatchdogSettleDelay)
-	if h.replaced != 1 {
-		t.Fatalf("replaced = %d; three of six back is not worth cutting all three off again", h.replaced)
+func TestADBWatchdogBacksOffBetweenRestartsOfOnePhone(t *testing.T) {
+	h := newWatchdogHarness()
+	h.output = "List of devices attached\nR5GL5029RMF\tdevice\n"
+	h.step(0)
+	h.output = "List of devices attached\n"
+	h.step(adbWatchdogInterval)
+	h.step(adbWatchdogInterval)
+	h.step(adbWatchdogInterval)
+	if len(h.restarted) != 1 {
+		t.Fatalf("restarts = %d within %s, want 1", len(h.restarted), adbWatchdogDeviceRestartBackoff)
+	}
+	h.step(adbWatchdogDeviceRestartBackoff)
+	if len(h.restarted) != 2 {
+		t.Fatalf("restarts = %d after the backoff, want 2", len(h.restarted))
+	}
+}
+
+func TestADBWatchdogStopsExpectingAnUnpluggedPhone(t *testing.T) {
+	h := newWatchdogHarness()
+	h.output = sixPhonesReady
+	h.step(0)
+	h.restartFn = func(string, string) error { return errDeviceNotConnected }
+	h.output = threePhonesReady
+	for range 10 {
+		h.step(adbWatchdogInterval)
+	}
+	if len(h.restarted) != 3 {
+		t.Fatalf("restarts = %d; a phone Windows no longer has is tried once", len(h.restarted))
+	}
+	if len(h.watchdog.expected) != 3 {
+		t.Fatalf("expected %d phones, want the 3 still connected", len(h.watchdog.expected))
+	}
+}
+
+func TestADBWatchdogLeavesWirelessAndUnauthorizedPhonesAlone(t *testing.T) {
+	h := newWatchdogHarness()
+	h.output = "List of devices attached\n192.168.1.159:38261\tdevice\nemulator-5554\tdevice\nR5GL5029RMF\tdevice\n"
+	h.step(0)
+	h.output = "List of devices attached\nR5GL5029RMF\tunauthorized\n"
+	for range 10 {
+		h.step(adbWatchdogInterval)
+	}
+	if len(h.restarted) != 0 {
+		t.Fatalf("restarted %v; a wireless link has no USB device and an unauthorized phone needs a person", h.restarted)
+	}
+}
+
+func TestADBWatchdogWithoutDeviceRestartsOnlyWatchesForAHang(t *testing.T) {
+	h := newWatchdogHarness()
+	h.watchdog.restartDevice = nil
+	h.output = sixPhonesReady
+	h.step(0)
+	h.output = "List of devices attached\n"
+	for range 10 {
+		h.step(adbWatchdogInterval)
+	}
+	if h.replaced != 0 {
+		t.Fatalf("replaced = %d; an answering server is not replaced", h.replaced)
+	}
+}
+
+// 20:20 on 2026-10-13: finn's transports ended twelve seconds before the new
+// Mast started, so the new process's first look already showed an emptied rack.
+func TestADBWatchdogRemembersThePhoneSetAcrossARestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), adbWatchdogFileName)
+	before := newWatchdogHarness()
+	before.watchdog.path = path
+	before.output = sixPhonesReady
+	before.step(0)
+
+	after := newWatchdogHarness()
+	after.now = before.now.Add(time.Minute)
+	after.watchdog.path = path
+	after.watchdog.load()
+	after.output = "List of devices attached\n"
+	after.step(adbWatchdogInterval)
+	after.step(adbWatchdogInterval)
+	if len(after.restarted) != 6 {
+		t.Fatalf("restarts = %d; the restarted watchdog should know six phones were ready", len(after.restarted))
+	}
+}
+
+func TestADBWatchdogForgetsAStalePhoneSet(t *testing.T) {
+	path := filepath.Join(t.TempDir(), adbWatchdogFileName)
+	before := newWatchdogHarness()
+	before.watchdog.path = path
+	before.output = sixPhonesReady
+	before.step(0)
+
+	after := newWatchdogHarness()
+	after.now = before.now.Add(adbWatchdogMemoryMaxAge + time.Minute)
+	after.watchdog.path = path
+	after.watchdog.load()
+	after.output = "List of devices attached\n"
+	for range 5 {
+		after.step(adbWatchdogInterval)
+	}
+	if len(after.restarted) != 0 {
+		t.Fatalf("restarted %v; a set saved before the node was down this long may describe another rack", after.restarted)
+	}
+}
+
+func TestADBWatchdogRefreshesASteadyPhoneSet(t *testing.T) {
+	h := newWatchdogHarness()
+	h.watchdog.path = filepath.Join(t.TempDir(), adbWatchdogFileName)
+	h.output = sixPhonesReady
+	h.step(0)
+	first := h.watchdog.savedAt
+	h.step(adbWatchdogMemoryRefresh)
+	if !h.watchdog.savedAt.After(first) {
+		t.Fatal("an unchanged set must still be saved again, or a steady rack ages out of memory")
 	}
 }
 
@@ -197,5 +325,30 @@ func TestParseTasklistImageName(t *testing.T) {
 	}
 	if got := parseTasklistImageName("INFO: No tasks are running which match the specified criteria.\r\n"); got != "" {
 		t.Fatalf("image = %q for a PID with no process, want empty", got)
+	}
+}
+
+// finn's pnputil on 2026-10-13. The serial is the last segment of the parent
+// USB device's instance ID; its interfaces carry generated IDs instead.
+func TestParsePnputilUSBInstanceID(t *testing.T) {
+	output := "Microsoft PnP Utility\r\n\r\n" +
+		"Instance ID:                USB\\VID_04E8&PID_6860&MI_00\\6&3b656954&0&0000\r\n" +
+		"Device Description:         Galaxy S22\r\n\r\n" +
+		"Instance ID:                USB\\VID_04E8&PID_6860\\R5GL5029RMF\r\n" +
+		"Device Description:         SAMSUNG Mobile USB Composite Device \r\n" +
+		"Status:                     Started\r\n\r\n" +
+		"Instance ID:                USB\\VID_18D1&PID_4EE7\\1A121FDF6009EU\r\n" +
+		"Device Description:         Pixel 6\r\n"
+	if id, ok := parsePnputilUSBInstanceID(output, "R5GL5029RMF"); !ok || id != `USB\VID_04E8&PID_6860\R5GL5029RMF` {
+		t.Fatalf("id = %q, %v", id, ok)
+	}
+	if id, ok := parsePnputilUSBInstanceID(output, "1a121fdf6009eu"); !ok || id != `USB\VID_18D1&PID_4EE7\1A121FDF6009EU` {
+		t.Fatalf("id = %q, %v; serials match without regard to case", id, ok)
+	}
+	if _, ok := parsePnputilUSBInstanceID(output, "R5CTC23TKZZ"); ok {
+		t.Fatal("a serial with no connected device must not match")
+	}
+	if _, ok := parsePnputilUSBInstanceID(output, "0000"); ok {
+		t.Fatal("an interface's generated ID is not a serial")
 	}
 }

@@ -170,14 +170,25 @@ With Android enabled, Mast checks the adb server at startup and starts one on
 adb server must not take the node down for its peers, iOS devices, and proxy.
 From then on a watchdog probes the server every 10 seconds. After three probes
 in a row go unanswered — a server that holds its port but stopped replying,
-which Windows nodes have hit repeatedly — Mast kills the process listening on
-that port and starts a replacement the same way startup does. If fewer than half
-of the phones that were ready come back within 20 seconds, it replaces the
-server again, at most twice, then leaves the rest to an operator. While the
-server is not answering, the background power policy (stay-awake, portrait
-lock, display power) holds off rather than queue more adb clients. Finding the
-server's process is supported on Linux and Windows; elsewhere the watchdog
-logs the hang and stops there.
+which Windows nodes have hit repeatedly — Mast kills the adb process listening
+on that port, waits for its port and USB handles to be released, and starts one
+replacement: a server on every interface as startup asks for, or a
+loopback-only one where the node's own address is already forwarded to
+loopback. While the server is not answering, the background power policy
+(stay-awake, portrait lock, display power) holds off rather than queue more adb
+clients.
+
+On Windows the watchdog also looks after phones one at a time. A USB phone that
+was ready and is missing from two answered probes in a row, while Windows still
+has it connected, has its USB device restarted with `pnputil /restart-device`,
+which makes Windows announce it again and the running server open it without
+touching any other phone. A phone is restarted at most three times, 30 seconds
+apart, before it is left to an operator; one Windows no longer has connected is
+no longer expected; wireless and emulator transports, and phones waiting on the
+debugging prompt, are left alone. Mast's scheduled task runs with highest
+privileges, which a device restart needs. Only Windows nodes do either: on
+Linux a server restarted from Mast would live in Mast's own service cgroup and
+die with the next Mast restart, so there the watchdog logs a hang and stops.
 
 ## peer add
 
@@ -208,6 +219,12 @@ Resolved device identities are written to `device-identity.json` beside
 behind it. The node maintains this file itself; it exists so a phone that is
 unreachable when Mast starts is still identified rather than dropped. Deleting
 it is safe — entries are rebuilt the next time each device is reachable.
+
+The adb watchdog writes `adb-watchdog.json` beside `config.json`: the USB phones
+it expects adb to list, refreshed at least every ten minutes. A restarted node
+reads it back, so phones whose transports ended in the seconds around the
+restart are still missed and recovered rather than taken as an empty rack. A copy older than an hour is ignored, and deleting the file is
+safe.
 
 ## peer remove
 

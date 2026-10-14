@@ -3,6 +3,7 @@
 package node
 
 import (
+	"context"
 	"fmt"
 	"runtime"
 )
@@ -15,3 +16,7 @@ import (
 func findADBServerProcesses(int) ([]int, error) {
 	return nil, fmt.Errorf("replacing a hung adb server is not supported on %s", runtime.GOOS)
 }
+
+// Restarting one phone's USB device is Windows-only; elsewhere the watchdog
+// does not chase phones that drop out of adb.
+var restartUSBDevice func(ctx context.Context, serial string) error

@@ -76,7 +76,15 @@ func (s *StartCmd) Run() error {
 	}
 	programStore.SetMastAPIURL(apiBase)
 	programStore.SetRunners(cfg.Runners)
-	mastNode.SetConfig(s.ConfigPath, *cfg, &runtimeConfigApplier{node: mastNode, programs: programStore, proxy: proxyRuntime})
+	// The node keeps files beside its config — device identities, the adb
+	// watchdog's phone set — and finds that directory from this path. A node
+	// started without --config, as finn's scheduled task is, used to hand it ""
+	// and so kept neither.
+	configPath, err := resolvePath(s.ConfigPath)
+	if err != nil {
+		return err
+	}
+	mastNode.SetConfig(configPath, *cfg, &runtimeConfigApplier{node: mastNode, programs: programStore, proxy: proxyRuntime})
 	// A hung adb server fails this check too, and exiting over it would take the
 	// node down for its iOS devices, its peers, and its proxy as well — on a
 	// Windows node, past the scheduled task's last restart. The watchdog replaces

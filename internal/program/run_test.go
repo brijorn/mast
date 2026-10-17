@@ -52,6 +52,7 @@ printf 'MAST_API_URL=%s\n' "$MAST_API_URL"
 printf 'MAST_RUN_ID=%s\n' "$MAST_RUN_ID"
 printf 'MAST_DEVICE_ID=%s\n' "$MAST_DEVICE_ID"
 printf 'PYTHONUNBUFFERED=%s\n' "$PYTHONUNBUFFERED"
+printf 'MALLOC_ARENA_MAX=%s\n' "$MALLOC_ARENA_MAX"
 printf 'ARGS=%s\n' "$*"
 `
 	if err := os.WriteFile(filepath.Join(source, "run.sh"), []byte(script), 0700); err != nil {
@@ -126,6 +127,7 @@ printf 'ARGS=%s\n' "$*"
 		"MAST_RUN_ID=" + runs[0].ID,
 		"MAST_DEVICE_ID=remote-123",
 		"PYTHONUNBUFFERED=1",
+		"MALLOC_ARENA_MAX=2",
 		"ARGS=",
 	} {
 		if !strings.Contains(stdout, want) {

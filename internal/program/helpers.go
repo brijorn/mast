@@ -301,6 +301,15 @@ func mergeEnv(base []string, overlay map[string]string) []string {
 func defaultRunEnv() map[string]string {
 	return map[string]string{
 		"PYTHONUNBUFFERED": "1",
+		// glibc gives every new thread its own malloc arena, up to eight per
+		// core, and a Go program gains threads for each blocking exec or cgo
+		// call and never gives them back. A FrameKit program's OpenCV frames
+		// are malloc'd from whichever thread runs the call, so each of its
+		// 40-odd arenas ended up holding freed full-screen frames: 85-90% of a
+		// 1-1.4 GB program was idle arena, 8 GB across BMO's runs. Matching is
+		// serialised anyway, so two shared arenas cost nothing, and a run can
+		// still set its own.
+		"MALLOC_ARENA_MAX": "2",
 	}
 }
 

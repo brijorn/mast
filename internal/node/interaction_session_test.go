@@ -37,6 +37,21 @@ func TestEnsureStreamMatchesInteractionAndVideoCallers(t *testing.T) {
 			name:     "viewer over a viewer's video session",
 			existing: &StreamSession{Platform: PlatformAndroid, Kind: "h264", videoBroadcaster: newVideoBroadcaster()},
 		},
+		{
+			name:     "board tile over a full-rate stream",
+			existing: &StreamSession{Platform: PlatformAndroid, Kind: "h264", videoBroadcaster: newVideoBroadcaster()},
+			opts:     streamcfg.Options{MaxFPS: 2},
+		},
+		{
+			name:     "driver over a board stream",
+			existing: &StreamSession{Platform: PlatformAndroid, Kind: "h264", videoBroadcaster: newVideoBroadcaster(), maxFPS: 2},
+			replaced: true,
+		},
+		{
+			name:     "program over a board stream",
+			existing: &StreamSession{Platform: PlatformAndroid, Kind: "h264", videoBroadcaster: newVideoBroadcaster(), maxFPS: 2},
+			opts:     streamcfg.Options{NoVideo: true}, controlWithoutVideo: true,
+		},
 	}
 	for _, tc := range cases {
 		n := &Node{streams: map[string]*streamEntry{}}

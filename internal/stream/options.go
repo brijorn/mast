@@ -9,7 +9,12 @@ type Options struct {
 	// with no virtual display and no encoder. A program that only injects
 	// touches has no use for video, and encoding it costs the phone a hardware
 	// encoder and a composited mirror for as long as the session lives.
-	NoVideo             bool   `json:"no_video"`
+	NoVideo bool `json:"no_video"`
+	// MaxFPS caps how many frames a second the encoder produces; zero is
+	// uncapped. A viewer that only glances at a phone, like a fleet board
+	// tile, has no use for a full-rate stream, and encoding cost follows the
+	// frame rate.
+	MaxFPS              int    `json:"max_fps"`
 	PreserveOrientation bool   `json:"preserve_orientation"`
 	TurnScreenOff       bool   `json:"turn_screen_off"`
 	StayAwake           bool   `json:"stay_awake"`
@@ -73,6 +78,9 @@ func (s *Options) Format() []string {
 	}
 	if s.MaxSize > 0 {
 		formatted = append(formatted, "max_size="+strconv.Itoa(s.MaxSize))
+	}
+	if s.MaxFPS > 0 {
+		formatted = append(formatted, "max_fps="+strconv.Itoa(s.MaxFPS))
 	}
 	return formatted
 }

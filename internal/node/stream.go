@@ -71,6 +71,14 @@ type StreamSession struct {
 	// session instead.
 	controlWithoutVideo atomic.Bool
 
+	// maxFPS is the frame rate the encoder was started with, zero for
+	// uncapped. viewers holds the rate each video viewer asked for, so the
+	// node can tell when nobody watching needs the rate being encoded.
+	maxFPS          int
+	viewersMu       sync.Mutex
+	viewers         map[*streamViewer]struct{}
+	overServedSince time.Time
+
 	iosDevice  *ioslink.Device
 	iosCleanup func()
 	iosTouchMu sync.Mutex
@@ -645,6 +653,7 @@ func (n *Node) startLocalAndroidStreamWithDeviceCheck(serial string, opts stream
 		VideoURL:       "/api/streams/video?serial=" + serial,
 		streamListener: ln,
 		cmd:            cmd,
+		maxFPS:         opts.MaxFPS,
 	}
 
 	if err := session.acceptScrcpyConnection(opts); err != nil {
@@ -806,7 +815,7 @@ func (n *Node) ensureLocalStream(serial string, opts streamcfg.Options) (*Stream
 }
 
 func (n *Node) ensureStream(serial string, opts streamcfg.Options, start func(string, streamcfg.Options) (*StreamSession, error)) (*StreamSession, error) {
-	replacedInteraction := false
+	carryControlWithoutVideo := false
 	for {
 		n.streamsMu.Lock()
 		entry, ok := n.streams[serial]
@@ -830,11 +839,21 @@ func (n *Node) ensureStream(serial string, opts streamcfg.Options, start func(st
 				}
 			}
 			// A caller wanting video cannot be served by an interaction
-			// session; a caller wanting only control can be served by either.
-			upgrade := !unhealthy && !opts.NoVideo && !entry.Session.hasVideo()
+			// session, nor one wanting a higher frame rate by a capped one; a
+			// caller wanting only control can be served by any session.
+			upgrade := false
+			if !unhealthy && !opts.NoVideo {
+				switch {
+				case !entry.Session.hasVideo():
+					log.Printf("replacing the interaction session for %s with video for a viewer", serial)
+					upgrade = true
+				case fpsBelow(entry.Session.maxFPS, opts.MaxFPS):
+					log.Printf("replacing the %d fps stream for %s for a viewer wanting %s", entry.Session.maxFPS, serial, fpsLabel(opts.MaxFPS))
+					upgrade = true
+				}
+			}
 			if upgrade {
-				log.Printf("replacing the interaction session for %s with video for a viewer", serial)
-				replacedInteraction = true
+				carryControlWithoutVideo = !entry.Session.hasVideo() || entry.Session.controlWithoutVideo.Load()
 			}
 			if unhealthy || upgrade {
 				n.streamsMu.Lock()
@@ -871,7 +890,7 @@ func (n *Node) ensureStream(serial string, opts streamcfg.Options, start func(st
 			entry.Error = err
 			delete(n.streams, serial)
 		} else {
-			if replacedInteraction {
+			if carryControlWithoutVideo {
 				streamSession.controlWithoutVideo.Store(true)
 			}
 			entry.Session = streamSession
@@ -1026,14 +1045,17 @@ func isMJPEGViewerDisconnect(ctx context.Context, err error) bool {
 		strings.Contains(message, "context canceled")
 }
 
-func (n *Node) StreamVideo(ctx context.Context, serial string, conn *websocket.Conn) error {
+// StreamVideo serves one viewer. maxFPS is the frame rate the viewer needs,
+// zero for full rate; it does not shape what this viewer receives, only
+// whether the node may later restart the stream at a lower rate.
+func (n *Node) StreamVideo(ctx context.Context, serial string, conn *websocket.Conn, maxFPS int) error {
 	device, err := n.deviceBySerial(serial)
 	if err != nil {
 		return err
 	}
 
 	if device.NodeID != n.ID {
-		return n.proxyPeerVideo(ctx, device.NodeID, serial, conn)
+		return n.proxyPeerVideo(ctx, device.NodeID, serial, conn, maxFPS)
 	}
 
 	stream, err := n.viewerStream(serial)
@@ -1053,6 +1075,7 @@ func (n *Node) StreamVideo(ctx context.Context, serial string, conn *websocket.C
 		return err
 	}
 	defer unsubscribe()
+	defer stream.addViewer(maxFPS)()
 	streamDone := make(chan struct{})
 	defer close(streamDone)
 	go func() {
@@ -1083,12 +1106,12 @@ func (n *Node) StreamVideo(ctx context.Context, serial string, conn *websocket.C
 	}
 }
 
-func (n *Node) proxyPeerVideo(ctx context.Context, nodeID string, serial string, conn *websocket.Conn) error {
+func (n *Node) proxyPeerVideo(ctx context.Context, nodeID string, serial string, conn *websocket.Conn, maxFPS int) error {
 	streamURL, err := n.peerVideoURL(nodeID, serial)
 	if err != nil {
 		return err
 	}
-	streamURL, err = videoViewerURL(streamURL, "peer-"+uuid.NewString())
+	streamURL, err = videoViewerURL(streamURL, "peer-"+uuid.NewString(), maxFPS)
 	if err != nil {
 		return err
 	}
@@ -1214,13 +1237,16 @@ func websocketURLFromHTTPURL(u *url.URL) string {
 	return clone.String()
 }
 
-func videoViewerURL(rawURL string, viewer string) (string, error) {
+func videoViewerURL(rawURL string, viewer string, maxFPS int) (string, error) {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
 		return "", err
 	}
 	query := parsed.Query()
 	query.Set("viewer", viewer)
+	if maxFPS > 0 {
+		query.Set("max_fps", strconv.Itoa(maxFPS))
+	}
 	parsed.RawQuery = query.Encode()
 	return parsed.String(), nil
 }

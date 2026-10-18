@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/brijorn/mast/internal/node"
@@ -46,7 +47,10 @@ func (s *Server) StreamVideo(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	streamErr := s.node.StreamVideo(ctx, serial, conn)
+	// A viewer that does not say what rate it needs is served as if it needs
+	// them all, so an older client is never downgraded under its user.
+	maxFPS, _ := strconv.Atoi(r.URL.Query().Get("max_fps"))
+	streamErr := s.node.StreamVideo(ctx, serial, conn, max(maxFPS, 0))
 	if node.IsStreamNotFound(streamErr) {
 		_ = conn.WriteControl(
 			websocket.CloseMessage,

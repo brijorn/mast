@@ -70,3 +70,12 @@ func TestOptionsFormatForAnInteractionSessionHasNoVideo(t *testing.T) {
 		t.Fatalf("formatted options mismatch (-want +got):\n%s", diff)
 	}
 }
+
+// A capped stream must reach scrcpy as max_fps, or the encoder runs at full
+// rate whatever the caller asked for.
+func TestOptionsFormatCapsTheFrameRate(t *testing.T) {
+	got := (&Options{NoAudio: true, MaxFPS: 2}).Format()
+	if last := got[len(got)-1]; last != "max_fps=2" {
+		t.Fatalf("formatted options %v, want them to end with max_fps=2", got)
+	}
+}

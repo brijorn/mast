@@ -707,6 +707,13 @@ session gets it replaced by a video session; a `no_video` caller that finds a
 video session shares it, and once no viewer watches, the idle reaper ends that
 session so the caller reconnects into an interaction session.
 
+`max_fps` caps the encoder's frame rate (zero or absent is full rate), for a
+viewer that only glances at a phone, like a fleet board tile. One device has
+one stream, run at the highest rate any current viewer wants: a request for a
+higher rate than the stream encodes replaces it, and a stream encoding more
+than every viewer watching it wants (each states its rate on the video
+websocket) is stopped after a minute so its viewers restart it lower.
+
 Request body:
 
 ```json
@@ -716,6 +723,7 @@ Request body:
     "no_audio": true,
     "no_control": false,
     "no_video": false,
+    "max_fps": 0,
     "preserve_orientation": true,
     "turn_screen_off": true,
     "stay_awake": true,
@@ -755,8 +763,12 @@ Successful response:
 ## Stream Video WebSocket
 
 ```http
-GET /api/streams/video?serial=local-123
+GET /api/streams/video?serial=local-123&viewer=tab-1&max_fps=2
 ```
+
+`max_fps` is the frame rate this viewer needs; absent means full rate. It does
+not change what the viewer receives, only whether Mast may restart the stream
+at a lower rate when no viewer needs more.
 
 Subscribes to an already-started stream over websocket. Messages are binary
 video packets:

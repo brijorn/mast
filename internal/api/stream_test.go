@@ -179,7 +179,7 @@ func (f *fakeBackend) StreamMJPEG(_ context.Context, serial string, w http.Respo
 	return nil
 }
 
-func (f *fakeBackend) StreamVideo(ctx context.Context, serial string, conn *websocket.Conn) error {
+func (f *fakeBackend) StreamVideo(ctx context.Context, serial string, conn *websocket.Conn, _ int) error {
 	f.mu.Lock()
 	f.serials = append(f.serials, serial)
 	err := f.err

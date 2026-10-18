@@ -276,7 +276,7 @@ func TestPeerVideoURLUsesPeerAPIAddr(t *testing.T) {
 }
 
 func TestVideoViewerURLAddsRequiredViewer(t *testing.T) {
-	got, err := videoViewerURL("ws://100.99.89.88:7001/api/streams/video?serial=android-123", "peer-viewer")
+	got, err := videoViewerURL("ws://100.99.89.88:7001/api/streams/video?serial=android-123", "peer-viewer", 0)
 	if err != nil {
 		t.Fatal(err)
 	}

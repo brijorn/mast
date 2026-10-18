@@ -129,6 +129,7 @@ func (n *Node) monitorIdleStreams() {
 			return
 		case now := <-ticker.C:
 			n.reapIdleStreams(now, n.streamIdleTimeout())
+			n.reapOverServedStreams(now)
 		}
 	}
 }

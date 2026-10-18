@@ -204,6 +204,44 @@ func TestNodeDisconnectPeerDropsConnection(t *testing.T) {
 		_, ok := nodeA.Peers["b"]
 		return !ok
 	})
+
+	// Past the first redial: a removed peer stays removed.
+	time.Sleep(1500 * time.Millisecond)
+	nodeA.mu.RLock()
+	_, ok := nodeA.Peers["b"]
+	nodeA.mu.RUnlock()
+	if ok {
+		t.Fatal("removed peer was redialed")
+	}
+}
+
+func TestNodeConnectPersistentWaitsForAbsentPeer(t *testing.T) {
+	nodeA, nodeB := createNodePair(t)
+
+	_, port, err := net.SplitHostPort(nodeB.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := nodeB.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	go nodeA.ConnectPersistent("ws://127.0.0.1:" + port + "/ws")
+	time.Sleep(200 * time.Millisecond)
+
+	nodeB2, err := NewNode("b", ":"+port, "", false, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = nodeB2.Close() })
+	go func() { _ = nodeB2.Listen() }()
+
+	waitFor(t, 3*time.Second, func() bool {
+		nodeA.mu.RLock()
+		defer nodeA.mu.RUnlock()
+		_, ok := nodeA.Peers["b"]
+		return ok
+	})
 }
 
 func TestNodeReconect(t *testing.T) {

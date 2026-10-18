@@ -43,6 +43,7 @@ type Node struct {
 	Listener             net.Listener
 	mu                   sync.RWMutex
 	Peers                map[string]*PeerConn
+	dropped              map[string]bool
 	Client               http.Client
 	Upgrader             websocket.Upgrader
 	ctx                  context.Context

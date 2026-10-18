@@ -117,10 +117,10 @@ func (s *StartCmd) Run() error {
 	if err != nil {
 		log.Println("load saved peers:", err)
 	} else {
+		// Each in the background: one unreachable peer must not hold the
+		// listener closed, and one down right now must still come back.
 		for _, peerURL := range peerStore.Peers {
-			if err := mastNode.Connect(peerURL); err != nil {
-				log.Println("connect saved peer:", err)
-			}
+			go mastNode.ConnectPersistent(peerURL)
 		}
 	}
 

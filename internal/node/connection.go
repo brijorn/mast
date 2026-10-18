@@ -30,8 +30,16 @@ func (n *Node) Listen() error {
 	return http.Serve(n.Listener, mux)
 }
 
-// Connect opens an outgoing peer websocket connection.
+// Connect opens an outgoing peer websocket connection, and keeps redialing it
+// whenever it drops until DisconnectPeer lets it go.
 func (n *Node) Connect(addr string) error {
+	n.mu.Lock()
+	delete(n.dropped, addr)
+	n.mu.Unlock()
+	return n.dial(addr)
+}
+
+func (n *Node) dial(addr string) error {
 	u, err := url.Parse(addr)
 	if err != nil {
 		return err
@@ -67,11 +75,20 @@ func (n *Node) hasPeerConnection(target string, host string) bool {
 	return false
 }
 
+// ConnectPersistent dials a saved peer and, if it is not there yet, keeps
+// trying in the background: a peer down at startup is otherwise never dialed
+// again, and stays missing until something outside adds it back.
 func (n *Node) ConnectPersistent(addr string) {
 	if err := n.Connect(addr); err != nil {
 		log.Println("connect saved peer:", err)
 		go n.reconnect(addr)
 	}
+}
+
+func (n *Node) wasDropped(addr string) bool {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	return n.dropped[addr]
 }
 
 func (n *Node) reconnect(addr string) {
@@ -81,8 +98,11 @@ func (n *Node) reconnect(addr string) {
 		case <-n.ctx.Done():
 			return
 		case <-time.After(backoff):
+			if n.wasDropped(addr) {
+				return
+			}
 			log.Println("reconnecting to ", addr)
-			if err := n.Connect(addr); err != nil {
+			if err := n.dial(addr); err != nil {
 				log.Println("reconnect failed:", err)
 				backoff *= 2
 				if backoff > 60*time.Second {
@@ -152,6 +172,10 @@ func (n *Node) DisconnectPeer(target string) bool {
 
 	var peer *PeerConn
 	n.mu.Lock()
+	if n.dropped == nil {
+		n.dropped = make(map[string]bool)
+	}
+	n.dropped[target] = true
 	for id, current := range n.Peers {
 		if current.Target == target || current.Addr == host || id == host {
 			delete(n.Peers, id)

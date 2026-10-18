@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/netip"
 	"testing"
+	"time"
 )
 
 func TestAdvertisedListenHost(t *testing.T) {
@@ -56,6 +57,56 @@ func TestListenServesLoopbackWhileTheAdvertisedAddressIsMissing(t *testing.T) {
 	_ = ln.Close()
 	if _, err := ln.Accept(); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("accept after close = %v, want net.ErrClosed", err)
+	}
+}
+
+// Tailscale rebuilding its interface destroys the socket bound to the
+// advertised address under a running node; the node binds it again rather than
+// serving loopback alone until it restarts.
+func TestListenRebindsTheAdvertisedAddressAfterItsSocketDies(t *testing.T) {
+	loopback, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	advertised, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln := newMultiListener(loopback)
+	ln.retryInterval = 20 * time.Millisecond
+	t.Cleanup(func() { _ = ln.Close() })
+	ln.target = advertised.Addr().String()
+	ln.addAdvertised(advertised)
+
+	_ = advertised.Close()
+
+	accepted := make(chan error, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err == nil {
+			_ = conn.Close()
+		}
+		accepted <- err
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		conn, err := net.Dial("tcp", ln.target)
+		if err == nil {
+			_ = conn.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("advertised address %s was never bound again: %v", ln.target, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	select {
+	case err := <-accepted:
+		if err != nil {
+			t.Fatalf("accept on the rebound address: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a connection to the rebound address never reached Accept")
 	}
 }
 

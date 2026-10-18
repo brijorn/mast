@@ -94,7 +94,9 @@ are, bind this machine's loopback and the node's `advertise_host`, not every
 interface, so a node on a shared Wi-Fi serves only itself and the tailnet. The
 advertised address may not exist when Mast starts, since Tailscale is often not
 up yet; loopback is served at once and the advertised address is retried every
-10 seconds. An address that names a host, such as `0.0.0.0:6271`, is bound
+10 seconds. The same retry follows a listener on the advertised address that
+stops accepting, as happens when Tailscale rebuilds its interface on a phone and
+Android destroys the sockets bound to it. An address that names a host, such as `0.0.0.0:6271`, is bound
 exactly as written.
 
 The adb server Mast starts listens on loopback only: it has no authentication,

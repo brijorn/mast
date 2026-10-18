@@ -35,6 +35,18 @@ func readBodyPreserving(r *http.Request) []byte {
 
 var peerRunClient = &http.Client{Timeout: 20 * time.Second}
 
+// peerAuthorizer is the part of a node that knows which peers may be handed
+// the fleet token on a request to their API.
+type peerAuthorizer interface {
+	AuthorizePeerRequest(req *http.Request)
+}
+
+func (s *Server) authorizePeerRequest(req *http.Request) {
+	if authorizer, ok := s.node.(peerAuthorizer); ok {
+		authorizer.AuthorizePeerRequest(req)
+	}
+}
+
 // peerAPIBases returns the API base URLs of every non-local node.
 func (s *Server) peerAPIBases() []string {
 	if s.node == nil {
@@ -145,6 +157,7 @@ func (s *Server) forwardStartToNode(w http.ResponseWriter, r *http.Request, base
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(proxyMarker, "1")
+	s.authorizePeerRequest(req)
 	resp, err := peerRunClient.Do(req)
 	if err != nil {
 		http.Error(w, "forward start to owning node failed: "+err.Error(), http.StatusBadGateway)
@@ -165,8 +178,13 @@ func (s *Server) forwardStartToNode(w http.ResponseWriter, r *http.Request, base
 // local=1 marker asks the peer for only what it owns, so a peer that also
 // aggregates does not turn around and ask us back — that would recurse across
 // the network.
-func peerList(base, path string) []json.RawMessage {
-	resp, err := peerRunClient.Get(base + path + "?local=1")
+func (s *Server) peerList(base, path string) []json.RawMessage {
+	req, err := http.NewRequest(http.MethodGet, base+path+"?local=1", nil)
+	if err != nil {
+		return nil
+	}
+	s.authorizePeerRequest(req)
+	resp, err := peerRunClient.Do(req)
 	if err != nil {
 		return nil
 	}
@@ -226,7 +244,7 @@ func (s *Server) mergeAcrossPeers(local []json.RawMessage, path string) []json.R
 				port = "6271"
 			}
 			base := fmt.Sprintf("http://%s:%s", n.Addr, port)
-			add(stampHostNode(peerList(base, path), n.ID))
+			add(stampHostNode(s.peerList(base, path), n.ID))
 		}
 	}
 	return combined
@@ -315,6 +333,7 @@ func (s *Server) proxyRunRequest(w http.ResponseWriter, r *http.Request, target 
 		req.Header.Set("Content-Type", ct)
 	}
 	req.Header.Set(proxyMarker, "1")
+	s.authorizePeerRequest(req)
 	resp, err := peerRunClient.Do(req)
 	if err != nil {
 		return false

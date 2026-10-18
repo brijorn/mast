@@ -98,7 +98,16 @@ type ConnectionRequestPayload struct {
 	Version        string `json:"version"`
 	Commit         string `json:"commit"`
 	BuildDate      string `json:"build_date"`
+	// The challenge the sender issues for the receiver to prove itself
+	// against, and the sender's proof against the receiver's challenge. A node
+	// with no api_token, or one older than authentication, sends neither.
+	Challenge string `json:"challenge,omitempty"`
+	Proof     string `json:"proof,omitempty"`
 }
+
+// PeerChallengeHeader carries the acceptor's challenge in its websocket
+// upgrade response, so the dialer can prove itself in its first message.
+const PeerChallengeHeader = "Mast-Peer-Challenge"
 
 type ConnectionRequest struct {
 	RawMessage

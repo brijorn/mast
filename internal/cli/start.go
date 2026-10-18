@@ -16,6 +16,7 @@ import (
 
 	"github.com/brijorn/mast/internal/api"
 	mastconfig "github.com/brijorn/mast/internal/config"
+	"github.com/brijorn/mast/internal/netutil"
 	"github.com/brijorn/mast/internal/node"
 	"github.com/brijorn/mast/internal/program"
 	"github.com/brijorn/mast/internal/proxy"
@@ -53,7 +54,7 @@ func (s *StartCmd) Run() error {
 		mastNode.ADBPort = cfg.ADBPort
 	}
 
-	proxyRuntime := &runtimeProxy{}
+	proxyRuntime := &runtimeProxy{advertiseHost: cfg.AdvertiseHost}
 	if cfg.ProxyEnabled {
 		if err := proxyRuntime.Ensure(cfg.ProxyAddr, cfg.ProxyAddressFamily); err != nil {
 			return err
@@ -108,7 +109,7 @@ func (s *StartCmd) Run() error {
 	}()
 
 	go func() {
-		if err := apiServer.Listen(cfg.APIAddr); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := apiServer.Listen(cfg.APIAddr, cfg.AdvertiseHost); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Println("api listener:", err)
 		}
 	}()
@@ -191,6 +192,8 @@ func hasChangedKey(changedKeys []string, targets ...string) bool {
 }
 
 type runtimeProxy struct {
+	advertiseHost string
+
 	mu      sync.Mutex
 	running bool
 	addr    string
@@ -233,7 +236,7 @@ func (p *runtimeProxy) SetEnabled(enabled bool, addr string, family string) erro
 		return fmt.Errorf("proxy addr change requires restart")
 	}
 	server := proxy.NewServer(addr, proxyNetwork(family))
-	listener, err := net.Listen("tcp", addr)
+	listener, err := netutil.Listen(addr, p.advertiseHost)
 	if err != nil {
 		return err
 	}

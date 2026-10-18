@@ -22,6 +22,8 @@ const (
 )
 
 var controlUpgrader = websocket.Upgrader{
+	// The API's guard has already refused an origin the node does not allow,
+	// so the upgrade accepts whatever reaches it.
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 

@@ -15,6 +15,9 @@ type NodeInfo struct {
 	Commit         string `json:"commit"`
 	BuildDate      string `json:"build_date"`
 	DeviceError    string `json:"device_error,omitempty"`
+	// For a peer: whether it proved it holds this node's api_token. Requests
+	// from a peer that has not are ignored. Absent for the local node.
+	Authenticated *bool `json:"authenticated,omitempty"`
 }
 
 func (n *Node) ListNodes() []NodeInfo {
@@ -37,6 +40,7 @@ func (n *Node) ListNodes() []NodeInfo {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 	for id, peer := range n.Peers {
+		authenticated := peer.authenticated
 		nodes = append(nodes, NodeInfo{
 			ID:             id,
 			Addr:           peer.Addr,
@@ -50,6 +54,7 @@ func (n *Node) ListNodes() []NodeInfo {
 			Commit:         peer.Commit,
 			BuildDate:      peer.BuildDate,
 			DeviceError:    peer.DeviceError,
+			Authenticated:  &authenticated,
 		})
 	}
 

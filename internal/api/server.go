@@ -9,6 +9,7 @@ import (
 	"time"
 
 	mastconfig "github.com/brijorn/mast/internal/config"
+	"github.com/brijorn/mast/internal/netutil"
 	"github.com/brijorn/mast/internal/node"
 	"github.com/brijorn/mast/internal/program"
 	streamcfg "github.com/brijorn/mast/internal/stream"
@@ -195,9 +196,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/control/devtools/remove", s.DevToolsForwardRemove)
 	mux.HandleFunc("POST /api/control/clipboard/get", s.GetClipboard)
 	mux.HandleFunc("POST /api/control/clipboard/set", s.SetClipboard)
-	return mux
+	return s.guard(mux)
 }
 
-func (s *Server) Listen(addr string) error {
-	return http.ListenAndServe(addr, s.Handler())
+// Listen serves the API on addr, bound as netutil.Listen binds every node
+// listener: loopback and the advertised address unless addr names a host.
+func (s *Server) Listen(addr string, advertiseHost string) error {
+	ln, err := netutil.Listen(addr, advertiseHost)
+	if err != nil {
+		return err
+	}
+	return http.Serve(ln, s.Handler())
 }

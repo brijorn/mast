@@ -23,6 +23,7 @@ func TestListNodesIncludesLocalAndPeers(t *testing.T) {
 				Commit:         "abc123",
 				BuildDate:      "2026-06-25T17:00:00Z",
 				DeviceError:    "adb timed out",
+				authenticated:  true,
 			},
 		},
 	}
@@ -39,6 +40,7 @@ func TestListNodesIncludesLocalAndPeers(t *testing.T) {
 	}
 
 	remote := got[1]
+	authenticated := true
 	expectedRemote := NodeInfo{
 		ID:             "remote-node",
 		Addr:           "100.64.0.2",
@@ -50,6 +52,7 @@ func TestListNodesIncludesLocalAndPeers(t *testing.T) {
 		Commit:         "abc123",
 		BuildDate:      "2026-06-25T17:00:00Z",
 		DeviceError:    "adb timed out",
+		Authenticated:  &authenticated,
 	}
 	if diff := cmp.Diff(expectedRemote, remote); diff != "" {
 		t.Fatalf("remote node mismatch (-want +got):\n%s", diff)

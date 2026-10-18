@@ -77,7 +77,8 @@ func (c *ConfigShowCmd) Run() error {
 		return err
 	}
 
-	return json.NewEncoder(os.Stdout).Encode(cfg)
+	// The token stays in the file: a terminal keeps what it is shown.
+	return json.NewEncoder(os.Stdout).Encode(cfg.Redacted())
 }
 
 type ConfigSetCmd struct {

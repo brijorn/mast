@@ -377,17 +377,11 @@ func (n *Node) replaceADBServer(ctx context.Context) error {
 	return startADBServer(ctx, port)
 }
 
-// startADBServer starts a server peers can reach, as startup does, and falls
-// back to a loopback-only one where the node's own address is already
-// forwarded to loopback — finn's netsh portproxy holds that address, so a
-// server on every interface cannot bind there, and the forward serves the
-// loopback one just as well. If a client already started a server meanwhile,
+// startADBServer starts a loopback-only server, as startup does; peers reach it
+// through the node's relay. If a client already started a server meanwhile,
 // start-server finds it and leaves it alone.
 func startADBServer(ctx context.Context, port int) error {
 	portArg := strconv.Itoa(port)
-	if _, err := runADBServerCommand(ctx, "-a", "-P", portArg, "start-server"); err == nil {
-		return nil
-	}
 	if _, err := runADBServerCommand(ctx, "-P", portArg, "start-server"); err != nil {
 		return fmt.Errorf("start adb server on port %d: %w", port, err)
 	}

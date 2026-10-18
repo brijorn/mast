@@ -4,19 +4,33 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/brijorn/mast/internal/auth"
 	mastconfig "github.com/brijorn/mast/internal/config"
+	"github.com/brijorn/mast/internal/netutil"
 	"github.com/brijorn/mast/internal/update"
 	"github.com/danielpaulus/go-ios/ios/tunnel"
 	"github.com/gorilla/websocket"
 )
 
 type PeerConn struct {
-	conn           *websocket.Conn
-	mu             sync.Mutex
+	conn *websocket.Conn
+	mu   sync.Mutex
+	// The challenge this side issued for the other to prove itself against,
+	// and the one the other side issued, when it issued one.
+	challenge       string
+	remoteChallenge string
+	// The address of whichever side accepted the connection, which every
+	// handshake proof is bound to.
+	acceptorAddr netip.Addr
+	// Whether the peer proved it holds this node's api_token. Guarded by the
+	// node's mu.
+	authenticated  bool
+	refusalLogged  atomic.Bool
 	AndroidEnabled bool
 	IOSEnabled     bool
 	ProxyEnabled   bool
@@ -111,10 +125,14 @@ type Node struct {
 	inputWorkers         map[string]*deviceInput
 	deviceOwnerMu        sync.RWMutex
 	deviceOwners         map[string]deviceOwnerEntry
+	access               atomic.Pointer[auth.Keys]
+	origins              atomic.Pointer[[]string]
+	adbRelayMu           sync.Mutex
+	adbRelay             *adbRelay
 }
 
 func NewNode(id string, addr string, advertiseHost string, androidEnabled bool, iosEnabled bool, proxyEnabled bool) (*Node, error) {
-	ln, err := net.Listen("tcp", addr)
+	ln, err := netutil.Listen(addr, advertiseHost)
 	if err != nil {
 		return nil, err
 	}

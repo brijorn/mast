@@ -23,11 +23,16 @@ func HTTPClient() *http.Client {
 }
 
 func DialContext(ctx context.Context, network string, address string) (net.Conn, error) {
+	return Dialer().DialContext(ctx, network, address)
+}
+
+// Dialer returns the dialer this platform reaches the network with, for a
+// caller that needs to set more on it than DialContext does.
+func Dialer() *net.Dialer {
 	if runtime.GOOS != "android" {
-		var dialer net.Dialer
-		return dialer.DialContext(ctx, network, address)
+		return &net.Dialer{}
 	}
-	return androidDialer().DialContext(ctx, network, address)
+	return androidDialer()
 }
 
 func androidDialer() *net.Dialer {

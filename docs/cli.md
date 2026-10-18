@@ -82,8 +82,44 @@ proxy_enabled
 lock_portrait
 keep_display_off
 stream_idle_timeout
+api_token
+allowed_origins
 runners.<file_extension>
 ```
+
+## Listeners
+
+`bind_addr`, `api_addr`, and `proxy_addr` written as `:port`, as the defaults
+are, bind this machine's loopback and the node's `advertise_host`, not every
+interface, so a node on a shared Wi-Fi serves only itself and the tailnet. The
+advertised address may not exist when Mast starts, since Tailscale is often not
+up yet; loopback is served at once and the advertised address is retried every
+10 seconds. An address that names a host, such as `0.0.0.0:6271`, is bound
+exactly as written.
+
+The adb server Mast starts listens on loopback only: it has no authentication,
+and whoever reaches it has a shell on every phone. Peers that drive this node's
+phones through `ADB_SERVER_SOCKET` reach it through a relay on
+`advertise_host:adb_port`, which admits only this machine and the peers this
+node trusts (authenticated ones, when the node has a token). A server already
+answering on the port is kept unless it listens on every interface, as one an
+older Mast started with `-a` does, in which case it is restarted on loopback. A
+Windows node that forwarded its tailnet address to loopback with `netsh
+interface portproxy` must have that forward deleted: it holds the address the
+relay needs, and admits anyone. A server Mast starts lives in Mast's own service, so
+restarting Mast restarts adb: USB phones come back by themselves, and a phone
+attached with `adb connect` must be connected again (its wireless-debugging port
+holds until debugging is turned off).
+
+The proxy serves only loopback and tailnet clients and dials only public
+internet addresses, checked after name resolution, so it cannot reach the node's
+own loopback, the networks around it, or other tailnet nodes.
+
+`api_token` is the secret every node in a fleet shares; see
+[who the API serves](api.md#who-the-api-serves) and the peer
+[handshake](protocol.md#authentication). `allowed_origins` lists the page
+origins whose browsers may call the API. `mast config show` leaves the token
+out.
 
 `device_blacklist` is a comma- or whitespace-separated list of Android serials
 and iOS UDIDs. It is consulted on every device listing, so a change through

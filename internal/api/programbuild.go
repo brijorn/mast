@@ -158,6 +158,7 @@ func (s *Server) buildOnPeer(ctx context.Context, base string, recipe program.Bu
 		return "", err
 	}
 	req.Header.Set("Content-Type", mw.FormDataContentType())
+	s.authorizePeerRequest(req)
 	resp, err := buildClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("forward build to owning node: %w", err)

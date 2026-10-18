@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"sync"
 
+	"github.com/brijorn/mast/internal/netutil"
 	"github.com/brijorn/mast/internal/transport"
 )
 
@@ -79,6 +80,12 @@ func (n *Node) startDevToolsRelay(host string, loopbackPort int) (*devToolsRelay
 			if err != nil {
 				// A closed listener is how this loop is meant to end.
 				return
+			}
+			// A DevTools socket drives the phone's browser with every cookie
+			// it holds, so only the coordinator that asked for it gets in.
+			if client, ok := netutil.AddrOf(conn.RemoteAddr()); !ok || !n.admitsRelayClient(client) {
+				_ = conn.Close()
+				continue
 			}
 			relay.wg.Add(1)
 			go func() {

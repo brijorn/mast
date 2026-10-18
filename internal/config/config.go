@@ -50,6 +50,22 @@ type Config struct {
 	StreamVideoCodecOptions string `json:"stream_video_codec_options"`
 
 	Runners map[string]string `json:"runners,omitempty"`
+
+	// The fleet's shared secret. With it set, the node acts only for its own
+	// machine, a caller presenting it as a bearer token, a browser holding a
+	// ticket signed with it, and peers that prove they hold it. Every node in a
+	// fleet holds the same value. It is never returned by a config read.
+	APIToken string `json:"api_token,omitempty"`
+	// Page origins whose browsers may call the API, as scheme://host[:port].
+	// A request that carries an Origin header naming anything else is refused.
+	AllowedOrigins []string `json:"allowed_origins,omitempty"`
+}
+
+// Redacted returns the config as it may leave the node: without the token.
+func (c Config) Redacted() Config {
+	clone := c.Clone()
+	clone.APIToken = ""
+	return clone
 }
 
 // StreamDefaults are the encoder settings a node uses when a caller does not
@@ -200,6 +216,10 @@ func (c *Config) Set(key string, value string) error {
 		c.StreamVideoBitrate = parsed
 	case "stream_video_codec_options":
 		c.StreamVideoCodecOptions = strings.TrimSpace(value)
+	case "api_token":
+		c.APIToken = strings.TrimSpace(value)
+	case "allowed_origins":
+		c.AllowedOrigins = ParseAllowedOrigins(value)
 	default:
 		return fmt.Errorf("invalid config key: %s", key)
 	}
@@ -210,6 +230,7 @@ func (c *Config) Set(key string, value string) error {
 func (c Config) Clone() Config {
 	clone := c
 	clone.DeviceBlacklist = append([]string(nil), c.DeviceBlacklist...)
+	clone.AllowedOrigins = append([]string(nil), c.AllowedOrigins...)
 	if c.Runners != nil {
 		clone.Runners = make(map[string]string, len(c.Runners))
 		for key, value := range c.Runners {
@@ -459,6 +480,14 @@ func changedKeys(before Config, after Config, requested []string) []string {
 			if before.StreamVideoCodecOptions != after.StreamVideoCodecOptions {
 				changed = append(changed, key)
 			}
+		case "api_token":
+			if before.APIToken != after.APIToken {
+				changed = append(changed, key)
+			}
+		case "allowed_origins":
+			if strings.Join(before.AllowedOrigins, "\x00") != strings.Join(after.AllowedOrigins, "\x00") {
+				changed = append(changed, key)
+			}
 		}
 	}
 	return changed
@@ -468,11 +497,36 @@ func restartRequiredKeys(changed []string) []string {
 	restartKeys := make([]string, 0, len(changed))
 	for _, key := range changed {
 		switch key {
-		case "node_id", "bind_addr", "api_addr", "proxy_addr", "programs_dir":
+		// Listeners bind the advertised address when they start, so a new one
+		// is not served until then.
+		case "node_id", "bind_addr", "api_addr", "proxy_addr", "programs_dir", "advertise_host":
 			restartKeys = append(restartKeys, key)
 		}
 	}
 	return restartKeys
+}
+
+// ParseAllowedOrigins reads a comma- or space-separated origin list, dropping
+// trailing slashes so "https://runway.example/" matches the header a browser
+// sends.
+func ParseAllowedOrigins(value string) []string {
+	parts := strings.FieldsFunc(value, func(r rune) bool {
+		return r == ',' || r == '\n' || r == '\r' || r == '\t' || r == ' '
+	})
+	seen := make(map[string]struct{}, len(parts))
+	origins := make([]string, 0, len(parts))
+	for _, part := range parts {
+		origin := strings.TrimRight(strings.TrimSpace(part), "/")
+		if origin == "" {
+			continue
+		}
+		if _, ok := seen[origin]; ok {
+			continue
+		}
+		seen[origin] = struct{}{}
+		origins = append(origins, origin)
+	}
+	return origins
 }
 
 func ParseDeviceBlacklist(value string) []string {

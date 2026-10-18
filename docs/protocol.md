@@ -71,6 +71,36 @@ tells the peer whether this node has its proxy server enabled. `adb_port` is
 advertised so remote program runs can point ADB-backed tools at the correct peer
 ADB server. The version fields describe the Mast binary running on that node.
 
+### Authentication
+
+A node with an `api_token` also sends `challenge` and `proof`:
+
+```json
+{
+  "challenge": "<32 random bytes, base64url>",
+  "proof": "<base64url HMAC-SHA256>"
+}
+```
+
+The acceptor issues its challenge in the upgrade response's
+`Mast-Peer-Challenge` header, so the dialer proves itself in its first message;
+the dialer's `challenge` is what the acceptor proves itself against in its reply.
+A proof is HMAC-SHA256, keyed with HMAC-SHA256(key = `api_token`, message =
+`mast peer handshake v1`), over the role (`dialer` or `acceptor`), the
+challenge, the prover's node id, and the acceptor's IP address, each followed by
+a zero byte. The dialer takes the acceptor's address from the connection it
+opened and the acceptor from the address it was reached on, so a node that
+relays a handshake between two real peers is caught.
+
+A node with a token refuses a peer that dials in without a valid proof. A peer
+it dialed itself that sends no proof, an older node or one not yet given the
+token, stays connected but unauthenticated: the node still reads its devices and
+uses its proxy, never sends it the token, and ignores every request it sends.
+A peer that sends a proof that fails is refused. An unauthenticated registration
+never replaces an authenticated peer of the same id, and a connection that has
+registered cannot register again under another id. `GET /api/nodes` reports each
+peer's `authenticated`.
+
 ## list_devices_request
 
 Requests the destination node's local Android devices.
@@ -943,11 +973,14 @@ POST /api/peers
 The connection flow is:
 
 1. The receiving node runs its websocket listener on `/ws`.
-2. The initiating node dials the receiver's websocket URL.
+2. The initiating node dials the receiver's websocket URL; the upgrade response
+   carries the receiver's challenge.
 3. The initiating node immediately sends `connection_request`.
-4. The receiver stores the peer under the sender's `from` node ID.
+4. The receiver checks the sender's proof, then stores the peer under the
+   sender's `from` node ID.
 5. The receiver replies with its own `connection_request`.
-6. The initiator stores the receiver under the receiver's `from` node ID.
+6. The initiator checks the receiver's proof, then stores the receiver under the
+   receiver's `from` node ID.
 7. Both sides keep the connection alive with websocket ping/pong frames.
 
 If an initiated connection drops, the initiator attempts to reconnect with

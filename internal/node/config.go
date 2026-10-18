@@ -31,6 +31,7 @@ func (n *Node) SetConfig(path string, cfg mastconfig.Config, applier RuntimeConf
 
 	n.setDeviceIdentityPath(path)
 	n.applyNodeConfig(cfg)
+	n.setAccess(cfg)
 	n.setDeviceBlacklist(cfg.DeviceBlacklist)
 	if !cfg.AndroidEnabled || !cfg.KeepDisplayOff {
 		n.stopAllDevicePowerSessions()
@@ -97,7 +98,7 @@ func (n *Node) getLocalConfig() (*mastconfig.Config, error) {
 	if !n.configReady {
 		return nil, errors.New("node config not configured")
 	}
-	cfg := n.configState.Clone()
+	cfg := n.configState.Redacted()
 	return &cfg, nil
 }
 
@@ -160,9 +161,15 @@ func (n *Node) persistLocalConfigUpdate(values map[string]string) (*mastconfig.U
 	// single serial — so the exclusion nobody could afford to apply never got
 	// applied at all. Applying it here is what makes the list usable.
 	n.setDeviceBlacklist(next.DeviceBlacklist)
+	n.setAccess(next)
+	for _, key := range changed {
+		if key == "api_token" {
+			n.resetPeersForNewToken()
+		}
+	}
 	n.configState = next.Clone()
 	return &mastconfig.UpdateResult{
-		Config:              next.Clone(),
+		Config:              next.Redacted(),
 		ChangedKeys:         changed,
 		RestartRequired:     len(restartKeys) > 0,
 		RestartRequiredKeys: restartKeys,

@@ -507,8 +507,12 @@ func (n *Node) pushScrcpyServerContext(ctx context.Context, host string, serial 
 	return n.adbPush(ctx, host, serial, localPath, scrcpy.RemotePath)
 }
 
+// newScrcpyListener binds the port a phone's scrcpy server dials back to
+// through `adb reverse`. The reverse is carried by this node's own adb server,
+// which connects from loopback, so nothing else should be able to reach it: the
+// first connection is taken as the phone's video or control socket.
 func newScrcpyListener() (net.Listener, int, error) {
-	ln, err := net.Listen("tcp", "0.0.0.0:0")
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1116,7 +1120,11 @@ func (n *Node) proxyPeerVideo(ctx context.Context, nodeID string, serial string,
 		return err
 	}
 
-	peerConn, _, err := websocket.DefaultDialer.DialContext(ctx, streamURL, nil)
+	header := http.Header{}
+	if value := n.PeerAuthorization(peerHost(streamURL)); value != "" {
+		header.Set("Authorization", value)
+	}
+	peerConn, _, err := websocket.DefaultDialer.DialContext(ctx, streamURL, header)
 	if err != nil {
 		return err
 	}
@@ -1161,6 +1169,7 @@ func (n *Node) proxyPeerMJPEG(ctx context.Context, nodeID string, serial string,
 	if err != nil {
 		return err
 	}
+	n.AuthorizePeerRequest(req)
 	res, err := n.Client.Do(req)
 	if err != nil {
 		return err
@@ -1224,6 +1233,14 @@ func (n *Node) peerVideoURL(nodeID string, serial string) (string, error) {
 	query.Set("serial", serial)
 	streamPath.RawQuery = query.Encode()
 	return websocketURLFromHTTPURL(baseURL.ResolveReference(streamPath)), nil
+}
+
+func peerHost(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	return parsed.Hostname()
 }
 
 func websocketURLFromHTTPURL(u *url.URL) string {

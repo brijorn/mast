@@ -13,8 +13,11 @@ multiple computers.
 - Optionally expose a local proxy server on a configured port.
 
 The project runs as a lightweight program on each machine that owns devices,
-while a main node or dashboard can coordinate each node from one place. It is
-intended for trusted private networks.
+while a main node or dashboard can coordinate each node from one place. Nodes
+listen on loopback and their tailnet address, and with an `api_token` they act
+only for their own machine, callers holding the token, browsers holding a
+ticket, and peers that prove they hold it; see
+[who the API serves](docs/api.md#who-the-api-serves).
 
 ## Documentation
 

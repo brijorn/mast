@@ -9,9 +9,9 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/brijorn/mast/internal/auth"
+	"github.com/brijorn/mast/internal/netutil"
 	"github.com/brijorn/mast/internal/transport"
-	"github.com/brijorn/mast/internal/version"
-	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
@@ -19,13 +19,16 @@ import (
 func (n *Node) Listen() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		conn, err := n.Upgrader.Upgrade(w, r, nil)
+		challenge := auth.NewChallenge()
+		conn, err := n.Upgrader.Upgrade(w, r, http.Header{transport.PeerChallengeHeader: {challenge}})
 		if err != nil {
 			log.Print("upgrade:", err)
 			return
 		}
 		host, _, _ := net.SplitHostPort(r.RemoteAddr)
-		go n.handleConnection(&PeerConn{conn: conn, Addr: host}, "")
+		local, _ := r.Context().Value(http.LocalAddrContextKey).(net.Addr)
+		acceptor, _ := netutil.AddrOf(local)
+		go n.handleConnection(&PeerConn{conn: conn, Addr: host, challenge: challenge, acceptorAddr: acceptor}, "")
 	})
 	return http.Serve(n.Listener, mux)
 }
@@ -49,12 +52,20 @@ func (n *Node) dial(addr string) error {
 		return nil
 	}
 
-	conn, _, err := websocket.DefaultDialer.Dial(addr, nil)
+	conn, res, err := websocket.DefaultDialer.Dial(addr, nil)
 	if err != nil {
 		return err
 	}
+	acceptor, _ := netutil.AddrOf(conn.RemoteAddr())
 
-	go n.handleConnection(&PeerConn{conn: conn, Addr: host, Target: addr}, addr)
+	go n.handleConnection(&PeerConn{
+		conn:            conn,
+		Addr:            host,
+		Target:          addr,
+		challenge:       auth.NewChallenge(),
+		remoteChallenge: res.Header.Get(transport.PeerChallengeHeader),
+		acceptorAddr:    acceptor,
+	}, addr)
 	return nil
 }
 
@@ -118,6 +129,7 @@ func (n *Node) reconnect(addr string) {
 
 func (n *Node) Close() error {
 	n.cancel()
+	n.stopADBRelay()
 	n.stopAllDevicePowerSessions()
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -195,35 +207,11 @@ func (n *Node) DisconnectPeer(target string) bool {
 func (n *Node) handleConnection(peer *PeerConn, addr string) {
 	defer func() { _ = peer.conn.Close() }()
 	registered := false
+	peerID := ""
 
 	// send registration first if we initiated
 	if addr != "" {
-		msg := transport.ConnectionRequest{
-			RawMessage: transport.RawMessage{
-				Type:      transport.TypeConnectionRequest,
-				ID:        uuid.NewString(),
-				Timestamp: time.Now(),
-				From:      n.ID,
-			},
-			Payload: transport.ConnectionRequestPayload{
-				AndroidEnabled: n.AndroidEnabled,
-				IOSEnabled:     n.IOSEnabled,
-				ProxyEnabled:   n.ProxyEnabled,
-				ADBPort:        n.ADBPort,
-				APIAddr:        n.APIAddr,
-				Version:        version.Version,
-				Commit:         version.Commit,
-				BuildDate:      version.Date,
-			},
-		}
-
-		data, err := json.Marshal(msg)
-		if err != nil {
-			log.Print("marshal:", err)
-			return
-		}
-
-		if err := peer.WriteMessage(websocket.TextMessage, data); err != nil {
+		if err := n.sendRegistration(peer, auth.RoleDialer, peer.remoteChallenge); err != nil {
 			log.Print("write:", err)
 			return
 		}
@@ -267,6 +255,10 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 			log.Println("first message must be registration")
 			break
 		}
+		if raw.MessageType() != transport.TypeConnectionRequest && !n.trustsPeer(peer) {
+			n.logRefusedPeerRequest(peer, peerID, raw.MessageType())
+			continue
+		}
 
 		switch raw.MessageType() {
 		case transport.TypeConnectionRequest:
@@ -276,14 +268,33 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				break
 			}
 
-			n.mu.Lock()
-			if old, exists := n.Peers[raw.From]; exists {
-				old.replaced.Store(true)
-				err := old.conn.Close()
-				if err != nil {
+			// A connection keeps the identity it registered with; a second
+			// registration under another id would let one peer stand in for
+			// any node.
+			if registered && raw.From != peerID {
+				log.Printf("peer %s re-registered as %s; dropping the connection", peerID, raw.From)
+				return
+			}
+			authenticated := peer.authenticated
+			if !registered {
+				var ok bool
+				if authenticated, ok = n.authenticatePeer(peer, addr != "", raw.From, req.Payload); !ok {
+					log.Printf("refusing peer %s from %s: it did not prove it holds this node's api_token", raw.From, peer.Addr)
 					return
 				}
 			}
+
+			n.mu.Lock()
+			if old, exists := n.Peers[raw.From]; exists && old != peer {
+				if old.authenticated && !authenticated {
+					n.mu.Unlock()
+					log.Printf("refusing unauthenticated peer %s from %s: an authenticated peer holds that id", raw.From, peer.Addr)
+					return
+				}
+				old.replaced.Store(true)
+				_ = old.conn.Close()
+			}
+			peer.authenticated = authenticated
 			peer.AndroidEnabled = req.Payload.AndroidEnabled
 			peer.IOSEnabled = req.Payload.IOSEnabled
 			peer.ProxyEnabled = req.Payload.ProxyEnabled
@@ -297,33 +308,10 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 
 			if !registered {
 				registered = true
+				peerID = raw.From
 				// receiver sends registration back
 				if addr == "" {
-					msg := transport.ConnectionRequest{
-						RawMessage: transport.RawMessage{
-							Type:      transport.TypeConnectionRequest,
-							ID:        uuid.NewString(),
-							From:      n.ID,
-							Timestamp: time.Now(),
-						},
-						Payload: transport.ConnectionRequestPayload{
-							AndroidEnabled: n.AndroidEnabled,
-							IOSEnabled:     n.IOSEnabled,
-							ProxyEnabled:   n.ProxyEnabled,
-							ADBPort:        n.ADBPort,
-							APIAddr:        n.APIAddr,
-							Version:        version.Version,
-							Commit:         version.Commit,
-							BuildDate:      version.Date,
-						},
-					}
-
-					data, err := json.Marshal(msg)
-					if err != nil {
-						log.Println("marshal:", err)
-						break
-					}
-					if err := peer.WriteMessage(websocket.TextMessage, data); err != nil {
+					if err := n.sendRegistration(peer, auth.RoleAcceptor, req.Payload.Challenge); err != nil {
 						log.Println("write connection request:", err)
 						break
 					}

@@ -1,8 +1,42 @@
 # Control API
 
-The local control API exposes HTTP endpoints for node operations. It is intended
-for local dashboards, CLIs, or trusted tools running on the user's private
-network.
+The control API exposes HTTP endpoints for node operations.
+
+## Who the API serves
+
+A node listens on its loopback and its advertised address only (see
+[listeners](cli.md#listeners)). What it then acts on depends on whether it has an
+`api_token`, the secret every node in a fleet shares:
+
+- **No token.** Every request is served, as before authentication existed. A
+  node runs this way only until it is given its token.
+- **With a token.** A request is served when it comes from a process on the
+  node's own machine (a loopback address, with a `Host` header that names an
+  address or `localhost` rather than a domain, which defeats DNS rebinding);
+  when it carries `Authorization: Bearer <api_token>`; or when it opens one of a
+  phone screen's two sockets, `GET /api/streams/video` or `GET /api/control/ws`,
+  with a `ticket` query parameter for the device its `serial` names. Anything
+  else gets `401`.
+
+Loopback stays trusted because the programs a node runs, and its CLI, call it
+with no credential, and the node's loopback adb server already gives any local
+process every phone.
+
+Whatever the token, a request whose `Origin` header names a page origin not in
+`allowed_origins` gets `403`, so a web page cannot drive a phone through a
+browser that happens to be on the tailnet.
+
+### Viewer tickets
+
+A browser cannot set a header on a websocket, so Runway mints a ticket for the
+signed-in operator and the page appends it as `&ticket=`. A ticket is
+`<payload>.<signature>`: the payload is base64url (no padding) of
+`{"serial":"<device>","exp":<unix seconds>}`, and the signature is base64url of
+HMAC-SHA256 over the payload string, keyed with
+HMAC-SHA256(key = `api_token`, message = `mast viewer ticket v1`). A node refuses
+a ticket for another serial, an expired one, and one claiming to last more than
+15 minutes. A ticket is checked when its socket opens; an open socket outlives
+it.
 
 ## Endpoint Index
 
@@ -531,19 +565,27 @@ Response body:
 
 Supported config keys are `node_id`, `bind_addr`, `proxy_addr`, `api_addr`,
 `advertise_host`, `adb_port`, `programs_dir`, `android_enabled`, `ios_enabled`,
-`proxy_enabled`, `lock_portrait`, `keep_display_off`, `device_blacklist`, and
-`runners.<file_extension>`.
+`proxy_enabled`, `lock_portrait`, `keep_display_off`, `device_blacklist`,
+`api_token`, `allowed_origins`, and `runners.<file_extension>`.
+
+`api_token` can be set but is never returned: neither a config read nor an
+update's result carries it. Setting it on a running node takes effect at once,
+and the node drops its peer connections a second later so each handshakes again
+under the new token; peers it dialed are redialed, the rest redial it.
+`allowed_origins` is a comma- or space-separated list of page origins
+(`scheme://host[:port]`).
 
 Listener and directory fields such as `bind_addr`, `api_addr`, `proxy_addr`, and
 `programs_dir` are persisted immediately but require a restart to fully take
-effect. Changing `node_id` also requires a restart because it changes the peer
+effect. So does `advertise_host`, because the listeners bind it when they
+start. Changing `node_id` also requires a restart because it changes the peer
 identity advertised by the running node.
 
-Runtime fields such as Android/iOS visibility, ADB port, advertised host, proxy
-enablement, portrait locking, Android display power policy, the device
-blacklist, and runner mappings are applied to the running
-node when possible. Changing `proxy_addr` while the proxy is already running
-still requires a restart.
+Runtime fields such as Android/iOS visibility, ADB port, proxy enablement,
+portrait locking, Android display power policy, the device blacklist, the
+token, the allowed origins, and runner mappings are applied to the running node
+when possible. Changing `proxy_addr` while the proxy is already running still
+requires a restart.
 
 ## Add Peer
 

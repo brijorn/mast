@@ -265,10 +265,16 @@ func (n *Node) applyDevicePower(serial string, session *devicePowerSession, on b
 		return err
 	}
 	n.devicePowerMu.Lock()
-	if n.devicePowerAsserted == nil {
-		n.devicePowerAsserted = make(map[string]bool)
+	// A session discarded while its write was in flight -- its phone
+	// disconnected -- says nothing about the panel now. Recording it anyway
+	// would have a returning phone believed dark, or lit, by a session that no
+	// longer exists.
+	if n.devicePowerSessions[serial] == session {
+		if n.devicePowerAsserted == nil {
+			n.devicePowerAsserted = make(map[string]bool)
+		}
+		n.devicePowerAsserted[serial] = on
 	}
-	n.devicePowerAsserted[serial] = on
 	n.devicePowerMu.Unlock()
 	return nil
 }

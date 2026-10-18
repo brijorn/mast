@@ -106,6 +106,28 @@ func (n *Node) AuthorizePeerRequest(req *http.Request) {
 	}
 }
 
+// TrustsPeerAddress reports whether addr is a peer that proved it holds this
+// node's token. Its own advertised address never is: a request reaching the
+// node on its own tailnet address from this machine is the tailscale serve hop
+// that carries every browser on the tailnet.
+func (n *Node) TrustsPeerAddress(addr netip.Addr) bool {
+	if n.AccessKeys() == nil {
+		return false
+	}
+	addr = addr.Unmap()
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	if own, ok := netutil.RemoteAddr(n.AdvertiseHost); ok && own == addr {
+		return false
+	}
+	for _, peer := range n.Peers {
+		if peerAddr, ok := netutil.RemoteAddr(peer.Addr); ok && peer.authenticated && peerAddr == addr {
+			return true
+		}
+	}
+	return false
+}
+
 // admitsRelayClient reports whether a connection from addr may use one of the
 // byte relays this node publishes on its advertised address -- the adb server
 // and DevTools forwards, neither of which has authentication of its own. Only

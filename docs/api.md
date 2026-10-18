@@ -13,7 +13,11 @@ A node listens on its loopback and its advertised address only (see
 - **With a token.** A request is served when it comes from a process on the
   node's own machine (a loopback address, with a `Host` header that names an
   address or `localhost` rather than a domain, which defeats DNS rebinding);
-  when it carries `Authorization: Bearer <api_token>`; or when it opens one of a
+  when it comes, under the same `Host` rule, from the address of a peer that has
+  proved it holds the token, since a coordinator's programs call the node that
+  owns their phone directly for screenshots and their interaction stream and
+  carry no credential; when it carries `Authorization: Bearer <api_token>`; or
+  when it opens one of a
   phone screen's two sockets, `GET /api/streams/video` or `GET /api/control/ws`,
   with a `ticket` query parameter for the device its `serial` names. Anything
   else gets `401`.

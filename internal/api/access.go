@@ -16,6 +16,9 @@ import (
 type accessBackend interface {
 	AccessKeys() *auth.Keys
 	AllowedOrigins() []string
+	// TrustsPeerAddress reports whether addr is a peer that proved it holds
+	// the token.
+	TrustsPeerAddress(addr netip.Addr) bool
 }
 
 // ticketRoutes are the two sockets a browser phone screen opens. A browser
@@ -35,9 +38,12 @@ var ticketRoutes = map[string]bool{
 // A node with no token then serves everyone, as nodes did before
 // authentication. With one, it serves a process on its own machine -- the
 // programs it runs and the tools beside it call loopback with no credential,
-// and its loopback adb server already gives such a process every phone --
-// plus whoever presents the token, plus a browser holding a ticket for the
-// device it opens.
+// and its loopback adb server already gives such a process every phone -- and,
+// on the same terms, a process on a peer that proved it holds the token: a
+// coordinator's programs drive this node's phones by calling it directly for
+// screenshots and their interaction stream, carrying no credential, and the
+// adb relay already admits that machine. Beyond those it serves whoever
+// presents the token, and a browser holding a ticket for the device it opens.
 func (s *Server) guard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		access, _ := s.node.(accessBackend)
@@ -49,7 +55,8 @@ func (s *Server) guard(next http.Handler) http.Handler {
 		if access != nil {
 			keys = access.AccessKeys()
 		}
-		if keys == nil || fromThisMachine(r) || keys.CheckBearer(r.Header.Get("Authorization")) || ticketAdmits(keys, r) {
+		if keys == nil || fromThisMachine(r) || fromTrustedPeer(access, r) ||
+			keys.CheckBearer(r.Header.Get("Authorization")) || ticketAdmits(keys, r) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -66,14 +73,24 @@ func originAllowed(access accessBackend, origin string) bool {
 }
 
 // fromThisMachine reports whether a request came from a process on this
-// machine. The Host header must name an address, not a domain: a web page
-// that rebinds its own domain to 127.0.0.1 reaches loopback from the
-// operator's browser, but still sends its domain as the Host.
+// machine.
 func fromThisMachine(r *http.Request) bool {
 	remote, ok := netutil.RemoteAddr(r.RemoteAddr)
-	if !ok || !netutil.IsLoopback(remote) {
-		return false
-	}
+	return ok && netutil.IsLoopback(remote) && hostNamesAnAddress(r)
+}
+
+// fromTrustedPeer reports whether a request came from a peer that proved it
+// holds the token.
+func fromTrustedPeer(access accessBackend, r *http.Request) bool {
+	remote, ok := netutil.RemoteAddr(r.RemoteAddr)
+	return ok && !netutil.IsLoopback(remote) && hostNamesAnAddress(r) && access.TrustsPeerAddress(remote)
+}
+
+// hostNamesAnAddress reports whether the Host header names an address rather
+// than a domain. A web page that rebinds its own domain to a trusted address
+// reaches it from the operator's browser, but still sends its domain as the
+// Host.
+func hostNamesAnAddress(r *http.Request) bool {
 	host := r.Host
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		host = h

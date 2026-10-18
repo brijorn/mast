@@ -39,6 +39,7 @@ type nodeBackend interface {
 	DropStream(serial string, session *node.StreamSession)
 	StreamMJPEG(ctx context.Context, serial string, w http.ResponseWriter) error
 	StreamVideo(ctx context.Context, serial string, conn *websocket.Conn) error
+	AttachControlClient(serial string, closeClient func()) func()
 	Touch(serial string, action string, x, y int) error
 	TouchPointer(serial string, action string, x, y int, pointerID uint64) error
 	Tap(serial string, x, y int) error

@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/brijorn/ioslink"
@@ -57,6 +58,18 @@ type StreamSession struct {
 	Width        int
 	Height       int
 	cmd          *exec.Cmd
+
+	// An interaction session (Kind "control") has no video to end with, so its
+	// end is the scrcpy process exiting: exited closes once cmd has been waited
+	// for, and startedAt begins its idle clock.
+	startedAt time.Time
+	exited    chan struct{}
+
+	// controlWithoutVideo records that a caller of this video session only
+	// needs its control channel. Once no viewer watches, its control clients
+	// are no reason to keep encoding: they can be served by an interaction
+	// session instead.
+	controlWithoutVideo atomic.Bool
 
 	iosDevice  *ioslink.Device
 	iosCleanup func()
@@ -137,7 +150,11 @@ func (s *StreamSession) Stop() error {
 		// ("Access is denied" on Windows), and Wait returning is the proof it is
 		// gone, so neither belongs in the error a stop reports.
 		_ = s.cmd.Process.Kill()
-		_ = s.cmd.Wait()
+		if s.exited != nil {
+			<-s.exited
+		} else {
+			_ = s.cmd.Wait()
+		}
 	}
 
 	if s.iosCleanup != nil {
@@ -560,6 +577,9 @@ func (n *Node) startLocalAndroidStreamWithDeviceCheck(serial string, opts stream
 	if opts.TurnScreenOff && opts.NoControl {
 		return nil, errors.New("turn_screen_off requires control")
 	}
+	if opts.NoVideo && opts.NoControl {
+		return nil, errors.New("a stream needs video or control")
+	}
 
 	if checkDevice {
 		device, err := n.localDeviceBySerial(serial)
@@ -589,6 +609,10 @@ func (n *Node) startLocalAndroidStreamWithDeviceCheck(serial string, opts stream
 	host, err := n.adbHostForNode(n.ID)
 	if err != nil {
 		return nil, err
+	}
+
+	if opts.NoVideo {
+		return n.startLocalAndroidInteractionSession(host, streamHost, serial, opts)
 	}
 
 	if err := n.pushScrcpyServer(host, serial); err != nil {
@@ -638,10 +662,14 @@ func (n *Node) startLocalAndroidStreamWithDeviceCheck(serial string, opts stream
 	go session.broadcastVideo(func() {
 		n.streamsMu.Lock()
 		entry, ok := n.streams[serial]
-		if ok && entry.Session == session {
+		removed := ok && entry.Session == session
+		if removed {
 			delete(n.streams, serial)
 		}
 		n.streamsMu.Unlock()
+		if removed {
+			n.closeControlClients(serial)
+		}
 	})
 
 	if err := waitForInitialVideo(
@@ -778,6 +806,7 @@ func (n *Node) ensureLocalStream(serial string, opts streamcfg.Options) (*Stream
 }
 
 func (n *Node) ensureStream(serial string, opts streamcfg.Options, start func(string, streamcfg.Options) (*StreamSession, error)) (*StreamSession, error) {
+	replacedInteraction := false
 	for {
 		n.streamsMu.Lock()
 		entry, ok := n.streams[serial]
@@ -792,7 +821,7 @@ func (n *Node) ensureStream(serial string, opts streamcfg.Options, start func(st
 			if entry.Session == nil {
 				return nil, errors.New("internal error: stream session is nil")
 			}
-			unhealthy := entry.Session.isUnhealthyIOS()
+			unhealthy := entry.Session.isUnhealthyIOS() || entry.Session.ended()
 			if !unhealthy && entry.Session.isSuspectAndroid(time.Now()) {
 				adbHost, hostErr := n.adbHostForNode(n.ID)
 				if hostErr == nil && !n.androidServerAlive(adbHost, serial) {
@@ -800,7 +829,14 @@ func (n *Node) ensureStream(serial string, opts streamcfg.Options, start func(st
 					unhealthy = true
 				}
 			}
-			if unhealthy {
+			// A caller wanting video cannot be served by an interaction
+			// session; a caller wanting only control can be served by either.
+			upgrade := !unhealthy && !opts.NoVideo && !entry.Session.hasVideo()
+			if upgrade {
+				log.Printf("replacing the interaction session for %s with video for a viewer", serial)
+				replacedInteraction = true
+			}
+			if unhealthy || upgrade {
 				n.streamsMu.Lock()
 				current, stillCurrent := n.streams[serial]
 				if stillCurrent && current == entry {
@@ -809,6 +845,9 @@ func (n *Node) ensureStream(serial string, opts streamcfg.Options, start func(st
 				n.streamsMu.Unlock()
 				_ = n.cleanupStreamSession(serial, entry.Session)
 				continue
+			}
+			if opts.NoVideo && entry.Session.hasVideo() {
+				entry.Session.controlWithoutVideo.Store(true)
 			}
 			n.applyStreamOptions(entry.Session, opts)
 
@@ -832,6 +871,9 @@ func (n *Node) ensureStream(serial string, opts streamcfg.Options, start func(st
 			entry.Error = err
 			delete(n.streams, serial)
 		} else {
+			if replacedInteraction {
+				streamSession.controlWithoutVideo.Store(true)
+			}
 			entry.Session = streamSession
 		}
 		n.streamsMu.Unlock()
@@ -997,6 +1039,10 @@ func (n *Node) StreamVideo(ctx context.Context, serial string, conn *websocket.C
 	stream, err := n.viewerStream(serial)
 	if err != nil {
 		return err
+	}
+	if !stream.hasVideo() {
+		// Not found, so the viewer starts a stream, which brings video.
+		return streamNotFoundError(serial)
 	}
 	if stream.Kind != "h264" {
 		return errors.New("active stream is not H.264")
@@ -1317,6 +1363,7 @@ func (n *Node) stopLocalStream(serial string) error {
 
 func (n *Node) cleanupStreamSession(serial string, session *StreamSession) error {
 	defer n.reassertDevicePowerPolicy(serial)
+	defer n.closeControlClients(serial)
 	if session.Platform != PlatformIOS {
 		return session.Stop()
 	}

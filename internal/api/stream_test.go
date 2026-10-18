@@ -320,6 +320,10 @@ func TestStreamVideoDifferentViewersRemainConnected(t *testing.T) {
 	}
 }
 
+func (f *fakeBackend) AttachControlClient(_ string, _ func()) func() {
+	return func() {}
+}
+
 func (f *fakeBackend) Touch(_ string, _ string, _, _ int) error {
 	return nil
 }

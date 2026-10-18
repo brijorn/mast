@@ -91,13 +91,15 @@ and iOS UDIDs. It is consulted on every device listing, so a change through
 running node with no restart. `mast config set` writes the same value for a node
 that is not running.
 
-`stream_idle_timeout` is how many seconds an Android viewer stream may run with
-nobody watching before Mast tears it down; `0` keeps a stream until something
-stops it explicitly. Idleness is counted from the last viewer disconnecting, not
-from the client remembering to send a stop — a closed laptop or a dropped tunnel
-never sends one, and a stream left running holds a virtual display open and the
-phone's encoder busy. It is read per sweep, so a change applies without a
-restart. iOS MJPEG streams are unaffected.
+`stream_idle_timeout` is how many seconds an Android stream may run unused
+before Mast tears it down; `0` keeps a stream until something stops it
+explicitly. Use is a viewer on its video or a client on its control websocket,
+and idleness is counted from the last of them disconnecting, not from the
+client remembering to send a stop — a closed laptop or a dropped tunnel never
+sends one, and a video stream left running holds a virtual display open and the
+phone's encoder busy. A video stream that a `no_video` caller shares counts only
+its viewers. It is read per sweep, so a change applies without a restart. iOS
+MJPEG streams are unaffected.
 
 `keep_display_off` defaults to `true` (including when the key is absent from an
 older config). `mast config set` persists the value for the next start; updating

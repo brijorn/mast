@@ -50,3 +50,23 @@ func TestOptionsFormatCanPreventViewerPowerRestore(t *testing.T) {
 		t.Fatalf("formatted options mismatch (-want +got):\n%s", diff)
 	}
 }
+
+// An interaction session carries no encoder, so the encoder settings a node
+// default filled in must not reach scrcpy, and the control socket must not be
+// preceded by the device name.
+func TestOptionsFormatForAnInteractionSessionHasNoVideo(t *testing.T) {
+	got := (&Options{NoAudio: true, NoVideo: true}).WithDefaults(Defaults{
+		MaxSize: 720, VideoBitrate: 4_000_000, VideoCodecOptions: "i-frame-interval=10",
+	})
+	want := []string{
+		"video=false",
+		"audio=false",
+		"control=true",
+		"stay_awake=false",
+		"clipboard_autosync=false",
+		"send_device_meta=false",
+	}
+	if diff := cmp.Diff(want, got.Format()); diff != "" {
+		t.Fatalf("formatted options mismatch (-want +got):\n%s", diff)
+	}
+}

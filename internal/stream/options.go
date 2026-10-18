@@ -3,8 +3,13 @@ package stream
 import "strconv"
 
 type Options struct {
-	NoAudio             bool   `json:"no_audio"`
-	NoControl           bool   `json:"no_control"`
+	NoAudio   bool `json:"no_audio"`
+	NoControl bool `json:"no_control"`
+	// NoVideo asks for an interaction session: scrcpy's control socket alone,
+	// with no virtual display and no encoder. A program that only injects
+	// touches has no use for video, and encoding it costs the phone a hardware
+	// encoder and a composited mirror for as long as the session lives.
+	NoVideo             bool   `json:"no_video"`
 	PreserveOrientation bool   `json:"preserve_orientation"`
 	TurnScreenOff       bool   `json:"turn_screen_off"`
 	StayAwake           bool   `json:"stay_awake"`
@@ -40,6 +45,9 @@ func (s Options) WithDefaults(d Defaults) Options {
 
 func (s *Options) Format() []string {
 	var formatted []string
+	if s.NoVideo {
+		formatted = append(formatted, "video=false")
+	}
 	formatted = append(formatted,
 		"audio="+strconv.FormatBool(!s.NoAudio),
 		"control="+strconv.FormatBool(!s.NoControl),
@@ -51,6 +59,11 @@ func (s *Options) Format() []string {
 	}
 	if s.DisableCleanup {
 		formatted = append(formatted, "cleanup=false")
+	}
+	if s.NoVideo {
+		// Without video the first socket is the control socket, and the device
+		// name scrcpy would send ahead of it is not a control message.
+		return append(formatted, "send_device_meta=false")
 	}
 	if s.VideoCodecOptions != "" {
 		formatted = append(formatted, "video_codec_options="+s.VideoCodecOptions)

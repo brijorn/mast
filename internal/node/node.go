@@ -61,6 +61,8 @@ type Node struct {
 	pending              map[string]chan peerRPCResponse
 	streams              map[string]*streamEntry
 	streamsMu            sync.RWMutex
+	controlClientsMu     sync.Mutex
+	controlClients       map[string]*deviceControlClients
 	devToolsMu           sync.Mutex
 	devToolsRelays       map[string]*devToolsRelay
 	devToolsLoopback     map[string]int

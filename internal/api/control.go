@@ -228,6 +228,10 @@ func (s *Server) ControlWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = conn.Close() }()
+	// The connection is use of the device's session, and is closed when that
+	// session ends so the client reconnects into the coordinates of the next.
+	release := s.node.AttachControlClient(serial, func() { _ = conn.Close() })
+	defer release()
 
 	var writeMu sync.Mutex
 	if err := conn.SetReadDeadline(time.Now().Add(controlWSPongWait)); err != nil {

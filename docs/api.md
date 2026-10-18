@@ -697,6 +697,16 @@ not leak scrcpy frame headers into the browser decoder.
 Viewer requests never create or replace a stream, because they do not carry the
 original encoder options.
 
+`no_video` starts an interaction session instead (`"kind": "control"`): scrcpy
+with `video=false`, so the phone runs no virtual display and no encoder, only
+the control socket. It is for callers that inject input and never watch, such
+as FrameKit programs. scrcpy injects an interaction session's touches unscaled,
+so its `width` and `height` are the display's current logical size, the same
+space as a screenshot. A caller that wants video and finds an interaction
+session gets it replaced by a video session; a `no_video` caller that finds a
+video session shares it, and once no viewer watches, the idle reaper ends that
+session so the caller reconnects into an interaction session.
+
 Request body:
 
 ```json
@@ -705,6 +715,7 @@ Request body:
   "options": {
     "no_audio": true,
     "no_control": false,
+    "no_video": false,
     "preserve_orientation": true,
     "turn_screen_off": true,
     "stay_awake": true,
@@ -1227,7 +1238,11 @@ GET /api/control/ws?serial=local-123
 ```
 
 Opens a low-latency control channel for live interaction. The stream for that
-serial must already be started so Mast has a scrcpy control socket. Mast sends
+serial must already be started so Mast has a scrcpy control socket. An open
+control websocket counts as use of the stream, so the idle reaper keeps it, and
+Mast closes the websocket when the stream ends: its coordinates belong to that
+stream's dimensions, and the client reconnects through `POST /api/streams` to
+read the next stream's. Mast sends
 websocket ping frames to keep the connection alive, validates each JSON message,
 and applies accepted control messages in receive order.
 

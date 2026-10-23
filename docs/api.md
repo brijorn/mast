@@ -54,6 +54,7 @@ it.
 | `GET` | `/api/devices/{serial}/dns` | Read Android private DNS mode for a device. |
 | `PUT` | `/api/devices/{serial}/dns` | Set Android private DNS explicitly. |
 | `PUT` | `/api/devices/{serial}/orientation` | Force an Android device into portrait or landscape. |
+| `PUT` | `/api/devices/{serial}/boot-on-power` | Set whether a switched-off Pixel or Motorola boots as soon as USB power arrives. |
 | `GET` | `/api/devices/{serial}/display-power` | Report a device's panel power, the override on it, and the node policy. |
 | `PUT` | `/api/devices/{serial}/display-power` | Turn one device's physical panel on or off, or return it to node policy. |
 | `GET` | `/api/nodes` | List the local node and connected peers. |
@@ -320,6 +321,37 @@ that names it differently fails loudly rather than reporting no app in front.
   "bundle_id": "com.pocketchamps.game"
 }
 ```
+
+## Boot On Power
+
+```http
+PUT /api/devices/{serial}/boot-on-power
+Content-Type: application/json
+
+{"enabled":true}
+```
+
+Sets the bootloader's off-mode-charge flag on a local or peer-owned Android
+device: `enabled: true` makes a switched-off phone start Android as soon as USB
+power arrives instead of showing its charging screen, so cycling its port's power
+brings it back. The node reboots the phone into its bootloader, runs `fastboot oem
+off-mode-charge 0` (or `1`), reads `getvar off-mode-charge` back, and runs
+`fastboot reboot`, so the call takes up to a minute and the phone restarts. Any
+failure after the phone reaches its bootloader still reboots it.
+
+It needs `fastboot` on the PATH of the node the phone is plugged into, and the
+phone on that node's USB; a wireless-debugging phone is refused. Pixels and
+Motorolas have the flag; a Samsung has no fastboot and never reaches the
+bootloader, which reads as an error. Proven on a locked Pixel 6. Mast does not
+check for a running program: a run for a peer's phone executes on the coordinator,
+so the caller checks its own run inventory first.
+
+```json
+{"serial":"1A091FDF600KW6","enabled":true,"before":"1","after":"0"}
+```
+
+A refusal answers `422` with `{"error": "...", "status": {...}}`, the status
+holding whatever was read before the failure.
 
 ## Device Orientation
 

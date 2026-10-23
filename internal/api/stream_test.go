@@ -82,6 +82,10 @@ func (f *fakeBackend) SetDeviceDNS(serial string, desired node.DeviceDNSStatus) 
 	return f.dns, f.err
 }
 
+func (f *fakeBackend) SetDeviceBootOnPower(serial string, enabled bool) (*node.BootOnPowerStatus, error) {
+	return nil, errors.New("not implemented")
+}
+
 func (f *fakeBackend) SetDeviceOrientation(serial string, orientation node.DeviceOrientation) (*node.DeviceOrientationStatus, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -21,6 +21,8 @@ const (
 	TypeDeviceDescribeResponse       = "device_describe_response"
 	TypeDeviceOrientationSetRequest  = "device_orientation_set_request"
 	TypeDeviceOrientationSetResponse = "device_orientation_set_response"
+	TypeBootOnPowerSetRequest        = "boot_on_power_set_request"
+	TypeBootOnPowerSetResponse       = "boot_on_power_set_response"
 	TypeDisplayPowerGetRequest       = "display_power_get_request"
 	TypeDisplayPowerGetResponse      = "display_power_get_response"
 	TypeDisplayPowerSetRequest       = "display_power_set_request"
@@ -279,6 +281,33 @@ type DeviceOrientationSetResponsePayload struct {
 type DeviceOrientationSetResponse struct {
 	RawMessage
 	Payload DeviceOrientationSetResponsePayload `json:"payload"`
+}
+
+type BootOnPowerStatusPayload struct {
+	Serial  string `json:"serial"`
+	Enabled *bool  `json:"enabled,omitempty"`
+	Before  string `json:"before"`
+	After   string `json:"after"`
+}
+
+type BootOnPowerSetRequestPayload struct {
+	Serial  string `json:"serial"`
+	Enabled bool   `json:"enabled"`
+}
+
+type BootOnPowerSetRequest struct {
+	RawMessage
+	Payload BootOnPowerSetRequestPayload `json:"payload"`
+}
+
+type BootOnPowerSetResponsePayload struct {
+	Result *BootOnPowerStatusPayload `json:"result,omitempty"`
+	Error  string                    `json:"error,omitempty"`
+}
+
+type BootOnPowerSetResponse struct {
+	RawMessage
+	Payload BootOnPowerSetResponsePayload `json:"payload"`
 }
 
 type DisplayPowerStatusPayload struct {

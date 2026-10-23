@@ -26,6 +26,7 @@ type nodeBackend interface {
 	DeviceDNS(serial string) (*node.DeviceDNSStatus, error)
 	SetDeviceDNS(serial string, desired node.DeviceDNSStatus) (*node.DeviceDNSStatus, error)
 	SetDeviceOrientation(serial string, orientation node.DeviceOrientation) (*node.DeviceOrientationStatus, error)
+	SetDeviceBootOnPower(serial string, enabled bool) (*node.BootOnPowerStatus, error)
 	DeviceDisplayPower(serial string) (*node.DeviceDisplayPowerStatus, error)
 	SetDeviceDisplayPower(serial string, requested node.DeviceDisplayPower) (*node.DeviceDisplayPowerStatus, error)
 	Connect(addr string) error
@@ -138,6 +139,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/devices/{serial}/dns", s.DeviceDNS)
 	mux.HandleFunc("PUT /api/devices/{serial}/dns", s.SetDeviceDNS)
 	mux.HandleFunc("PUT /api/devices/{serial}/orientation", s.SetDeviceOrientation)
+	mux.HandleFunc("PUT /api/devices/{serial}/boot-on-power", s.SetDeviceBootOnPower)
 	mux.HandleFunc("GET /api/devices/{serial}/display-power", s.DeviceDisplayPower)
 	mux.HandleFunc("PUT /api/devices/{serial}/display-power", s.SetDeviceDisplayPower)
 	mux.HandleFunc("GET /api/nodes", s.ListNodes)

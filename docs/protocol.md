@@ -292,6 +292,39 @@ settings commands complete.
 }
 ```
 
+## boot_on_power_set_request
+
+Sets boot on power (the bootloader's off-mode-charge flag) on a local Android
+device on the destination node; see `PUT /api/devices/{serial}/boot-on-power` in
+the API reference. The phone reboots through its bootloader, so the sender waits
+up to four minutes rather than the usual ten seconds.
+
+```json
+{
+  "type": "boot_on_power_set_request",
+  "id": "message-id",
+  "from": "node-a",
+  "to": "node-b",
+  "timestamp": "2026-10-23T17:00:00Z",
+  "payload": { "serial": "remote-123", "enabled": true }
+}
+```
+
+```json
+{
+  "type": "boot_on_power_set_response",
+  "id": "message-id",
+  "from": "node-b",
+  "to": "node-a",
+  "timestamp": "2026-10-23T17:00:40Z",
+  "payload": {
+    "result": { "serial": "remote-123", "enabled": true, "before": "1", "after": "0" }
+  }
+}
+```
+
+A failure sets `payload.error` and keeps `result` with whatever was read.
+
 ## display_power_get_request
 
 Reads the panel power of a local Android device on the destination node: the

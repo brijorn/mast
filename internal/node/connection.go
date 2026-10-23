@@ -388,6 +388,13 @@ func (n *Node) handleConnection(peer *PeerConn, addr string) {
 				break
 			}
 			go n.handleDeviceOrientationSetRequest(peer, req)
+		case transport.TypeBootOnPowerSetRequest:
+			var req transport.BootOnPowerSetRequest
+			if err := json.Unmarshal(message, &req); err != nil {
+				log.Println("decode boot on power set request:", err)
+				break
+			}
+			go n.handleBootOnPowerSetRequest(peer, req)
 		case transport.TypeDisplayPowerGetRequest:
 			var req transport.DisplayPowerGetRequest
 			if err := json.Unmarshal(message, &req); err != nil {

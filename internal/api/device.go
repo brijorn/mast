@@ -236,6 +236,39 @@ func (s *Server) SetDeviceOrientation(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+type setDeviceBootOnPowerRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
+// Boot on power reboots the phone into its bootloader and back, so the call
+// takes a minute or two and answers with what the bootloader read afterwards.
+// A refusal still carries what was read, under "status", beside the error.
+func (s *Server) SetDeviceBootOnPower(w http.ResponseWriter, r *http.Request) {
+	serial := r.PathValue("serial")
+	if serial == "" {
+		http.Error(w, "serial required", http.StatusBadRequest)
+		return
+	}
+	var desired setDeviceBootOnPowerRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&desired); err != nil || desired.Enabled == nil {
+		http.Error(w, "boot on power needs {\"enabled\": true|false}", http.StatusBadRequest)
+		return
+	}
+	status, err := s.node.SetDeviceBootOnPower(serial, *desired.Enabled)
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	if err != nil {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error(), "status": status})
+		return
+	}
+	if err := json.NewEncoder(w).Encode(status); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
 // Display power is read as well as written, because the caller drawing a button
 // for it must not have to remember what it last asked for. A console that keeps
 // its own memory of "I turned this off" is wrong the moment anything else moves
